@@ -46,17 +46,17 @@ project-root/ (current directory containing memory-bank/)
    - Reference: @prompt:setup/project_setup_guide
 
 3. [ ] **Copy Configuration Templates**
-   - Details: Copy template files from memory-bank to project root
+   - Details: Copy template files from memory-bank/templates to project root
    - Commands:
      ```bash
      # Create a project README (different from memory-bank README)
      touch README.md
      
      # Copy configuration templates
-     cp memory-bank/.gitignore.template .gitignore
-     cp memory-bank/.env.example .env.example
-     cp memory-bank/.env.example .env
-     cp memory-bank/.cursorrules .cursorrules
+     cp memory-bank/templates/.gitignore.template .gitignore
+     cp memory-bank/templates/.env.example .env.example
+     cp memory-bank/templates/.env.example .env
+     cp memory-bank/templates/.cursorrules .cursorrules
      ```
    - Reference: @prompt:setup/configuration_templates
 

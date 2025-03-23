@@ -101,6 +101,27 @@ def read_item(item_id: int, q: str = None):
 
 ### Repository Configuration Files
 
+#### Configuration Template Files Location
+
+The standard configuration templates are stored in the `memory-bank/templates/` directory:
+
+```
+memory-bank/templates/
+├── .gitignore.template    (Git ignore rules template)
+├── .env.example           (Environment variables template)
+├── .cursorrules           (Editor-specific rules)
+└── [other templates]      (Additional configuration templates)
+```
+
+To use these templates:
+```bash
+# Copy configuration templates to project root
+cp memory-bank/templates/.gitignore.template .gitignore
+cp memory-bank/templates/.env.example .env.example
+cp memory-bank/templates/.env.example .env  # Initial environment file
+cp memory-bank/templates/.cursorrules .cursorrules  # If using Cursor editor
+```
+
 #### .gitignore Setup
 
 Create a comprehensive .gitignore:
@@ -173,103 +194,8 @@ LOG_LEVEL=INFO
 
 ### README.md Template
 
-Create a comprehensive README:
+Create a comprehensive README.md in the template copied into the project root, use the template contents and inspiration but feel free to tailor it to the project.
 
-```markdown
-# Project Name
-
-Brief description of the project and its purpose.
-
-## Features
-
-- Feature 1: Description
-- Feature 2: Description
-- Feature 3: Description
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/username/project.git
-cd project
-
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On macOS/Linux
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your values
-```
-
-## Usage
-
-```bash
-# Basic usage example
-python -m project_name command
-
-# More examples...
-```
-
-## Development
-
-```bash
-# Run tests
-pytest
-
-# More development instructions...
-```
-
-## License
-
-Specify the license.
-```
-
-## Examples
-
-### Example Project Structure for a CLI Tool
-
-```
-my-cli-tool/
-├── memory-bank/
-├── src/
-│   └── mycli/
-│       ├── __init__.py
-│       ├── cli.py
-│       ├── commands/
-│       └── utils/
-├── tests/
-│   └── test_cli.py
-├── README.md
-├── .gitignore
-├── .env.example
-└── requirements.txt
-```
-
-### Example Project Structure for an API
-
-```
-my-api-service/
-├── memory-bank/
-├── src/
-│   └── myapi/
-│       ├── __init__.py
-│       ├── main.py
-│       ├── api.py
-│       ├── models/
-│       ├── routers/
-│       └── services/
-├── tests/
-│   ├── unit/
-│   └── integration/
-├── README.md
-├── .gitignore
-├── .env.example
-└── requirements.txt
-```
 
 ## Notes
 

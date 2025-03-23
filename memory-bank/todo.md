@@ -31,6 +31,7 @@ This document captures specific tasks that need to be completed. These tasks are
 - [x] Design and implement email content extraction logic
 - [x] Develop markdown conversion with YAML frontmatter
 - [x] Create file management module with duplicate prevention
+- [ ] Capture detailed plans from previous features in .chat-logs before starting a new one, supporting future documentation requirements
 
 ## Low Priority (Can wait)
 
