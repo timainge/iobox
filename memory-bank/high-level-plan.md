@@ -5,123 +5,145 @@
 ## Project Phases
 
 ### Phase 1: Foundation
-**Status:** [Not Started, In Progress, or Complete]
+**Status:** In Progress
 
 **Goals:** 
 - Setup project repository and structure
-- Define core data models and interfaces
-- Implement basic functionality
+- Configure Google Cloud project and Gmail API access
+- Implement authentication module
+- Create basic command-line interface
 - Establish testing framework
 
-**Timeline:** [Enter specific dates, e.g., "April 1, 2025 - April 15, 2025"]
+**Timeline:** March 25, 2025 - April 4, 2025
 
 **Success Metrics:** 
-- [ ] Repository initialized with proper structure
-- [ ] Core data models implemented
-- [ ] Basic functionality working
-- [ ] Unit tests passing
+- [x] Repository initialized with proper structure
+- [x] Google Cloud project created with Gmail API enabled
+- [ ] OAuth 2.0 authentication working
+- [x] Basic CLI structure implemented with Typer
+- [ ] Unit tests framework setup
+
+**Progress Notes:**
+- Repository structure set up with src/iobox modules (March 23, 2025)
+- Authentication module implemented awaiting credentials (March 23, 2025)
+- Basic CLI implemented using Typer (March 23, 2025)
+- Core modules created: auth, email_search, markdown, file_manager (March 23, 2025)
 
 ### Phase 2: Core Features
-**Status:** [Not Started, In Progress, or Complete]
+**Status:** Not Started
 
 **Goals:** 
-- Implement [Replace with specific Feature A]
-- Implement [Replace with specific Feature B]
-- Implement [Replace with specific Feature C]
+- Implement Email Search and Retrieval Module
+- Implement Content Extraction Module
+- Implement Markdown Conversion Module
+- Implement File Management Module
 - Add integration tests
 
-**Timeline:** [Enter specific dates, e.g., "April 16, 2025 - April 30, 2025"]
+**Timeline:** April 5, 2025 - April 18, 2025
 
 **Success Metrics:** 
-- [ ] Feature A implemented and tested
-- [ ] Feature B implemented and tested
-- [ ] Feature C implemented and tested
+- [ ] Email search and retrieval working with Gmail API
+- [ ] Content extraction handling both plain text and HTML emails
+- [ ] Markdown conversion with YAML frontmatter implemented
+- [ ] File management with duplicate prevention working
 - [ ] Integration tests passing
 
-### Phase 3: Advanced Functionality
-**Status:** [Not Started, In Progress, or Complete]
+### Phase 3: Enhanced Functionality
+**Status:** Not Started
 
 **Goals:** 
-- Implement [Replace with specific Feature D]
-- Implement [Replace with specific Feature E]
-- Optimize performance
-- Enhance error handling
+- Implement advanced search criteria options
+- Add email label preservation 
+- Optimize performance for large email volumes
+- Enhance error handling and logging
+- Implement basic HTML to Markdown conversion
 
-**Timeline:** [Enter specific dates, e.g., "May 1, 2025 - May 15, 2025"]
+**Timeline:** April 19, 2025 - May 2, 2025
 
 **Success Metrics:** 
-- [ ] Feature D implemented and tested
-- [ ] Feature E implemented and tested
-- [ ] Performance benchmarks met
-- [ ] Error handling improved
+- [ ] Advanced search criteria functioning correctly
+- [ ] Email labels preserved in YAML frontmatter
+- [ ] Performance benchmarks for 100+ emails met
+- [ ] Comprehensive error handling and logging implemented
+- [ ] HTML to Markdown conversion working for basic formatting
 
 ### Phase 4: Refinement and Launch
-**Status:** [Not Started, In Progress, or Complete]
+**Status:** Not Started
 
 **Goals:** 
 - User acceptance testing
-- Documentation
+- Create comprehensive documentation
+- Package for easy installation
 - Final optimizations
-- Deployment preparation
+- Prepare for open-source release
 
-**Timeline:** [Enter specific dates, e.g., "May 16, 2025 - May 31, 2025"]
+**Timeline:** May 3, 2025 - May 15, 2025
 
 **Success Metrics:** 
-- [ ] User testing completed
-- [ ] Documentation complete
+- [ ] User testing completed with feedback incorporated
+- [ ] README and documentation complete
+- [ ] Package installable via pip
 - [ ] All performance goals met
-- [ ] Deployment pipeline established
+- [ ] Project ready for open-source release
 
 ## Major Milestones
 
-1. **Project Initialization** - [Enter specific date]
+1. **Project Initialization** - March 25, 2025
    - Repository setup
    - Environment configuration
+   - Google Cloud project setup
    - Initial documentation
 
-2. **MVP Release** - [Enter specific date]
+2. **MVP Release** - April 18, 2025
    - Core functionality working
-   - Basic user flow implemented
+   - Basic email to markdown conversion implemented
    - Initial testing complete
 
-3. **Beta Release** - [Enter specific date]
+3. **Feature Complete Release** - May 2, 2025
    - All planned features implemented
    - Integration testing complete
    - Performance optimization complete
 
-4. **v1.0 Release** - [Enter specific date]
+4. **v1.0 Release** - May 15, 2025
    - User acceptance testing complete
    - Documentation finalized
-   - Production deployment
+   - Package published to PyPI
 
 ## Critical Path Dependencies
 
-- [Specific Dependency 1] must be completed before [Specific Dependency 2]
-- [Specific Dependency 3] requires [Specific External Resource]
-- [Specific Dependency 4] blocked by [Specific Factor]
+- Google Cloud project setup must be completed before authentication implementation
+- Authentication module must be completed before email retrieval module
+- Content extraction depends on successful email retrieval
+- Markdown conversion depends on content extraction
+- File management depends on markdown conversion
+- Integration tests require all modules to be functioning
 
 ## Current Focus
 
 We are currently focused on:
-- [Specific current task 1]
-- [Specific current task 2]
-- [Specific current task 3]
+- Setting up the project repository structure
+- Creating Google Cloud project and enabling Gmail API
+- Implementing the authentication module with OAuth 2.0
+- Designing the command-line interface
 
 ## Risk Assessment
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| [Specific Risk 1] | High/Medium/Low | High/Medium/Low | [Specific Strategy] |
-| [Specific Risk 2] | High/Medium/Low | High/Medium/Low | [Specific Strategy] |
-| [Specific Risk 3] | High/Medium/Low | High/Medium/Low | [Specific Strategy] |
+| Gmail API quota limitations | High | Medium | Implement rate limiting and batch processing |
+| OAuth authentication complexity | Medium | High | Thoroughly document setup process and provide clear user instructions |
+| HTML email parsing challenges | Medium | High | Start with plain text emails, gradually enhance HTML handling |
+| User difficulty setting up Google Cloud | High | Medium | Create detailed step-by-step guide with screenshots |
+| Breaking changes in Gmail API | High | Low | Pin API version and monitor for updates |
 
 ## Evaluation Criteria
 
 The project will be evaluated based on:
-1. [Specific Criterion 1]
-2. [Specific Criterion 2]
-3. [Specific Criterion 3]
-4. [Specific Criterion 4]
+1. Accuracy of email retrieval and content extraction
+2. Quality of markdown conversion (formatting, metadata preservation)
+3. Performance with large volumes of emails
+4. Ease of setup and use for end users
+5. Code quality, documentation, and test coverage
 
 ---
 *This plan MUST be reviewed and updated at the start of each phase. All placeholders should be replaced with specific details before implementation begins.*

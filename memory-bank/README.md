@@ -22,14 +22,14 @@ The memory bank serves as a persistent repository of project knowledge that:
 ## Initialization Sequence - DO NOT SKIP STEPS
 
 Follow these steps IN ORDER:
-
-1. [ ] Read and understand the `meta.md` file for the complete process guidelines
-2. [ ] Complete `project-background.md` with detailed project information
-3. [ ] Update `high-level-plan.md` with specific phases and timelines
-4. [ ] Populate `todo.md` with actionable, prioritized tasks
-5. [ ] Follow the project setup steps in `detailed-plan.md` which has the initialization tasks prefilled
-6. [ ] Have AI review all memory bank files for context
-7. [ ] ONLY THEN begin implementation work
+1. [ ] move memory-bank.windsurfrules to .windsurfrules
+2. [ ] Read and understand the `meta.md` file for the complete process guidelines
+3. [ ] Complete `project-background.md` with detailed project information
+4. [ ] Update `high-level-plan.md` with specific phases and timelines
+5. [ ] Populate `todo.md` with actionable, prioritized tasks
+6. [ ] Follow the project setup steps in `detailed-plan.md` which has the initialization tasks prefilled
+7. [ ] Have AI review all memory bank files for context
+8. [ ] ONLY THEN begin implementation work
 
 ## Critical Files (In order of completion)
 

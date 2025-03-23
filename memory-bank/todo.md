@@ -14,87 +14,71 @@ This document captures specific tasks that need to be completed. These tasks are
 ## High Priority (Must be done next)
 
 <!-- Tasks that are blocking progress or are critical for the current phase -->
-<!-- Example:
-- [ ] Set up Google Cloud project and enable Gmail API
-- [ ] Create OAuth consent screen and configure credentials
-- [ ] Implement authentication flow for Gmail API access
--->
-- [ ] 
-- [ ] 
-- [ ] 
+- [x] Initialize project repository structure (create src, tests directories)
+- [x] Copy configuration templates from memory-bank to project root
+- [x] Set up Python virtual environment with required dependencies
+- [ ] Create Google Cloud project and enable Gmail API
+- [ ] Set up OAuth consent screen and generate credentials
+- [x] Create initial README.md with project description and setup instructions
 
 ## Medium Priority (Should be done soon)
 
 <!-- Tasks that are important but not blocking immediate progress -->
-<!-- Example:
-- [ ] Implement command-line argument parsing for search queries
-- [ ] Add support for date range filtering
-- [ ] Create markdown formatting templates for different email types
--->
-- [ ] 
-- [ ] 
-- [ ] 
+- [x] Implement authentication module for Gmail API access
+- [x] Create basic command-line interface structure using Typer
+- [x] Implement email search functionality with basic query parameters
+- [x] Design and implement email content extraction logic
+- [x] Develop markdown conversion with YAML frontmatter
+- [x] Create file management module with duplicate prevention
 
 ## Low Priority (Can wait)
 
 <!-- Tasks that would be nice to have but aren't critical -->
-<!-- Example:
-- [ ] Add colorized console output for better UX
-- [ ] Create installation script for easier deployment
 - [ ] Add verbose logging option for debugging
--->
-- [ ] 
-- [ ] 
-- [ ] 
+- [ ] Implement error handling with informative user messages
+- [ ] Add progress indicators for long-running operations
+- [ ] Create configuration file for user preferences
+- [ ] Add support for alternative output formats beyond markdown
 
 ## Technical Debt (Needs refactoring)
 
 <!-- Code or design issues that should be addressed to improve quality -->
-<!-- Example:
-- [ ] Refactor email parsing logic into separate module
-- [ ] Add comprehensive error handling
-- [ ] Improve test coverage for core functions
--->
-- [ ] 
-- [ ] 
-- [ ] 
+- [ ] Establish comprehensive test suite with pytest
+- [ ] Add type hints throughout the codebase
+- [ ] Create modular architecture for extensibility
+- [ ] Implement proper exception handling hierarchy
+- [ ] Add docstrings to all functions and classes
 
 ## Future Enhancements (Post v1.0)
 
 <!-- Features or improvements planned for future versions -->
-<!-- Example:
-- [ ] Add support for downloading attachments
-- [ ] Implement incremental sync to only process new emails
-- [ ] Create web interface for non-technical users
--->
-- [ ] 
-- [ ] 
-- [ ] 
+- [ ] Add support for downloading and processing email attachments
+- [ ] Implement HTML to Markdown conversion for better formatting
+- [ ] Create incremental sync to only process new emails
+- [ ] Develop web interface for non-technical users
+- [ ] Add integration with summarization APIs
+- [ ] Implement email categorization using ML techniques
+- [ ] Create scheduled runs for automatic updates
 
 ## Documentation Tasks
 
 <!-- Documentation that needs to be created or updated -->
-<!-- Example:
-- [ ] Create README with installation and usage instructions
+- [ ] Create detailed README with installation and usage instructions
+- [ ] Document Google Cloud project setup with screenshots
 - [ ] Add examples of common search queries
+- [ ] Create user guide for different use cases
 - [ ] Document environment variables and configuration options
--->
-- [ ] 
-- [ ] 
-- [ ] 
+- [ ] Add troubleshooting section for common issues
 
-## Completed Tasks
+## Completed
 
-<!-- Recently completed tasks (move here from sections above) -->
-<!-- Keep this list manageable by removing older items periodically -->
-<!-- Example:
-- [x] Initial project setup
-- [x] Research Gmail API authentication options
-- [x] Create project requirements document
--->
-- [x] 
-- [x] 
-- [x] 
+<!-- Recently completed tasks - move here before eventually removing -->
+- [x] Set up project directory structure (March 23, 2025)
+- [x] Create initial core modules (March 23, 2025)
+- [x] Implement CLI interface with Typer (March 23, 2025)
+- [x] Complete project-background.md with project details
+- [x] Update high-level-plan.md with project phases and timelines
+- [x] Populate todo.md with actionable, prioritized tasks
 
 ---
 *Review this list at the beginning of each work session to stay focused on priorities.*

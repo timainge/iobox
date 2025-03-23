@@ -13,6 +13,32 @@ The memory bank serves as a persistent, structured knowledge repository that:
 4. Documents important decisions and rationale
 5. Supports effective collaboration between humans and AI tools
 
+## Status Tracking and Authority
+
+⚠️ **CRITICAL: STATUS TRACKING HIERARCHY AND AUTHORITY** ⚠️
+
+The memory bank system uses the following hierarchy for tracking project status:
+
+1. **`high-level-plan.md`** - **PRIMARY STATUS AUTHORITY**
+   - Records status of overall project phases and major milestones
+   - All phase status updates MUST be reflected here first
+   - Serves as the authoritative shared representation of intent and consensus
+   - Contains Success Metrics for each phase which are updated as they are achieved
+
+2. **`detailed-plan.md`** - **IMPLEMENTATION STATUS AUTHORITY**
+   - Maintains detailed implementation steps and their status
+   - Contains the authoritative status for current feature implementation
+   - All implementation steps should be tracked with clear status indicators
+   - Progress updates should be dated and include specific achievements
+
+3. **`todo.md`** - **SUPPORTING TASK TRACKER**
+   - Used ONLY for working-level tasks that don't fit within the structure of high-level or detailed plans
+   - Appropriate for tasks with different scope or feature affinity than current plan focus
+   - NOT the authoritative source for project status or phase completion
+   - Tasks that represent core milestones should be promoted to appropriate plan files
+
+**Important**: When there are discrepancies between files, the hierarchy above determines which file takes precedence. Always resolve conflicts by updating lower-authority documents to match higher ones.
+
 ## Memory Bank Process Overview
 
 The Memory Bank system operates in two distinct phases:
@@ -36,7 +62,8 @@ After initialization, development follows an OODA loop (Observe, Orient, Decide,
 
 1. **Observe** - Review current state of the project
    - Update `scratchpad.md` with observations
-   - Review completed and pending tasks in `todo.md`
+   - Review high-level-plan.md and detailed-plan.md for current status
+   - Use todo.md only for supporting tasks not covered in plans
 
 2. **Orient** - Analyze and prioritize
    - Update `detailed-plan.md` for the current feature
@@ -45,13 +72,13 @@ After initialization, development follows an OODA loop (Observe, Orient, Decide,
 
 3. **Decide** - Choose implementation approach
    - Determine specific implementation steps
-   - Update `todo.md` with new tasks
-   - Finalize feature implementation plan
+   - Update primary plans with new status information
+   - Add supporting tasks to `todo.md` only if they don't fit in the plans
 
 4. **Act** - Implement and validate
    - Execute implementation according to plan
    - Document challenges and solutions
-   - Update memory bank files to reflect progress
+   - Update high-level-plan.md and detailed-plan.md with current status
 
 Repeat this cycle for each feature or major component of the project.
 
@@ -88,19 +115,19 @@ Repeat this cycle for each feature or major component of the project.
    - Update `detailed-plan.md` status to "Implementing"
    - Check off completed steps in the plan as you progress
    - Document challenges and solutions in the plan as they arise
-   - Add items to `todo.md` for minor tasks that emerge
+   - Add items to `todo.md` ONLY for tasks that don't fit within plan structures
 
 3. **Completion Phase**
-   - Update `detailed-plan.md` status to "Complete"
+   - Update `high-level-plan.md` and `detailed-plan.md` status to "Complete"
    - Document lessons learned and implementation notes
    - Move completed tasks in `todo.md` to the "Completed" section
-   - Update `high-level-plan.md` to reflect progress
+   - Ensure all status indicators across files are consistent
 
 ## Memory Bank Maintenance Rules
 
 1. **Regular Updates**
    - Update relevant memory bank files at the START of each development session
-   - Keep the `high-level-plan.md` current as priorities shift
+   - Keep the `high-level-plan.md` current as the PRIMARY status authority
    - Review and clean up the `scratchpad.md` at least weekly
    - Never delete memory bank files; only update them
 
@@ -110,7 +137,13 @@ Repeat this cycle for each feature or major component of the project.
    - Link decisions to requirements or constraints where applicable
    - Date each decision for future reference
 
-3. **Context Preservation**
+3. **Status Consistency**
+   - Always update status in high-level-plan.md FIRST, then detailed-plan.md
+   - When updating status, include specific achievements and date
+   - Use consistent status terminology across all files (e.g., "Planning", "Implementing", "Complete")
+   - Resolve any status inconsistencies by following the status tracking hierarchy
+
+4. **Context Preservation**
    - Ensure all memory bank files are consistent with each other
    - When changes are made to `project-background.md`, update all affected files
    - Maintain clear status indicators in all planning documents
