@@ -149,6 +149,68 @@ Repeat this cycle for each feature or major component of the project.
    - Maintain clear status indicators in all planning documents
    - Never contradict information between memory bank files
 
+## Prompts System
+
+The memory bank includes a collection of task-specific prompts in the `prompts/` directory. These prompts provide detailed guidance for specific situations while keeping the core process documents focused.
+
+### Using Prompts
+
+1. **Reference Syntax**: Use `@prompt:[path/to/prompt]` to reference a specific prompt
+2. **When to Reference**: Include prompt references when:
+   - Defining implementation steps that require specific guidance
+   - Documenting processes that have detailed sub-processes
+   - Referencing technical patterns that should be consistently applied
+
+### Prompt Categories
+
+1. **Code**: Detailed guidance for code implementation (`@prompt:code/...`)
+2. **Process**: Specific process implementation details (`@prompt:process/...`)
+3. **Setup**: Repository and environment setup guides (`@prompt:setup/...`)
+4. **Testing**: Test creation and debugging guidance (`@prompt:testing/...`)
+
+For a complete list of available prompts, see the `prompts/README.md` file.
+
+## Continuous Improvement Process
+
+The memory bank system includes a structured approach to continuous improvement through regular retrospectives and rule refinement.
+
+### Retrospective Triggers
+
+Conduct retrospectives at these specific moments:
+
+1. **After Debugging Sessions** - When solving challenging problems that reveal systemic issues
+2. **Milestone Completion** - Upon finishing items in the high-level plan
+3. **Test Failure Patterns** - When similar failures occur across multiple tests
+4. **Quarterly Reviews** - Regular scheduled reviews regardless of project progress
+
+### Capturing Learnings
+
+Structure retrospective learnings in the following format:
+
+1. **Context**: Brief description of the situation that triggered the retrospective
+2. **Challenge**: The specific problem or obstacle encountered
+3. **Solution**: How the challenge was overcome
+4. **Insight**: The broader principle or pattern identified
+5. **Rule Impact**: How existing rules should be updated or new rules created
+
+All retrospective insights should be recorded in a dedicated file: `retrospectives.md`
+
+### Rule Usage Logging
+
+Track the effectiveness of project rules using a structured logging approach:
+
+1. When applying a specific rule from `.windsurfrules`, record:
+   ```
+   [YYYY-MM-DD] [RULE_SECTION] [BRIEF_DESCRIPTION] [OUTCOME]
+   ```
+
+2. Example log entry:
+   ```
+   [2025-03-23] [Function Analysis] Applied to markdown.py - Fixed 4 failing tests
+   ```
+
+3. Store these entries in `rules_usage.log` for analysis during quarterly reviews
+
 
 ---
 *Review this meta document at the beginning of each project phase to ensure everyone follows the memory bank process consistently.*

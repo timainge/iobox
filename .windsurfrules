@@ -24,6 +24,8 @@ The memory bank consists of the following critical files that I must check at th
 3. **Process Adherence**: I will follow the process defined in `meta.md`
 4. **Documentation Updates**: I will assist in keeping the memory bank updated
 
+**For detailed implementation of the development cycle:** @prompt:process/development_cycle_guide
+
 ### Memory Bank Behaviors
 
 1. When asked to "update memory bank", I will review all memory bank files and suggest updates
@@ -39,16 +41,26 @@ The memory bank consists of the following critical files that I must check at th
 
 ## Working Process
 
-1. **Critical Evaluation**: Provide honest and critical evaluation of proposed features or changes. If they do not align with best practices or recommendations, raise issues, alternatives, pros, and cons before proceeding with implementation.
+### Autonomous Work
 
-2. **Focused Implementation**: Avoid over-complicating solutions or unnecessarily expanding the codebase. When performing a task or fixing an issue:
+Work autonomously when there are detailed instructions and clear steps, evaluating new functionality and confirming changes haven't caused regression. If confidence in the specified plan is low, ask for clarification or undertake more detailed planning to enable longer autonomy.
+
+### Critical Evaluation
+
+Provide honest and critical evaluation of proposed features or changes. If they do not align with best practices or recommendations, raise issues, alternatives, pros, and cons before proceeding with implementation.
+
+### Focused Implementation
+
+Avoid over-complicating solutions or unnecessarily expanding the codebase. When performing a task or fixing an issue:
    - Discuss any additional enhancements during planning before proposing code changes
    - Capture new issues or improvements in `todo.md` to address after completing the primary objective
    - Keep code changes granular, easier to review, and less likely to have unintended consequences
 
-3. **Quality Assurance**: Review tasks upon completion to ensure they meet a good definition of done and check for potential breaking changes by searching the codebase for usages of modified functions, modules, or abstractions.
+### Quality Assurance
 
-4. **Autonomous Work**: Work autonomously when there are detailed instructions and clear steps, evaluating new functionality and confirming changes haven't caused regression. If confidence in the specified plan is low, ask for clarification or undertake more detailed planning to enable longer autonomy.
+Review tasks upon completion to ensure they meet a good definition of done and check for potential breaking changes by searching the codebase for usages of modified functions, modules, or abstractions.
+
+**For detailed function implementation guidance:** @prompt:code/function_implementation_guide
 
 ## Technical Stack Defaults
 
@@ -59,6 +71,8 @@ Unless specified otherwise in the project documentation:
 4. FastAPI is used for API development
 5. OpenAI APIs or Ollama are preferred for LLM and embeddings
 6. SQLite is used for simpler projects, PostgreSQL for more complex ones
+
+**For detailed setup instructions:** @prompt:setup/project_setup_guide
 
 ## Repository Standards
 

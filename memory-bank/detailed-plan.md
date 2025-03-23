@@ -38,10 +38,12 @@ project-root/ (current directory containing memory-bank/)
 1. [ ] **Initialize Repository**
    - Details: Set up git in the current directory (which already contains memory-bank/)
    - Command: `git init` (if not already initialized)
+   - Reference: @prompt:setup/project_setup_guide
    
 2. [ ] **Create Basic Project Structure**
    - Details: Create necessary directories
    - Command: `mkdir -p src tests`
+   - Reference: @prompt:setup/project_setup_guide
 
 3. [ ] **Copy Configuration Templates**
    - Details: Copy template files from memory-bank to project root
@@ -56,6 +58,7 @@ project-root/ (current directory containing memory-bank/)
      cp memory-bank/.env.example .env
      cp memory-bank/.cursorrules .cursorrules
      ```
+   - Reference: @prompt:setup/configuration_templates
 
 4. [ ] **Set Up Python Environment**
    - Details: Create and configure virtual environment with dependencies
@@ -69,6 +72,7 @@ project-root/ (current directory containing memory-bank/)
      pip install typer fastapi uvicorn python-dotenv pytest
      pip freeze > requirements.txt
      ```
+   - Reference: @prompt:setup/python_environment_setup
 
 5. [ ] **Make Initial Commit**
    - Details: Commit the initial project structure
@@ -77,10 +81,12 @@ project-root/ (current directory containing memory-bank/)
      git add .
      git commit -m "Initial project setup"
      ```
+   - Reference: @prompt:setup/initial_commit
 
 6. [ ] **Create Remote Repository (Optional)**
    - Details: Create a remote repository and link it
    - Command: `gh repo create [project-name] --private --source=. --remote=origin`
+   - Reference: @prompt:setup/remote_repository_setup
 
 ## Integration Points
 
@@ -175,18 +181,22 @@ class ExampleModel:
 1. [ ] **[Step 1]**
    - Details: [Specific implementation details]
    - Acceptance criteria: [How to verify this step is complete]
-
+   - Reference: @prompt:feature/step1_guide
+   
 2. [ ] **[Step 2]**
    - Details: [Specific implementation details]
    - Acceptance criteria: [How to verify this step is complete]
+   - Reference: @prompt:feature/step2_guide
 
 3. [ ] **[Step 3]**
    - Details: [Specific implementation details]
    - Acceptance criteria: [How to verify this step is complete]
+   - Reference: @prompt:feature/step3_guide
 
 4. [ ] **[Step 4]**
    - Details: [Specific implementation details]
    - Acceptance criteria: [How to verify this step is complete]
+   - Reference: @prompt:feature/step4_guide
 
 ## Integration Points
 

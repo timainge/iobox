@@ -1,10 +1,12 @@
-# Memory Bank System Rules
+# Windsurf Assistant Rules
 
-## Introduction
+## Memory Bank System
+
+### Introduction
 
 I am an AI assistant working on this project. My memory resets between sessions, so I rely entirely on this memory bank for context. At the start of each conversation, I must review all memory bank files to understand the current project state and context.
 
-## Memory Bank Files
+### Memory Bank Files
 
 The memory bank consists of the following critical files that I must check at the beginning of each session:
 
@@ -15,19 +17,50 @@ The memory bank consists of the following critical files that I must check at th
 5. `meta.md` - Process definitions and guidelines for using the memory bank
 6. `todo.md` - List of pending tasks not covered in the detailed plan
 
-## Process Guidelines
+### Memory Bank Process
 
 1. **Initial Review**: At the start of each session, I will review all memory bank files
 2. **Context Checking**: I will confirm my understanding of the current project status
 3. **Process Adherence**: I will follow the process defined in `meta.md`
 4. **Documentation Updates**: I will assist in keeping the memory bank updated
 
-## Specific Behaviors
+**For detailed implementation of the development cycle:** @prompt:process/development_cycle_guide
+
+### Memory Bank Behaviors
 
 1. When asked to "update memory bank", I will review all memory bank files and suggest updates
 2. I will reference specific memory bank files when providing assistance
 3. I will help maintain consistency across all memory bank documents
 4. I will proactively suggest updates to relevant memory bank files when significant changes occur
+
+## Language and Style
+
+1. **Australian English**: Use Australian English (en-au) in all source code, comments, and documentation
+2. Maintain consistent formatting and style throughout the codebase
+3. Write clear, concise, and well-documented code with appropriate comments
+
+## Working Process
+
+### Autonomous Work
+
+Work autonomously when there are detailed instructions and clear steps, evaluating new functionality and confirming changes haven't caused regression. If confidence in the specified plan is low, ask for clarification or undertake more detailed planning to enable longer autonomy.
+
+### Critical Evaluation
+
+Provide honest and critical evaluation of proposed features or changes. If they do not align with best practices or recommendations, raise issues, alternatives, pros, and cons before proceeding with implementation.
+
+### Focused Implementation
+
+Avoid over-complicating solutions or unnecessarily expanding the codebase. When performing a task or fixing an issue:
+   - Discuss any additional enhancements during planning before proposing code changes
+   - Capture new issues or improvements in `todo.md` to address after completing the primary objective
+   - Keep code changes granular, easier to review, and less likely to have unintended consequences
+
+### Quality Assurance
+
+Review tasks upon completion to ensure they meet a good definition of done and check for potential breaking changes by searching the codebase for usages of modified functions, modules, or abstractions.
+
+**For detailed function implementation guidance:** @prompt:code/function_implementation_guide
 
 ## Technical Stack Defaults
 
@@ -38,6 +71,8 @@ Unless specified otherwise in the project documentation:
 4. FastAPI is used for API development
 5. OpenAI APIs or Ollama are preferred for LLM and embeddings
 6. SQLite is used for simpler projects, PostgreSQL for more complex ones
+
+**For detailed setup instructions:** @prompt:setup/project_setup_guide
 
 ## Repository Standards
 
