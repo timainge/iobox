@@ -17,9 +17,10 @@ This document captures specific tasks that need to be completed. These tasks are
 - [x] Initialize project repository structure (create src, tests directories)
 - [x] Copy configuration templates from memory-bank to project root
 - [x] Set up Python virtual environment with required dependencies
-- [ ] Create Google Cloud project and enable Gmail API
-- [ ] Set up OAuth consent screen and generate credentials
+- [x] Create Google Cloud project and enable Gmail API
+- [x] Set up OAuth consent screen and generate credentials
 - [x] Create initial README.md with project description and setup instructions
+- [ ] Set up unit testing framework with pytest
 
 ## Medium Priority (Should be done soon)
 
@@ -76,6 +77,7 @@ This document captures specific tasks that need to be completed. These tasks are
 - [x] Set up project directory structure (March 23, 2025)
 - [x] Create initial core modules (March 23, 2025)
 - [x] Implement CLI interface with Typer (March 23, 2025)
+- [x] OAuth 2.0 authentication implementation and testing (March 23, 2025)
 - [x] Complete project-background.md with project details
 - [x] Update high-level-plan.md with project phases and timelines
 - [x] Populate todo.md with actionable, prioritized tasks

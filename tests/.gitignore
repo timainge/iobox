@@ -1,0 +1,11 @@
+# Test artifacts
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Mock fixture generated files
+fixtures/mock_credentials.json
+fixtures/mock_token.json
