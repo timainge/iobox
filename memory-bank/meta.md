@@ -168,6 +168,12 @@ The memory bank includes a collection of task-specific prompts in the `prompts/`
 3. **Setup**: Repository and environment setup guides (`@prompt:setup/...`)
 4. **Testing**: Test creation and debugging guidance (`@prompt:testing/...`)
 
+### Prompt Maintenance
+
+1. **Prompt Status**: The `prompts/README.md` file maintains a status index of all prompts
+2. **Process Prompts**: Important processes like Rule Consolidation and Rules Update are stored as dedicated prompts for on-demand use
+3. **Stubs**: Prompt stubs that need completion are tracked in `todo.md`
+
 For a complete list of available prompts, see the `prompts/README.md` file.
 
 ## Continuous Improvement Process

@@ -14,48 +14,48 @@ This document captures specific tasks that need to be completed. These tasks are
 ## High Priority (Must be done next)
 
 <!-- Tasks that are blocking progress or are critical for the current phase -->
-- [x] Initialize project repository structure (create src, tests directories)
-- [x] Copy configuration templates from memory-bank to project root
-- [x] Set up Python virtual environment with required dependencies
-- [x] Create Google Cloud project and enable Gmail API
-- [x] Set up OAuth consent screen and generate credentials
-- [x] Create initial README.md with project description and setup instructions
-- [ ] Set up unit testing framework with pytest
+- [ ] Implement performance optimization for batch processing of large email volumes
+- [ ] Add progress indicators for long-running operations
+- [ ] Enhance error handling with more informative user messages
+- [ ] Set up comprehensive unit testing framework with pytest
+- [ ] Add integration tests for end-to-end functionality verification
 
 ## Medium Priority (Should be done soon)
 
 <!-- Tasks that are important but not blocking immediate progress -->
-- [x] Implement authentication module for Gmail API access
-- [x] Create basic command-line interface structure using Typer
-- [x] Implement email search functionality with basic query parameters
-- [x] Design and implement email content extraction logic
-- [x] Develop markdown conversion with YAML frontmatter
-- [x] Create file management module with duplicate prevention
-- [ ] Capture detailed plans from previous features in .chat-logs before starting a new one, supporting future documentation requirements
+- [ ] Implement caching mechanisms for improved performance
+- [ ] Add advanced search options with multiple label filtering
+- [ ] Develop compound search queries with more sophisticated filtering
+- [ ] Implement date range enhancements with relative date support
+- [ ] Add retry mechanisms for transient API errors
+- [ ] Capture detailed plans from previous features in .chat-logs to support future documentation
+- [ ] Complete the following prompt stubs with detailed content:
+  - [ ] Python Environment Setup (prompts/setup/python_environment_setup.md)
+  - [ ] Initial Commit Guide (prompts/setup/initial_commit.md)
+  - [ ] Remote Repository Setup (prompts/setup/remote_repository_setup.md)
 
 ## Low Priority (Can wait)
 
 <!-- Tasks that would be nice to have but aren't critical -->
-- [ ] Add verbose logging option for debugging
-- [ ] Implement error handling with informative user messages
-- [ ] Add progress indicators for long-running operations
 - [ ] Create configuration file for user preferences
 - [ ] Add support for alternative output formats beyond markdown
+- [ ] Implement command for listing processed email stats
+- [ ] Add ability to update previously converted emails
+- [ ] Create detailed logging configuration options
 
 ## Technical Debt (Needs refactoring)
 
 <!-- Code or design issues that should be addressed to improve quality -->
-- [ ] Establish comprehensive test suite with pytest
 - [ ] Add type hints throughout the codebase
-- [ ] Create modular architecture for extensibility
+- [ ] Create more modular architecture for extensibility
 - [ ] Implement proper exception handling hierarchy
-- [ ] Add docstrings to all functions and classes
+- [ ] Add complete docstrings to all functions and classes
+- [ ] Refactor authentication module for better token management
 
 ## Future Enhancements (Post v1.0)
 
 <!-- Features or improvements planned for future versions -->
 - [ ] Add support for downloading and processing email attachments
-- [ ] Implement HTML to Markdown conversion for better formatting
 - [ ] Create incremental sync to only process new emails
 - [ ] Develop web interface for non-technical users
 - [ ] Add integration with summarization APIs
@@ -79,9 +79,27 @@ This document captures specific tasks that need to be completed. These tasks are
 - [x] Create initial core modules (March 23, 2025)
 - [x] Implement CLI interface with Typer (March 23, 2025)
 - [x] OAuth 2.0 authentication implementation and testing (March 23, 2025)
-- [x] Complete project-background.md with project details
-- [x] Update high-level-plan.md with project phases and timelines
-- [x] Populate todo.md with actionable, prioritized tasks
+- [x] Complete project-background.md with project details (March 23, 2025)
+- [x] Update high-level-plan.md with project phases and timelines (March 23, 2025)
+- [x] Populate todo.md with actionable, prioritized tasks (March 23, 2025)
+- [x] Initialize project repository structure (create src, tests directories) (March 23, 2025)
+- [x] Copy configuration templates from memory-bank to project root (March 23, 2025)
+- [x] Set up Python virtual environment with required dependencies (March 23, 2025)
+- [x] Create Google Cloud project and enable Gmail API (March 23, 2025)
+- [x] Set up OAuth consent screen and generate credentials (March 23, 2025)
+- [x] Create initial README.md with project description and setup instructions (March 23, 2025)
+- [x] Implement authentication module for Gmail API access (March 23, 2025)
+- [x] Create basic command-line interface structure using Typer (March 23, 2025)
+- [x] Implement email search functionality with basic query parameters (March 23, 2025)
+- [x] Design and implement email content extraction logic (March 23, 2025)
+- [x] Develop markdown conversion with YAML frontmatter (March 23, 2025)
+- [x] Create file management module with duplicate prevention (March 23, 2025)
+- [x] Implement HTML to Markdown conversion for better formatting (March 23, 2025)
+- [x] Organize prompt system with appropriate categories (March 24, 2025)
+- [x] Move template files to memory-bank/templates/ directory (March 24, 2025)
+- [x] Create process prompts for Rule Consolidation and Rules Update (March 24, 2025)
+- [x] Update memory bank documentation to reflect current progress (March 24, 2025)
+- [x] Set up unit testing framework with pytest (March 24, 2025)
 
 ---
 *Review this list at the beginning of each work session to stay focused on priorities.*
