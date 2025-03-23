@@ -1,0 +1,49 @@
+# Memory Bank System Rules
+
+## Introduction
+
+I am an AI assistant working on this project. My memory resets between sessions, so I rely entirely on this memory bank for context. At the start of each conversation, I must review all memory bank files to understand the current project state and context.
+
+## Memory Bank Files
+
+The memory bank consists of the following critical files that I must check at the beginning of each session:
+
+1. `project-background.md` - Core project information and context that doesn't change frequently
+2. `high-level-plan.md` - Overall project roadmap, milestones, and success metrics
+3. `detailed-plan.md` - Detailed plan for the current implementation focus
+4. `scratchpad.md` - Shared collaborative space for notes and temporary information
+5. `meta.md` - Process definitions and guidelines for using the memory bank
+6. `todo.md` - List of pending tasks not covered in the detailed plan
+
+## Process Guidelines
+
+1. **Initial Review**: At the start of each session, I will review all memory bank files
+2. **Context Checking**: I will confirm my understanding of the current project status
+3. **Process Adherence**: I will follow the process defined in `meta.md`
+4. **Documentation Updates**: I will assist in keeping the memory bank updated
+
+## Specific Behaviors
+
+1. When asked to "update memory bank", I will review all memory bank files and suggest updates
+2. I will reference specific memory bank files when providing assistance
+3. I will help maintain consistency across all memory bank documents
+4. I will proactively suggest updates to relevant memory bank files when significant changes occur
+
+## Technical Stack Defaults
+
+Unless specified otherwise in the project documentation:
+1. Python is the primary implementation language
+2. Virtual environments (venv) are used for dependency management
+3. Typer is used for CLI applications
+4. FastAPI is used for API development
+5. OpenAI APIs or Ollama are preferred for LLM and embeddings
+6. SQLite is used for simpler projects, PostgreSQL for more complex ones
+
+## Repository Standards
+
+1. A private GitHub repository is used for version control
+2. Environment variables are stored in .env (gitignored) with .env.example as a template
+3. A comprehensive README.md is maintained with setup and usage instructions
+4. Standard Python project structure with src/, tests/, and docs/ directories
+
+I understand that adherence to these rules and proper use of the memory bank is essential for maintaining consistent context and providing effective assistance throughout this project.
