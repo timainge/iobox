@@ -75,6 +75,8 @@ This document captures specific tasks that need to be completed. These tasks are
 ## Completed
 
 <!-- Recently completed tasks - move here before eventually removing -->
+- [x] Enhance CLI interface for direct command-line usage with required query parameter (March 24, 2025)
+- [x] Configure default values for output directory and days parameter (March 24, 2025)
 - [x] Set up project directory structure (March 23, 2025)
 - [x] Create initial core modules (March 23, 2025)
 - [x] Implement CLI interface with Typer (March 23, 2025)

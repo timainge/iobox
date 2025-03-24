@@ -49,42 +49,51 @@ project-root/
 
 ## Implemented Functionality (Phases 1 & 2)
 
-1. [x] **Project Initialization and Setup**
-   - [x] Repository structure created
-   - [x] Configuration templates added
-   - [x] Python environment configured
-   - [x] Prompt system organized
-   
-2. [x] **Authentication Module**
-   - [x] OAuth 2.0 flow implementation
-   - [x] Token management (creation, refresh, validation)
-   - [x] Authentication status checking
-   - [x] Error handling for unauthorized access
+1. **Project Structure**
+   - Organized codebase with modular design
+   - Configuration through environment variables
+   - Documentation in README and memory-bank files
 
-3. [x] **Email Search and Retrieval**
-   - [x] Query-based search with Gmail API
-   - [x] Date range filtering
-   - [x] Message metadata extraction
-   - [x] Content retrieval (HTML and plain text)
-   - [x] Attachment metadata handling
+2. **Authentication**
+   - OAuth 2.0 authentication flow
+   - Token storage and management
+   - Authentication status checking
 
-4. [x] **Markdown Conversion**
-   - [x] YAML frontmatter generation
-   - [x] HTML to Markdown conversion
-   - [x] Content formatting and cleanup
-   - [x] Metadata preservation
+3. **Email Search and Retrieval**
+   - Gmail API integration for search
+   - Query parameter handling
+   - Pagination support for large result sets
+   - Email content extraction (HTML and plain text)
 
-5. [x] **File Management**
-   - [x] Output directory creation
-   - [x] Duplicate prevention
-   - [x] Filename sanitization
-   - [x] Smart filename generation based on email metadata
+4. **Markdown Conversion**
+   - YAML frontmatter for metadata
+   - HTML to Markdown conversion
+   - Consistent formatting of email content
+   - Handling of email threads and conversations
 
-6. [x] **Command-Line Interface**
-   - [x] Typer-based CLI implementation
-   - [x] Multiple commands (auth, search, convert, batch_convert)
-   - [x] Command-line arguments and options
-   - [x] User feedback and error messaging
+5. **File Management**
+   - Output directory creation
+   - Filename generation from email metadata
+   - Duplicate prevention mechanism
+   - Error handling for file operations
+
+6. **Command-Line Interface**
+   - Typer-based CLI implementation
+   - Multiple commands (search, convert, batch_convert)
+   - Help documentation and examples
+   - Direct CLI usage support with default parameters
+     - `query` parameter as required argument
+     - `days` parameter defaulting to 1
+     - `output` parameter defaulting to current directory
+   - Version display command
+
+## Recently Implemented Features
+
+1. **Enhanced CLI Usage**
+   - Direct command-line usage without requiring subcommands
+   - Simplified interface for common operations
+   - Consistent default values across commands
+   - Better help documentation and examples
 
 ## Current Implementation Focus (Phase 3)
 
@@ -98,7 +107,7 @@ project-root/
 2. [ ] **Advanced Search Options**
    - [ ] Multiple label filtering
    - [ ] Compound search queries
-   - [ ] Date range enhancements (relative dates)
+   - [x] Date range enhancements (relative dates)
    - [ ] Sender/recipient filtering improvements
    - Reference: @prompt:code/function_implementation_guide
 

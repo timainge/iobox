@@ -1,10 +1,16 @@
+# Credentials and authentication
+token.json
+credentials.json
+
+# Environment variables
+.env
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -16,55 +22,22 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
 # Virtual Environment
 venv/
-ENV/
 env/
+ENV/
 
-# IDE files
+# IDE specific files
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# OS specific files
 .DS_Store
-
-# Environment variables
-.env
-.env.local
-
-# Logs
-logs/
-*.log
-
-# Database
-*.db
-*.sqlite3
-
-# Testing
-.coverage
-htmlcov/
-.pytest_cache/
-
-# Build artifacts
-*.pyc
-*.pyo
-*.pyd
-
-# Jupyter Notebooks
-.ipynb_checkpoints
-
-# Distribution / packaging
-.Python
-*.manifest
-*.spec
-
-# Documentation
-/site
-
-# Project specific
-# Add project-specific ignores here
-credentials.json
+Thumbs.db

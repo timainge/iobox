@@ -64,16 +64,63 @@ Once you have your emails saved locally as markdown files, you can proceed to bu
 
 ## Usage
 
-Basic usage:
+### Command-Line Interface
+
+Iobox uses a command-based interface:
+
 ```bash
-python src/main.py --query "label:inbox subject:(important meeting)" --output ./email_output --days 30
+# Display version information
+iobox --version
+
+# Get help on available commands
+iobox --help
+
+# Get help on a specific command
+iobox save --help
 ```
 
-### Available Options
+### Available Commands
 
-- `--query`: Gmail search query (required)
-- `--output`: Output directory for markdown files (default: 'output')
-- `--days`: Number of days back to search for emails (default: 7)
+```bash
+# Search for emails
+iobox search -q "from:newsletter@example.com" -m 20 -v
+
+# Search for emails from the last 3 days
+iobox search -q "from:newsletter@example.com" -d 3
+
+# Save a specific email as Markdown
+iobox save --message-id MESSAGE_ID -o ./output_folder
+
+# Save multiple emails matching a query from the last 14 days
+iobox save --query "label:important" --max 50 -d 14 -o ./important_emails
+
+# Check authentication status
+iobox auth-status
+
+# Display version information
+iobox version
+```
+
+### Search Command Options
+
+- `-q, --query`: Gmail search query (required)
+- `-m, --max-results`: Maximum number of results to return (default: 10)
+- `-d, --days`: Number of days back to search (default: 7)
+- `-v, --verbose`: Show detailed information for each result
+- `--debug`: Show debug information about API responses
+
+### Save Command Options
+
+The save command supports two modes:
+- **Single mode**: Save one specific email using `--message-id`
+- **Batch mode**: Save multiple emails matching a query using `--query`
+
+Options:
+- `-m, --message-id`: Gmail message ID to save (for single email mode)
+- `-q, --query`: Search query for emails to save (for batch mode)
+- `--max`: Maximum number of emails to save in batch mode (default: 10)
+- `-o, --output-dir`: Directory to save markdown files to (default: '.')
+- `--html-preferred`: Prefer HTML content if available (default: True)
 
 ### Example Search Queries
 

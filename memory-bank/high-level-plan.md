@@ -66,27 +66,29 @@
 **Status:** In Progress
 
 **Goals:** 
-- Implement advanced search criteria options
-- Add email label preservation 
 - Optimize performance for large email volumes
+- Add advanced search criteria and filtering options
 - Enhance error handling and logging
-- Implement basic HTML to Markdown conversion
+- Improve testing coverage
+- Prepare for packaging and distribution
 
 **Timeline:** April 19, 2025 - May 2, 2025
 
 **Success Metrics:** 
-- [x] Advanced search criteria functioning correctly
-- [x] Email labels preserved in YAML frontmatter
-- [ ] Performance benchmarks for 100+ emails met
-- [x] Comprehensive error handling and logging implemented
-- [x] HTML to Markdown conversion working for basic formatting
+- [ ] Performance benchmark for processing large email volumes (100+ emails)
+- [ ] Implementation of advanced search and filtering options
+- [ ] Comprehensive logging and error handling
+- [ ] Test coverage of at least 80%
+- [ ] Package distribution setup with PyPI
 
 **Progress Notes:**
-- Basic search criteria implemented with Gmail query syntax support (March 23, 2025)
+- Enhanced CLI interface for direct command-line usage implemented (March 24, 2025)
+- Configured default values for command-line parameters (output=".", days=1) (March 24, 2025)
+- Setup entry points in setup.py for command-line usage (March 24, 2025)
+- Basic search criteria implemented (March 23, 2025)
 - Email labels preserved in YAML frontmatter (March 23, 2025)
-- Comprehensive error handling and logging implemented across all modules (March 23, 2025)
-- HTML to Markdown conversion implemented using html2text library (March 23, 2025)
-- Advanced search criteria options implemented with support for multiple labels and dates (March 24, 2025)
+- Basic error handling and logging implemented (March 23, 2025)
+- HTML to Markdown conversion implementation complete (March 23, 2025)
 
 ### Phase 4: Refinement and Launch
 **Status:** Not Started

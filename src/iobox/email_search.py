@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def search_emails(service, query: str, max_results: int = 100, days_back: int = 7) -> List[Dict[str, str]]:
+def search_emails(service, query: str, max_results: int = 100, days_back: int = 7) -> List[Dict[str, Any]]:
     """
     Search for emails based on the given query and date range.
     
@@ -24,7 +24,7 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
         days_back: Number of days back to search (default: 7)
         
     Returns:
-        list: List of message dictionaries containing id and threadId
+        list: List of message dictionaries with basic preview information
     """
     try:
         # Add date range to query
@@ -54,12 +54,25 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
             messages.extend(result.get('messages', []))
         
         logging.info(f"Found {len(messages)} matching emails")
-        return messages
+        
+        # Fetch basic details for each message to provide better preview information
+        detailed_messages = []
+        for message in messages[:max_results]:
+            # Get message with minimal format to save bandwidth but still get headers
+            msg_details = service.users().messages().get(
+                userId='me',
+                id=message['id'],
+                format='metadata',
+                metadataHeaders=['Subject', 'From', 'Date']
+            ).execute()
+            detailed_messages.append(msg_details)
+            
+        return detailed_messages
         
     except HttpError as error:
         logging.error(f"An error occurred during search: {error}")
         return []
-    
+
 
 def get_email_content(service, message_id: str = None, msg_id: str = None, 
                      preferred_content_type: str = 'text/plain') -> Dict[str, Any]:

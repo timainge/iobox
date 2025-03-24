@@ -21,6 +21,15 @@ __version__ = "0.1.0"
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
 
+# Add the version option to the main Typer app
+version_callback = typer.Option(
+    None,
+    "--version",
+    "-v",
+    help="Show version and exit",
+    callback=lambda value: typer.echo(f"iobox version {__version__}") or exit(0) if value else None,
+    is_flag=True,
+)
 
 @app.command()
 def version():
@@ -63,8 +72,14 @@ def search(
     max_results: int = typer.Option(
         10, "--max-results", "-m", help="Maximum number of results to return"
     ),
-    detailed: bool = typer.Option(
-        False, "--detailed", "-d", help="Show detailed information for each result"
+    days: int = typer.Option(
+        7, "--days", "-d", help="Number of days back to search"
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show detailed information for each result"
+    ),
+    debug: bool = typer.Option(
+        False, "--debug", help="Show debug information about API responses"
     ),
 ):
     """Search for emails matching the specified query."""
@@ -74,7 +89,7 @@ def search(
         
         # Search for emails
         typer.echo(f"Searching for emails matching: {query}")
-        results = search_emails(service, query, max_results)
+        results = search_emails(service, query, max_results, days)
         
         if not results:
             typer.echo("No emails found matching the query.")
@@ -83,17 +98,85 @@ def search(
         # Display results
         typer.echo(f"\nFound {len(results)} emails:")
         
+        # In debug mode, show a sample of available fields from the first email
+        if debug and results:
+            typer.echo("\nAPI Response Debug Info (first result):")
+            typer.echo("Available fields in email object:")
+            for key, value in results[0].items():
+                if isinstance(value, str) and len(value) > 100:
+                    value = value[:100] + "..."
+                elif isinstance(value, dict):
+                    value = f"{type(value)} with keys: {', '.join(value.keys())}"
+                elif isinstance(value, list) and len(value) > 5:
+                    value = f"List with {len(value)} items: {value[:5]}..."
+                typer.echo(f"  - {key}: {value}")
+            typer.echo("")
+        
         for i, email in enumerate(results, 1):
-            typer.echo(f"{i}. {email['id']} - {email['snippet'][:50]}...")
+            # Extract subject from headers
+            subject = "No subject"
+            sender = "Unknown sender"
+            date = "Unknown date"
             
-            if detailed:
-                # Get detailed email content
-                email_data = get_email_content(service, email["id"])
-                typer.echo(f"   Subject: {email_data.get('subject', 'No subject')}")
-                typer.echo(f"   From: {email_data.get('from', 'Unknown')}")
-                typer.echo(f"   Date: {email_data.get('date', 'Unknown')}")
-                typer.echo(f"   Labels: {', '.join(email_data.get('labels', []))}")
+            if 'payload' in email and 'headers' in email['payload']:
+                headers = email['payload']['headers']
+                for header in headers:
+                    if header['name'].lower() == 'subject':
+                        subject = header['value']
+                    elif header['name'].lower() == 'from':
+                        sender = header['value']
+                    elif header['name'].lower() == 'date':
+                        date = header['value']
+            
+            # Format the date more nicely if possible
+            try:
+                from dateutil import parser
+                from datetime import datetime
+                
+                date_obj = parser.parse(date)
+                # Use Australian date format as per project guidelines
+                date_str = date_obj.strftime("%d/%m/%Y %H:%M")
+            except:
+                date_str = date
+            
+            # Extract labels
+            labels = email.get('labelIds', [])
+            label_str = ', '.join(labels) if labels else "No labels"
+            
+            # Display basic info
+            typer.echo(f"{i}. {subject}")
+            typer.echo(f"   ID: {email.get('id', 'No ID')}")
+            
+            # Show snippet for all results (even if not detailed)
+            snippet = email.get('snippet', 'No preview available')
+            if snippet:
+                # Clean up HTML entities and limit length
+                import html
+                try:
+                    snippet = html.unescape(snippet)
+                except:
+                    pass
+                snippet = snippet[:70] + "..." if len(snippet) > 70 else snippet
+                typer.echo(f"   Preview: {snippet}")
+            
+            # Show basic metadata for all results
+            typer.echo(f"   From: {sender}")
+            typer.echo(f"   Date: {date_str}")
+            
+            if verbose:
+                # Show labels and other details only in verbose mode
+                typer.echo(f"   Labels: {label_str}")
+                
+                # Get size in KB
+                size = email.get('sizeEstimate', 0)
+                size_kb = size / 1024
+                typer.echo(f"   Size: {size_kb:.1f} KB")
+                
+                # Add a blank line for readability between detailed results
                 typer.echo("")
+            else:
+                # Add a separator between non-detailed results
+                typer.echo("   " + "-" * 40)
         
     except Exception as e:
         typer.echo(f"Error: {str(e)}", err=True)
@@ -101,113 +184,127 @@ def search(
 
 
 @app.command()
-def convert(
+def save(
     message_id: str = typer.Option(
-        ..., "--message-id", "-m", help="Gmail message ID to convert"
+        None, "--message-id", "-m", help="Gmail message ID to save (for single email)"
     ),
-    output_dir: str = typer.Option(
-        "./output", "--output-dir", "-o", help="Directory to save markdown files to"
-    ),
-    html_preferred: bool = typer.Option(
-        True, "--html-preferred", help="Prefer HTML content if available"
-    ),
-):
-    """Convert a specific email to Markdown format."""
-    try:
-        # Authenticate with Gmail API
-        service = get_gmail_service()
-        
-        # Create output directory if it doesn't exist
-        output_dir = create_output_directory(output_dir)
-        
-        # Get email content
-        email_data = get_email_content(
-            service,
-            message_id,
-            preferred_content_type="text/html" if html_preferred else "text/plain"
-        )
-        
-        # Convert to markdown
-        markdown_content = convert_email_to_markdown(email_data)
-        
-        # Save to file
-        filepath = save_email_to_markdown(
-            email_data=email_data,
-            markdown_content=markdown_content,
-            output_dir=output_dir
-        )
-        
-        typer.echo(f"Successfully converted email to {filepath}")
-        
-    except Exception as e:
-        typer.echo(f"Error: {str(e)}", err=True)
-        sys.exit(1)
-
-
-@app.command()
-def batch_convert(
     query: str = typer.Option(
-        ..., "--query", "-q", help="Search query using Gmail search syntax"
+        None, "--query", "-q", help="Search query for emails to save (for batch mode)"
     ),
     max_results: int = typer.Option(
-        10, "--max-results", "-m", help="Maximum number of emails to convert"
+        10, "--max", help="Maximum number of emails to save in batch mode"
+    ),
+    days: int = typer.Option(
+        7, "--days", "-d", help="Number of days back to search for emails"
     ),
     output_dir: str = typer.Option(
-        "./output", "--output-dir", "-o", help="Directory to save markdown files to"
+        ".", "--output-dir", "-o", help="Directory to save markdown files to"
     ),
     html_preferred: bool = typer.Option(
         True, "--html-preferred", help="Prefer HTML content if available"
     ),
 ):
-    """Search for emails and convert them to Markdown format."""
+    """
+    Save emails as Markdown files.
+    
+    Supports two modes:
+    1. Single mode: Save one specific email (use --message-id)
+    2. Batch mode: Save multiple emails matching a query (use --query)
+    """
     try:
+        # Check parameter validity
+        if message_id is None and query is None:
+            typer.echo("Error: You must specify either --message-id (-m) or --query (-q)")
+            typer.echo("\nFor help, run: iobox save --help")
+            raise typer.Exit(code=1)
+            
         # Authenticate with Gmail API
         service = get_gmail_service()
         
         # Create output directory if it doesn't exist
         output_dir = create_output_directory(output_dir)
         
-        # Search for emails
-        results = search_emails(service, query, max_results)
-        
-        if not results:
-            typer.echo("No emails found matching the query.")
-            return
-        
-        typer.echo(f"Converting {len(results)} emails to Markdown...")
-        
-        # Convert each email
-        converted_count = 0
-        for email in results:
-            try:
-                # Get email content
-                email_data = get_email_content(
-                    service,
-                    email["id"],
-                    preferred_content_type="text/html" if html_preferred else "text/plain"
-                )
-                
-                # Convert to markdown
-                markdown_content = convert_email_to_markdown(email_data)
-                
-                # Save to file
-                save_email_to_markdown(
-                    email_data=email_data,
-                    markdown_content=markdown_content,
-                    output_dir=output_dir
-                )
-                
-                converted_count += 1
-                
-            except Exception as e:
-                typer.echo(f"Error converting email {email['id']}: {str(e)}", err=True)
-        
-        typer.echo(f"Successfully converted {converted_count} emails to {output_dir}")
+        # Single email mode
+        if message_id is not None:
+            # Get email content
+            email_data = get_email_content(
+                service,
+                message_id,
+                preferred_content_type="text/html" if html_preferred else "text/plain"
+            )
+            
+            # Convert to markdown
+            markdown_content = convert_email_to_markdown(email_data)
+            
+            # Save to file
+            filepath = save_email_to_markdown(
+                email_data=email_data,
+                markdown_content=markdown_content,
+                output_dir=output_dir
+            )
+            
+            typer.echo(f"Successfully saved email to {filepath}")
+            
+        # Batch mode
+        else:
+            # Search for emails
+            typer.echo(f"Searching for emails matching: {query}")
+            results = search_emails(service, query, max_results, days)
+            
+            if not results:
+                typer.echo("No emails found matching the query.")
+                return
+            
+            typer.echo(f"Saving {len(results)} emails to Markdown...")
+            
+            # Convert each email
+            saved_count = 0
+            for email in results:
+                try:
+                    # Get email content
+                    email_data = get_email_content(
+                        service,
+                        email["id"],
+                        preferred_content_type="text/html" if html_preferred else "text/plain"
+                    )
+                    
+                    # Convert to markdown
+                    markdown_content = convert_email_to_markdown(email_data)
+                    
+                    # Save to file
+                    save_email_to_markdown(
+                        email_data=email_data,
+                        markdown_content=markdown_content,
+                        output_dir=output_dir
+                    )
+                    
+                    saved_count += 1
+                    
+                except Exception as e:
+                    typer.echo(f"Error saving email {email['id']}: {str(e)}", err=True)
+            
+            typer.echo(f"Successfully saved {saved_count} emails to {output_dir}")
         
     except Exception as e:
         typer.echo(f"Error: {str(e)}", err=True)
         sys.exit(1)
 
 
-if __name__ == "__main__":
+@app.callback()
+def main(
+    ctx: typer.Context,
+    version_flag: bool = version_callback,
+):
+    """
+    Iobox - Gmail to Markdown Converter
+    
+    Use commands to interact with Gmail and convert emails to Markdown.
+    """
+    pass
+
+
+def run():
     app()
+
+if __name__ == "__main__":
+    run()
