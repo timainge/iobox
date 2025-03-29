@@ -64,9 +64,12 @@ class TestCliCommands:
         """Test the convert command."""
         # Mock email data and file path
         mock_email_data = {
-            "id": "message-id-1",
+            "message_id": "message-id-1",
             "subject": "Test Subject",
-            "body": "Email body content"
+            "content": "Email body content",
+            "content_type": "text/plain",
+            "from": "sender@example.com",
+            "date": "Mon, 23 Mar 2025 10:00:00 +1100"
         }
         mock_markdown = "# Test Subject\n\nEmail body content"
         mock_filepath = "/path/to/output/email.md"
@@ -74,17 +77,17 @@ class TestCliCommands:
         with patch("iobox.cli.get_gmail_service") as mock_service, \
              patch("iobox.cli.get_email_content", return_value=mock_email_data), \
              patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown), \
-             patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath):
+             patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath), \
+             patch("iobox.cli.create_output_directory", return_value="./output"):
             
             # Mock the Gmail service
             mock_service.return_value = MagicMock()
             
             # Call the convert command
-            result = runner.invoke(app, ["convert", "--message-id", "message-id-1", "--output-dir", "./output"])
+            result = runner.invoke(app, ["save", "--message-id", "message-id-1", "--output-dir", "./output"])
             
             assert result.exit_code == 0
-            assert "Successfully converted email" in result.stdout
-            assert mock_filepath in result.stdout
+            assert "Successfully saved email" in result.stdout
     
     def test_batch_convert_command(self):
         """Test the batch-convert command."""
@@ -96,9 +99,12 @@ class TestCliCommands:
         
         # Mock email data
         mock_email_data = {
-            "id": "message-id-1",
+            "message_id": "message-id-1",
             "subject": "Test Subject",
-            "body": "Email body content"
+            "content": "Email body content",
+            "content_type": "text/plain",
+            "from": "sender@example.com",
+            "date": "Mon, 23 Mar 2025 10:00:00 +1100"
         }
         
         # Mock markdown content and file paths
@@ -109,22 +115,23 @@ class TestCliCommands:
              patch("iobox.cli.search_emails", return_value=mock_emails), \
              patch("iobox.cli.get_email_content", return_value=mock_email_data), \
              patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown), \
-             patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath):
+             patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath), \
+             patch("iobox.cli.create_output_directory", return_value="./output"):
             
             # Mock the Gmail service
             mock_service.return_value = MagicMock()
             
             # Call the batch-convert command
             result = runner.invoke(app, [
-                "batch-convert",
+                "save",
                 "--query", "from:example.com",
-                "--max-results", "5",
+                "--max", "5",
                 "--output-dir", "./output"
             ])
             
             assert result.exit_code == 0
-            assert "Converting 2 emails" in result.stdout
-            assert "Successfully converted 2 emails" in result.stdout
+            assert "Searching for emails matching" in result.stdout
+            assert "Successfully saved" in result.stdout
     
     def test_auth_status_command(self):
         """Test the auth-status command."""

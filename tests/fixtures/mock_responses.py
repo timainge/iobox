@@ -70,6 +70,32 @@ MOCK_HTML_MESSAGE = {
     }
 }
 
+# Mock message with only plain text (for fallback testing)
+MOCK_PLAIN_TEXT_ONLY_MESSAGE = {
+    "id": "message-id-2",
+    "threadId": "thread-id-2",
+    "labelIds": ["INBOX", "CATEGORY_UPDATES"],
+    "snippet": "This is a snippet of the HTML email...",
+    "payload": {
+        "mimeType": "multipart/alternative",
+        "headers": [
+            {"name": "From", "value": "sender@example.com"},
+            {"name": "To", "value": "recipient@example.com"},
+            {"name": "Subject", "value": "HTML Email Subject"},
+            {"name": "Date", "value": "Mon, 23 Mar 2025 11:00:00 +1100"}
+        ],
+        "parts": [
+            {
+                "mimeType": "text/plain",
+                "body": {
+                    "data": "VGhpcyBpcyB0aGUgcGxhaW4gdGV4dCB2ZXJzaW9uIG9mIHRoZSBIVE1MIGVtYWlsLg==",
+                    "size": 123
+                }
+            }
+        ]
+    }
+}
+
 # Mock message with attachment
 MOCK_ATTACHMENT_MESSAGE = {
     "id": "message-id-3",

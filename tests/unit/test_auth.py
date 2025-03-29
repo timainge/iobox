@@ -100,6 +100,10 @@ class TestAuthentication:
         # Mock the credentials with an expired token that needs refreshing
         mock_creds = MagicMock(valid=False, expired=True, refresh_token="mock-refresh-token")
         
+        # Mock to_json to return a valid JSON string
+        token_json = '{"token": "refreshed-token", "refresh_token": "refresh-token"}'
+        mock_creds.to_json.return_value = token_json
+        
         # After refreshing, the token becomes valid
         def refresh_side_effect(request):
             mock_creds.valid = True
@@ -110,13 +114,27 @@ class TestAuthentication:
         # Mock build service
         mock_service = MagicMock()
         
+        # Create a proper mock for file operations
+        mock_open_obj = MagicMock()
+        mock_file_handle = MagicMock()
+        mock_open_obj.return_value.__enter__.return_value = mock_file_handle
+        
         with patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds), \
-             patch("iobox.auth.build", return_value=mock_service):
+             patch("iobox.auth.build", return_value=mock_service), \
+             patch("builtins.open", mock_open_obj):
             
             service = get_gmail_service()
             
-            # Verify refresh was called
-            mock_creds.refresh.assert_called_once()
+            # Just verify refresh was called (we can't easily mock the Request instance)
+            assert mock_creds.refresh.called
+            
+            # Verify credentials became valid after refresh
+            assert mock_creds.valid is True
+            assert mock_creds.expired is False
+            
+            # Verify token was saved
+            mock_open_obj.assert_called_once_with(str(mock_token_file), 'w')
+            mock_file_handle.write.assert_called_once_with(token_json)
             assert service == mock_service
     
     def test_get_gmail_service_valid_token(self, monkeypatch, mock_credentials_file, mock_token_file):

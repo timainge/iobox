@@ -23,12 +23,11 @@ app = typer.Typer(help="Gmail to Markdown converter")
 
 # Add the version option to the main Typer app
 version_callback = typer.Option(
-    None,
+    False,
     "--version",
     "-v",
     help="Show version and exit",
     callback=lambda value: typer.echo(f"iobox version {__version__}") or exit(0) if value else None,
-    is_flag=True,
 )
 
 @app.command()

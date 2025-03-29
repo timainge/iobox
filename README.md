@@ -153,6 +153,48 @@ iobox/
 
 ## Development
 
+### Running Tests
+
+Tests are organized as unit tests and integration tests in the `tests` directory. To run the tests:
+
+1. Ensure your virtual environment is activated:
+   ```bash
+   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+   ```
+
+2. Run all tests with pytest:
+   ```bash
+   python -m pytest
+   ```
+
+3. Run tests with coverage reporting:
+   ```bash
+   python -m pytest --cov=src
+   ```
+
+4. Run specific test categories:
+   ```bash
+   # Run only unit tests
+   python -m pytest tests/unit
+
+   # Run only integration tests
+   python -m pytest tests/integration
+
+   # Run a specific test file
+   python -m pytest tests/unit/test_auth.py
+   ```
+
+5. View detailed coverage report:
+   ```bash
+   python -m pytest --cov=src --cov-report=html
+   # Then open htmlcov/index.html in your browser
+   ```
+
+The test suite includes:
+- Unit tests for all core modules (auth, email_search, markdown, file_manager, cli)
+- Integration tests for end-to-end workflows
+- Comprehensive mocking of the Gmail API for consistent testing
+
 For development guidelines and detailed project information, see the files in the `memory-bank` directory.
 
 ## License
