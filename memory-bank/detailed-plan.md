@@ -97,33 +97,56 @@ project-root/
 
 ## Current Implementation Focus (Phase 3)
 
-1. [ ] **Performance Optimization**
+1. [ ] **Advanced Search Options**
+   - [ ] Multiple label filtering
+   - [ ] Compound search queries
+   - [x] Date range enhancements (relative dates)
+   - [ ] Sender/recipient filtering improvements
+   - [ ] Attachment download capability (optional flag)
+   - Reference: @prompt:code/function_implementation_guide
+
+2. [ ] **Performance Optimization**
    - [ ] Batch processing optimization
    - [ ] Caching mechanisms for improved performance
    - [ ] Pagination handling for large email volumes
    - [ ] Progress tracking for long-running operations
    - Reference: @prompt:code/function_implementation_guide
 
-2. [ ] **Advanced Search Options**
-   - [ ] Multiple label filtering
-   - [ ] Compound search queries
-   - [x] Date range enhancements (relative dates)
-   - [ ] Sender/recipient filtering improvements
-   - Reference: @prompt:code/function_implementation_guide
-
 3. [ ] **Enhanced Error Handling**
    - [ ] Comprehensive error categorization
    - [ ] User-friendly error messages
-   - [ ] Graceful degradation for API limitations
    - [ ] Retry mechanisms for transient errors
-   - Reference: @prompt:process/development_cycle_guide
+   - [ ] Detailed logging for troubleshooting
+   - Reference: @prompt:code/function_implementation_guide
 
-4. [ ] **Testing Expansion**
-   - [ ] Unit test coverage for all modules
-   - [ ] Integration tests for end-to-end functionality
-   - [ ] Mock objects for Gmail API testing
-   - [ ] Performance benchmarking tests
-   - Reference: @prompt:testing/comprehensive_test_analysis
+## Implementation Tasks Breakdown
+
+### Advanced Search Options Implementation
+
+1. **Multiple Label Filtering**
+   - [ ] Update search query construction to handle multiple labels
+   - [ ] Add CLI parameter for specifying multiple labels
+   - [ ] Implement validation for label formats
+   - [ ] Add examples in help documentation
+
+2. **Compound Search Queries**
+   - [ ] Create a query builder that supports logical operations (AND, OR, NOT)
+   - [ ] Add support for parentheses in queries for complex filtering
+   - [ ] Implement proper escaping for special characters in search terms
+   - [ ] Add validation for query syntax
+
+3. **Sender/Recipient Filtering**
+   - [ ] Enhance the search functionality with sender/recipient specific filtering
+   - [ ] Add CLI parameters for sender and recipient filtering
+   - [ ] Implement partial matching and case-insensitive options
+   - [ ] Support filtering by domain (e.g., all emails from *@example.com)
+
+4. **Attachment Download**
+   - [ ] Implement Gmail API attachment retrieval functionality
+   - [ ] Add CLI flag for enabling attachment downloads
+   - [ ] Create attachment directory structure
+   - [ ] Add support for filtering by attachment type
+   - [ ] Implement attachment name sanitization and duplicate handling
 
 ## Integration Points
 

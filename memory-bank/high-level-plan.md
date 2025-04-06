@@ -66,8 +66,9 @@
 **Status:** In Progress
 
 **Goals:** 
+- Implement advanced search criteria and filtering options
+- Add attachment download capabilities
 - Optimize performance for large email volumes
-- Add advanced search criteria and filtering options
 - Enhance error handling and logging
 - Improve testing coverage
 - Prepare for packaging and distribution
@@ -75,8 +76,9 @@
 **Timeline:** April 19, 2025 - May 2, 2025
 
 **Success Metrics:** 
+- [ ] Implementation of advanced search and filtering options (multiple labels, compound queries, sender/recipient)
+- [ ] Attachment download functionality with optional flag
 - [ ] Performance benchmark for processing large email volumes (100+ emails)
-- [ ] Implementation of advanced search and filtering options
 - [ ] Comprehensive logging and error handling
 - [ ] Test coverage of at least 80%
 - [ ] Package distribution setup with PyPI
@@ -87,8 +89,11 @@
 - Setup entry points in setup.py for command-line usage (March 24, 2025)
 - Basic search criteria implemented (March 23, 2025)
 - Email labels preserved in YAML frontmatter (March 23, 2025)
+- Date range enhancements with relative dates completed (April 6, 2025)
 - Basic error handling and logging implemented (March 23, 2025)
 - HTML to Markdown conversion implementation complete (March 23, 2025)
+- Test suite expanded and all tests passing (March 30, 2025)
+- Typer code updated to use modern patterns (April 6, 2025)
 
 ### Phase 4: Refinement and Launch
 **Status:** Not Started
