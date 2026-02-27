@@ -42,7 +42,7 @@ The current implementation provides a solid foundation with OAuth 2.0 authentica
 
 ### Prerequisites
 
-- Python 3.7+
+- Python 3.8+
 - Google Cloud project with Gmail API enabled
 - OAuth 2.0 credentials for the Gmail API
 
@@ -145,6 +145,54 @@ Options:
 - `--download-attachments`: Download email attachments (default: False)
 - `--attachment-types`: Filter attachments by file extension (comma-separated, e.g., 'pdf,docx,xlsx')
 
+### Send Command
+
+Compose and send a new email:
+
+```bash
+# Send with inline body
+iobox send --to recipient@example.com --subject "Hello" --body "Message body"
+
+# Send with body from file
+iobox send --to recipient@example.com --subject "Report" --body-file ./report.txt
+
+# Send with CC and BCC
+iobox send --to recipient@example.com --subject "Update" --body "Content" --cc team@example.com --bcc manager@example.com
+```
+
+Options:
+- `-t, --to`: Recipient email address (required)
+- `-s, --subject`: Email subject line (required)
+- `-b, --body`: Email body text (inline)
+- `-f, --body-file`: Path to file containing email body
+- `--cc`: CC recipients (comma-separated)
+- `--bcc`: BCC recipients (comma-separated)
+
+### Forward Command
+
+Forward one or more emails to a recipient:
+
+```bash
+# Forward a single email
+iobox forward --message-id MESSAGE_ID --to recipient@example.com
+
+# Forward with a note
+iobox forward --message-id MESSAGE_ID --to recipient@example.com --note "FYI - see below"
+
+# Forward multiple emails matching a query
+iobox forward --query "from:reports@example.com" --to team@example.com --days 7
+```
+
+Options:
+- `-m, --message-id`: ID of a specific email to forward
+- `-q, --query`: Search query for emails to forward (batch mode)
+- `-t, --to`: Recipient email address (required)
+- `--max`: Maximum number of emails to forward in batch mode (default: 10)
+- `-d, --days`: Number of days back to search (default: 7)
+- `-s, --start-date`: Start date in YYYY/MM/DD format
+- `-e, --end-date`: End date in YYYY/MM/DD format
+- `-n, --note`: Optional note to prepend to forwarded email
+
 ### Example Search Queries and Date Filtering
 
 ```bash
@@ -234,22 +282,30 @@ This ensures that HTML newsletters and formatted emails are readable and properl
 
 ```
 iobox/
-├── src/                 # Source code
+├── src/iobox/                  # Source code
 │   ├── __init__.py
-│   ├── main.py          # Main entry point
-│   ├── auth.py          # Authentication module
-│   ├── email_search.py  # Email search and retrieval
-│   ├── content.py       # Content extraction
-│   ├── markdown.py      # Markdown conversion
-│   └── file_manager.py  # File management
-├── tests/               # Test files
-├── memory-bank/         # Project planning and documentation
-├── credentials.json     # OAuth credentials (not committed)
-├── token.json           # OAuth token (not committed)
-├── .env                 # Environment variables (not committed)
-├── .env.example         # Template for environment variables
-├── requirements.txt     # Python dependencies
-└── README.md            # This file
+│   ├── auth.py                 # OAuth 2.0 authentication
+│   ├── cli.py                  # Typer CLI (search, save, send, forward)
+│   ├── email_search.py         # Email search with date filtering
+│   ├── email_retrieval.py      # Full email content and attachment download
+│   ├── email_sender.py         # Compose, send, and forward emails
+│   ├── markdown.py             # Markdown module re-exports
+│   ├── markdown_converter.py   # HTML-to-Markdown and YAML frontmatter
+│   ├── file_manager.py         # File save, deduplication, attachments
+│   └── utils.py                # Filename generation and text utilities
+├── tests/                      # Test files
+│   ├── unit/                   # Unit tests for all modules
+│   ├── integration/            # End-to-end workflow tests
+│   └── fixtures/               # Mock API responses
+├── docs/                       # Documentation
+│   ├── authentication.md       # OAuth setup guide (personal & Workspace)
+│   └── integrations.md         # Integration patterns (library, CLI, MCP, API)
+├── credentials.json            # OAuth credentials (not committed)
+├── token.json                  # OAuth token (not committed)
+├── .env                        # Environment variables (not committed)
+├── requirements.txt            # Python dependencies
+├── setup.py                    # Package configuration
+└── README.md                   # This file
 ```
 
 ## Development
@@ -292,11 +348,11 @@ Tests are organized as unit tests and integration tests in the `tests` directory
    ```
 
 The test suite includes:
-- Unit tests for all core modules (auth, email_search, markdown, file_manager, cli)
+- Unit tests for all core modules (auth, cli, email_search, email_retrieval, email_sender, markdown, file_manager, utils)
 - Integration tests for end-to-end workflows
 - Comprehensive mocking of the Gmail API for consistent testing
 
-For development guidelines and detailed project information, see the files in the `memory-bank` directory.
+For detailed documentation on authentication and integration patterns, see the `docs/` directory.
 
 ## Next Steps
 

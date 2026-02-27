@@ -14,11 +14,16 @@ from iobox.auth import get_gmail_service, check_auth_status
 from iobox.email_search import search_emails, get_email_content, download_attachment
 from iobox.markdown import convert_email_to_markdown
 from iobox.file_manager import (
-    create_output_directory, 
-    save_email_to_markdown, 
+    create_output_directory,
+    save_email_to_markdown,
     save_attachment,
     check_for_duplicates,
-    sanitize_filename
+)
+from iobox.email_sender import (
+    compose_message,
+    compose_forward_message,
+    send_message,
+    forward_email,
 )
 
 # Version
@@ -131,44 +136,28 @@ def search(
             typer.echo("")
         
         for i, email in enumerate(results, 1):
-            # Extract subject from headers
-            subject = "No subject"
-            sender = "Unknown sender"
-            date = "Unknown date"
-            
-            if 'payload' in email and 'headers' in email['payload']:
-                headers = email['payload']['headers']
-                for header in headers:
-                    if header['name'].lower() == 'subject':
-                        subject = header['value']
-                    elif header['name'].lower() == 'from':
-                        sender = header['value']
-                    elif header['name'].lower() == 'date':
-                        date = header['value']
-            
+            subject = email.get('subject', 'No subject')
+            sender = email.get('from', 'Unknown sender')
+            date = email.get('date', 'Unknown date')
+
             # Format the date more nicely if possible
             try:
                 from dateutil import parser
                 from datetime import datetime
-                
+
                 date_obj = parser.parse(date)
-                # Use Australian date format as per project guidelines
                 date_str = date_obj.strftime("%d/%m/%Y %H:%M")
             except:
                 date_str = date
-            
-            # Extract labels
-            labels = email.get('labelIds', [])
+
+            labels = email.get('labels', [])
             label_str = ', '.join(labels) if labels else "No labels"
-            
-            # Display basic info
+
             typer.echo(f"{i}. {subject}")
-            typer.echo(f"   ID: {email.get('id', 'No ID')}")
-            
-            # Show snippet for all results (even if not detailed)
-            snippet = email.get('snippet', 'No preview available')
+            typer.echo(f"   ID: {email.get('message_id', 'No ID')}")
+
+            snippet = email.get('snippet', '')
             if snippet:
-                # Clean up HTML entities and limit length
                 import html
                 try:
                     snippet = html.unescape(snippet)
@@ -176,24 +165,14 @@ def search(
                     pass
                 snippet = snippet[:70] + "..." if len(snippet) > 70 else snippet
                 typer.echo(f"   Preview: {snippet}")
-            
-            # Show basic metadata for all results
+
             typer.echo(f"   From: {sender}")
             typer.echo(f"   Date: {date_str}")
-            
+
             if verbose:
-                # Show labels and other details only in verbose mode
                 typer.echo(f"   Labels: {label_str}")
-                
-                # Get size in KB
-                size = email.get('sizeEstimate', 0)
-                size_kb = size / 1024
-                typer.echo(f"   Size: {size_kb:.1f} KB")
-                
-                # Add a blank line for readability between detailed results
                 typer.echo("")
             else:
-                # Add a separator between non-detailed results
                 typer.echo("   " + "-" * 40)
         
     except Exception as e:
@@ -368,7 +347,129 @@ def save(
         raise typer.Exit(code=1)
 
 
-def download_email_attachments(service, email_data: Dict[str, Any], 
+@app.command()
+def forward(
+    message_id: str = typer.Option(
+        None, "--message-id", "-m", help="ID of a specific email to forward"
+    ),
+    query: str = typer.Option(
+        None, "--query", "-q", help="Search query for emails to forward (batch mode)"
+    ),
+    to: str = typer.Option(
+        ..., "--to", "-t", help="Recipient email address"
+    ),
+    max_results: int = typer.Option(
+        10, "--max", help="Maximum number of emails to forward in batch mode"
+    ),
+    days: int = typer.Option(
+        7, "--days", "-d", help="Number of days back to search"
+    ),
+    start_date: str = typer.Option(
+        None, "--start-date", "-s", help="Start date in YYYY/MM/DD format"
+    ),
+    end_date: str = typer.Option(
+        None, "--end-date", "-e", help="End date in YYYY/MM/DD format"
+    ),
+    note: str = typer.Option(
+        None, "--note", "-n", help="Optional note to prepend to forwarded email"
+    ),
+):
+    """
+    Forward emails to a recipient.
+
+    Supports two modes:
+    1. Single mode: Forward one email (use --message-id)
+    2. Batch mode: Forward emails matching a query (use --query)
+    """
+    try:
+        if message_id is None and query is None:
+            typer.echo("Error: You must specify either --message-id (-m) or --query (-q)")
+            raise typer.Exit(code=1)
+
+        service = get_gmail_service()
+
+        if message_id is not None:
+            typer.echo(f"Forwarding email {message_id} to {to}...")
+            result = forward_email(
+                service,
+                message_id=message_id,
+                to=to,
+                additional_text=note,
+            )
+            typer.echo(f"Successfully forwarded. New message ID: {result.get('id', 'unknown')}")
+        else:
+            typer.echo(f"Searching for emails matching: {query}")
+            results = search_emails(service, query, max_results, days, start_date, end_date)
+
+            if not results:
+                typer.echo("No emails found matching the query.")
+                return
+
+            typer.echo(f"Found {len(results)} emails to forward.")
+            forwarded = 0
+            for email_summary in results:
+                mid = email_summary['message_id']
+                typer.echo(f"Forwarding: {email_summary.get('subject', 'No Subject')}")
+                forward_email(service, message_id=mid, to=to, additional_text=note)
+                forwarded += 1
+
+            typer.echo(f"\nForwarded {forwarded} emails to {to}.")
+
+    except Exception as e:
+        typer.echo(f"Error forwarding emails: {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def send(
+    to: str = typer.Option(
+        ..., "--to", "-t", help="Recipient email address"
+    ),
+    subject: str = typer.Option(
+        ..., "--subject", "-s", help="Email subject line"
+    ),
+    body: str = typer.Option(
+        None, "--body", "-b", help="Email body text (inline)"
+    ),
+    body_file: str = typer.Option(
+        None, "--body-file", "-f", help="Path to file containing email body"
+    ),
+    cc: str = typer.Option(
+        None, "--cc", help="CC recipients (comma-separated)"
+    ),
+    bcc: str = typer.Option(
+        None, "--bcc", help="BCC recipients (comma-separated)"
+    ),
+):
+    """
+    Compose and send an email.
+
+    Provide the body inline with --body or from a file with --body-file.
+    """
+    try:
+        if body is None and body_file is None:
+            typer.echo("Error: You must specify either --body (-b) or --body-file (-f)")
+            raise typer.Exit(code=1)
+
+        if body_file is not None:
+            file_path = Path(body_file)
+            if not file_path.exists():
+                typer.echo(f"Error: File not found: {body_file}")
+                raise typer.Exit(code=1)
+            body = file_path.read_text(encoding='utf-8')
+
+        service = get_gmail_service()
+        message = compose_message(to=to, subject=subject, body=body, cc=cc, bcc=bcc)
+        result = send_message(service, message)
+
+        typer.echo(f"Email sent successfully. Message ID: {result.get('id', 'unknown')}")
+
+    except Exception as e:
+        typer.echo(f"Error sending email: {e}")
+        raise typer.Exit(code=1)
+
+
+def download_email_attachments(service, email_data: Dict[str, Any],
                               output_dir: str, attachment_filters: List[str] = None) -> int:
     """
     Download all attachments for an email.

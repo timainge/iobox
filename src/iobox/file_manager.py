@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Dict, Any, Optional, List
 from pathlib import Path
-from iobox.markdown import create_markdown_filename
+from iobox.utils import create_markdown_filename
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -48,25 +48,6 @@ def create_output_directory(output_dir: str) -> str:
     except Exception as e:
         logging.error(f"Error creating output directory {output_path}: {e}")
         raise
-
-
-def ensure_output_directory(output_dir):
-    """
-    Ensure the output directory exists, creating it if necessary.
-    
-    Args:
-        output_dir: Directory path to ensure
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-        logging.info(f"Ensured output directory exists: {output_dir}")
-        return True
-    except Exception as e:
-        logging.error(f"Error creating output directory {output_dir}: {e}")
-        return False
 
 
 def save_email_to_markdown(email_data: Dict[str, Any], markdown_content: str, output_dir: str) -> str:
@@ -113,45 +94,32 @@ def save_email_to_markdown(email_data: Dict[str, Any], markdown_content: str, ou
         raise
 
 
-def list_processed_emails(output_dir):
+def check_for_duplicates(email_ids: List[str], output_dir: str) -> List[str]:
     """
-    List all previously processed emails in the output directory.
-    
+    Check which email IDs have already been processed and saved as markdown.
+
     Args:
-        output_dir: Directory containing markdown files
-        
+        email_ids: List of email IDs to check
+        output_dir: Directory to check for existing files
+
     Returns:
-        list: List of message IDs (without .md extension)
+        List[str]: List of email IDs that are already processed
     """
     if not os.path.exists(output_dir):
         return []
-        
+
     try:
         files = [f for f in os.listdir(output_dir) if f.endswith('.md')]
-        message_ids = [os.path.splitext(f)[0] for f in files]
-        return message_ids
+        processed_ids = [os.path.splitext(f)[0] for f in files]
     except Exception as e:
         logging.error(f"Error listing processed emails: {e}")
         return []
 
-
-def check_for_duplicates(email_ids: List[str], output_dir: str) -> List[str]:
-    """
-    Check which email IDs have already been processed and saved as markdown.
-    
-    Args:
-        email_ids: List of email IDs to check
-        output_dir: Directory to check for existing files
-        
-    Returns:
-        List[str]: List of email IDs that are already processed
-    """
-    processed_ids = list_processed_emails(output_dir)
     duplicates = [email_id for email_id in email_ids if email_id in processed_ids]
-    
+
     if duplicates:
         logging.info(f"Found {len(duplicates)} already processed emails")
-    
+
     return duplicates
 
 

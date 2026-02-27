@@ -76,7 +76,7 @@ class TestMarkdownConversion:
         }
         
         # Mock datetime to ensure consistent test results
-        with patch("iobox.markdown.datetime") as mock_datetime:
+        with patch("iobox.utils.datetime") as mock_datetime:
             mock_datetime.strptime.return_value = datetime(2025, 3, 23, 10, 0, 0)
             mock_datetime.now.return_value = datetime(2025, 3, 23, 10, 0, 0)
             

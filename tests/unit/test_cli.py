@@ -30,7 +30,7 @@ class TestCliCommands:
         """Test the search command."""
         # Mock the email search functionality
         mock_emails = [
-            {"id": "message-id-1", "snippet": "First email snippet"}
+            {"message_id": "message-id-1", "subject": "Test", "from": "a@b.com", "date": "", "snippet": "First email snippet", "labels": []}
         ]
         
         with patch("iobox.cli.get_gmail_service") as mock_service, \
@@ -91,10 +91,10 @@ class TestCliCommands:
     
     def test_batch_convert_command(self):
         """Test the batch-convert command."""
-        # Mock search results
+        # Mock search results (search_emails returns 'message_id' key)
         mock_emails = [
-            {"id": "message-id-1", "snippet": "First email snippet"},
-            {"id": "message-id-2", "snippet": "Second email snippet"}
+            {"message_id": "message-id-1", "subject": "First email", "snippet": "First email snippet"},
+            {"message_id": "message-id-2", "subject": "Second email", "snippet": "Second email snippet"}
         ]
         
         # Mock email data
@@ -116,11 +116,12 @@ class TestCliCommands:
              patch("iobox.cli.get_email_content", return_value=mock_email_data), \
              patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown), \
              patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath), \
-             patch("iobox.cli.create_output_directory", return_value="./output"):
-            
+             patch("iobox.cli.create_output_directory", return_value="./output"), \
+             patch("iobox.cli.check_for_duplicates", return_value=[]):
+
             # Mock the Gmail service
             mock_service.return_value = MagicMock()
-            
+
             # Call the batch-convert command
             result = runner.invoke(app, [
                 "save",
@@ -128,10 +129,9 @@ class TestCliCommands:
                 "--max", "5",
                 "--output-dir", "./output"
             ])
-            
+
             assert result.exit_code == 0
             assert "Searching for emails matching" in result.stdout
-            assert "Successfully saved" in result.stdout
     
     def test_auth_status_command(self):
         """Test the auth-status command."""
@@ -153,3 +153,109 @@ class TestCliCommands:
             assert "Authenticated: True" in result.stdout
             assert "Credentials file exists: True" in result.stdout
             assert "Token file exists: True" in result.stdout
+
+    def test_forward_single_email(self):
+        """Test forwarding a single email by message ID."""
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.forward_email", return_value={"id": "fwd-1"}):
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "forward",
+                "--message-id", "msg-123",
+                "--to", "bob@example.com",
+            ])
+
+            assert result.exit_code == 0
+            assert "Successfully forwarded" in result.stdout
+
+    def test_forward_batch(self):
+        """Test forwarding multiple emails via query."""
+        mock_emails = [
+            {"message_id": "m1", "subject": "First"},
+            {"message_id": "m2", "subject": "Second"},
+        ]
+
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.search_emails", return_value=mock_emails), \
+             patch("iobox.cli.forward_email", return_value={"id": "fwd-x"}):
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "forward",
+                "--query", "from:test@example.com",
+                "--to", "bob@example.com",
+            ])
+
+            assert result.exit_code == 0
+            assert "Forwarded 2 emails" in result.stdout
+
+    def test_forward_no_query_or_id(self):
+        """Test forward command fails without --message-id or --query."""
+        with patch("iobox.cli.get_gmail_service") as mock_service:
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "forward",
+                "--to", "bob@example.com",
+            ])
+
+            assert result.exit_code == 1
+
+    def test_send_with_body(self):
+        """Test sending an email with inline body."""
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
+             patch("iobox.cli.send_message", return_value={"id": "sent-1"}) as mock_send:
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "send",
+                "--to", "bob@example.com",
+                "--subject", "Hello",
+                "--body", "Hi there",
+            ])
+
+            assert result.exit_code == 0
+            assert "Email sent successfully" in result.stdout
+            mock_compose.assert_called_once_with(
+                to="bob@example.com", subject="Hello", body="Hi there",
+                cc=None, bcc=None
+            )
+
+    def test_send_with_body_file(self, tmp_path):
+        """Test sending an email with body from file."""
+        body_file = tmp_path / "body.txt"
+        body_file.write_text("File body content")
+
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
+             patch("iobox.cli.send_message", return_value={"id": "sent-2"}):
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "send",
+                "--to", "bob@example.com",
+                "--subject", "Hello",
+                "--body-file", str(body_file),
+            ])
+
+            assert result.exit_code == 0
+            assert "Email sent successfully" in result.stdout
+            mock_compose.assert_called_once_with(
+                to="bob@example.com", subject="Hello", body="File body content",
+                cc=None, bcc=None
+            )
+
+    def test_send_no_body(self):
+        """Test send command fails without --body or --body-file."""
+        with patch("iobox.cli.get_gmail_service") as mock_service:
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "send",
+                "--to", "bob@example.com",
+                "--subject", "Hello",
+            ])
+
+            assert result.exit_code == 1

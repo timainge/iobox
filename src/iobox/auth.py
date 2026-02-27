@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # If modifying these scopes, delete the token.json file.
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+]
 
 # Get credential paths from environment variables or use defaults
 CREDENTIALS_DIR = os.getenv('CREDENTIALS_DIR', os.getcwd())

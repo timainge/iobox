@@ -1,5 +1,6 @@
 # Credentials and authentication
 token.json
+xtoken.json
 credentials.json
 
 # Environment variables

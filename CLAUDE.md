@@ -10,18 +10,22 @@ Iobox is a Gmail to Markdown converter that extracts emails from Gmail based on 
 
 ### Core Modules
 
-- **`src/iobox/cli.py`**: Typer-based command-line interface with commands for search, save, auth-status, and version
+- **`src/iobox/cli.py`**: Typer-based CLI with commands for search, save, send, forward, auth-status, and version
 - **`src/iobox/auth.py`**: Gmail API OAuth 2.0 authentication handling with credential management
-- **`src/iobox/email_search.py`**: Email search and retrieval using Gmail API with query parsing and date filtering
-- **`src/iobox/markdown.py`**: Email content conversion to markdown format with YAML frontmatter
+- **`src/iobox/email_search.py`**: Email search using Gmail API with query parsing and date filtering
+- **`src/iobox/email_retrieval.py`**: Full email content retrieval and attachment download
+- **`src/iobox/email_sender.py`**: Compose, send, and forward emails via Gmail API
+- **`src/iobox/markdown.py`**: Re-exports from markdown_converter and utils for backward compatibility
+- **`src/iobox/markdown_converter.py`**: HTML-to-Markdown conversion and YAML frontmatter generation
 - **`src/iobox/file_manager.py`**: File operations for saving emails, managing duplicates, and handling attachments
+- **`src/iobox/utils.py`**: Shared filename generation and text slugifying utilities
 
 ### Key Dependencies
 
 - **Google APIs**: `google-api-python-client`, `google-auth-httplib2`, `google-auth-oauthlib`
 - **CLI Framework**: `typer` for command-line interface
 - **Configuration**: `python-dotenv` for environment variable management
-- **Content Processing**: `PyYAML` for frontmatter, `rich` for terminal output
+- **Content Processing**: `html2text` for HTML-to-Markdown, `PyYAML` for frontmatter
 
 ## Development Commands
 
@@ -82,6 +86,18 @@ iobox save --message-id MESSAGE_ID -o ./output
 
 # Batch save by query
 iobox save -q "label:important" --max 50 -d 14 -o ./emails
+```
+
+### Send Command
+```bash
+iobox send --to recipient@example.com --subject "Hello" --body "Message"
+iobox send --to recipient@example.com --subject "Report" --body-file ./report.txt
+```
+
+### Forward Command
+```bash
+iobox forward --message-id MESSAGE_ID --to recipient@example.com
+iobox forward -q "from:reports@example.com" --to team@example.com -d 7
 ```
 
 ### Utility Commands
