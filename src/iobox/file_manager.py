@@ -6,6 +6,7 @@ This module handles file operations including duplicate prevention.
 
 import os
 import logging
+import re
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from iobox.markdown import create_markdown_filename
@@ -156,25 +157,116 @@ def check_for_duplicates(email_ids: List[str], output_dir: str) -> List[str]:
 
 def handle_duplicate_filename(filepath: str) -> str:
     """
-    Handle duplicate filenames by appending a number to the filename.
+    Handle duplicate filenames by appending a number to the base filename.
     
     Args:
-        filepath: Path to the file that already exists
+        filepath: Original filepath
         
     Returns:
         str: New filepath with a number appended
     """
-    # Split path into directory, filename, and extension
-    directory = os.path.dirname(filepath)
-    filename = os.path.basename(filepath)
-    name, ext = os.path.splitext(filename)
-    
-    # Try adding numbers until we find a filename that doesn't exist
+    base, ext = os.path.splitext(filepath)
     counter = 1
-    while check_file_exists(filepath):
-        new_filename = f"{name}_{counter}{ext}"
-        filepath = os.path.join(directory, new_filename)
+    
+    while os.path.exists(filepath):
+        filepath = f"{base}_{counter}{ext}"
         counter += 1
     
-    logging.info(f"Renamed duplicate file to: {os.path.basename(filepath)}")
+    logging.info(f"Resolved duplicate filename: {filepath}")
     return filepath
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize a filename to make it safe for the filesystem.
+    
+    Args:
+        filename: Original filename
+        
+    Returns:
+        str: Sanitized filename
+    """
+    # Replace any character that's not alphanumeric, dash, underscore, dot, or space
+    # with underscore
+    sanitized = re.sub(r'[^\w\-\. ]', '_', filename)
+    
+    # Handle reserved filenames in Windows
+    reserved_names = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", 
+                      "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", 
+                      "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"]
+                      
+    basename = os.path.splitext(sanitized)[0].upper()
+    if basename in reserved_names:
+        sanitized = f"_{sanitized}"
+    
+    # Ensure the filename is not too long
+    max_length = 240  # Safely under most filesystem limits
+    if len(sanitized) > max_length:
+        base, ext = os.path.splitext(sanitized)
+        sanitized = f"{base[:max_length-len(ext)]}{ext}"
+    
+    return sanitized
+
+
+def create_attachments_directory(output_dir: str, email_id: str) -> str:
+    """
+    Create a directory for storing email attachments.
+    
+    Args:
+        output_dir: Base output directory where markdown files are stored
+        email_id: Email message ID
+        
+    Returns:
+        str: Path to the attachments directory
+    """
+    # Create a subdirectory for attachments using the email ID
+    attachments_dir = os.path.join(output_dir, 'attachments', email_id)
+    
+    try:
+        os.makedirs(attachments_dir, exist_ok=True)
+        logging.info(f"Created attachments directory: {attachments_dir}")
+        return attachments_dir
+    except Exception as e:
+        logging.error(f"Error creating attachments directory {attachments_dir}: {e}")
+        raise
+
+
+def save_attachment(attachment_data: bytes, 
+                   filename: str, 
+                   email_id: str, 
+                   output_dir: str) -> str:
+    """
+    Save an email attachment to disk.
+    
+    Args:
+        attachment_data: Binary attachment data
+        filename: Original attachment filename
+        email_id: Email message ID
+        output_dir: Base output directory
+        
+    Returns:
+        str: Path to the saved attachment file
+    """
+    # Create attachments directory
+    attachments_dir = create_attachments_directory(output_dir, email_id)
+    
+    # Sanitize filename
+    safe_filename = sanitize_filename(filename)
+    
+    # Create full path
+    filepath = os.path.join(attachments_dir, safe_filename)
+    
+    # Handle duplicate filenames
+    if check_file_exists(filepath):
+        filepath = handle_duplicate_filename(filepath)
+    
+    # Write attachment data to file
+    try:
+        with open(filepath, 'wb') as f:
+            f.write(attachment_data)
+        
+        logging.info(f"Saved attachment to: {filepath}")
+        return filepath
+    except Exception as e:
+        logging.error(f"Error saving attachment: {e}")
+        raise

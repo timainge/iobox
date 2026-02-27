@@ -14,7 +14,10 @@ from iobox.file_manager import (
     save_email_to_markdown,
     check_file_exists,
     create_output_directory,
-    handle_duplicate_filename
+    handle_duplicate_filename,
+    sanitize_filename,
+    create_attachments_directory,
+    save_attachment
 )
 
 
@@ -176,3 +179,147 @@ This is the test email body.
             assert filepath == expected_path
             mock_file.assert_called_once_with(expected_path, "w", encoding="utf-8")
             mock_file().write.assert_called_once_with(markdown_content)
+
+    def test_sanitize_filename(self):
+        """Test sanitizing filenames for safe filesystem usage."""
+        # Test with unsafe characters
+        filename = "unsafe:filename*with?invalid\\chars<>|/\""
+        sanitized = sanitize_filename(filename)
+        # Check that all unsafe chars are replaced with underscores
+        assert ":" not in sanitized
+        assert "*" not in sanitized
+        assert "?" not in sanitized
+        assert "\\" not in sanitized
+        assert "<" not in sanitized
+        assert ">" not in sanitized
+        assert "|" not in sanitized
+        assert "/" not in sanitized
+        assert "\"" not in sanitized
+        
+        # Test with Windows reserved name
+        reserved_name = "CON.txt"
+        sanitized = sanitize_filename(reserved_name)
+        assert sanitized == "_CON.txt"
+        
+        # Test with extremely long name
+        long_name = "a" * 300 + ".txt"
+        sanitized = sanitize_filename(long_name)
+        assert len(sanitized) <= 240
+        assert sanitized.endswith(".txt")
+        
+    def test_create_attachments_directory(self, tmp_path):
+        """Test creating a directory for email attachments."""
+        output_dir = str(tmp_path)
+        email_id = "test-email-id-123"
+        
+        # Call function to create attachments directory
+        attachments_dir = create_attachments_directory(output_dir, email_id)
+        
+        # Verify directory structure was created
+        expected_path = os.path.join(output_dir, 'attachments', email_id)
+        assert attachments_dir == expected_path
+        assert os.path.exists(attachments_dir)
+        assert os.path.isdir(attachments_dir)
+        
+    def test_save_attachment(self, tmp_path):
+        """Test saving an email attachment to disk."""
+        # Setup test data
+        output_dir = str(tmp_path)
+        email_id = "test-email-id-123"
+        attachment_data = b"This is test attachment content"
+        filename = "test_attachment.pdf"
+        
+        # Mock check_file_exists to simulate no duplicate files
+        with patch('iobox.file_manager.check_file_exists', return_value=False):
+            # Call function to save attachment
+            filepath = save_attachment(
+                attachment_data=attachment_data,
+                filename=filename,
+                email_id=email_id,
+                output_dir=output_dir
+            )
+            
+            # Verify attachment was saved correctly
+            expected_path = os.path.join(output_dir, 'attachments', email_id, filename)
+            assert filepath == expected_path
+            assert os.path.exists(filepath)
+            
+            # Check file contents
+            with open(filepath, 'rb') as f:
+                saved_content = f.read()
+                assert saved_content == attachment_data
+                
+    def test_save_attachment_with_unsafe_filename(self, tmp_path):
+        """Test saving an attachment with an unsafe filename."""
+        # Setup test data
+        output_dir = str(tmp_path)
+        email_id = "test-email-id-123"
+        attachment_data = b"This is test attachment content"
+        unsafe_filename = "unsafe:filename*with?invalid\\chars.pdf"
+        
+        # Mock check_file_exists to simulate no duplicate files
+        with patch('iobox.file_manager.check_file_exists', return_value=False):
+            # Call function to save attachment
+            filepath = save_attachment(
+                attachment_data=attachment_data,
+                filename=unsafe_filename,
+                email_id=email_id,
+                output_dir=output_dir
+            )
+            
+            # Verify filename was sanitized
+            assert ":" not in os.path.basename(filepath)
+            assert "*" not in os.path.basename(filepath)
+            assert "?" not in os.path.basename(filepath)
+            assert "\\" not in os.path.basename(filepath)
+            
+            # Check file contents
+            with open(filepath, 'rb') as f:
+                saved_content = f.read()
+                assert saved_content == attachment_data
+                
+    def test_save_attachment_with_duplicate_filename(self, tmp_path):
+        """Test saving an attachment with a filename that already exists."""
+        # Setup test data
+        output_dir = str(tmp_path)
+        email_id = "test-email-id-123"
+        attachment_data = b"This is test attachment content"
+        filename = "duplicate_attachment.pdf"
+        
+        # Create the attachment directory
+        attachments_dir = os.path.join(output_dir, 'attachments', email_id)
+        os.makedirs(attachments_dir, exist_ok=True)
+        
+        # Create a file with the same name to simulate a duplicate
+        original_path = os.path.join(attachments_dir, filename)
+        with open(original_path, 'wb') as f:
+            f.write(b"Original content")
+        
+        # Mock check_file_exists to return True first time (for original file)
+        # and False after (for the renamed file)
+        check_side_effect = [True, False]
+        
+        with patch('iobox.file_manager.check_file_exists', side_effect=check_side_effect):
+            # Call function to save attachment
+            filepath = save_attachment(
+                attachment_data=attachment_data,
+                filename=filename,
+                email_id=email_id,
+                output_dir=output_dir
+            )
+            
+            # Verify a new filename was generated (should have _1 appended)
+            expected_path = os.path.join(attachments_dir, "duplicate_attachment_1.pdf")
+            assert filepath == expected_path
+            assert os.path.exists(filepath)
+            
+            # Check file contents
+            with open(filepath, 'rb') as f:
+                saved_content = f.read()
+                assert saved_content == attachment_data
+                
+            # Verify original file still exists and has original content
+            assert os.path.exists(original_path)
+            with open(original_path, 'rb') as f:
+                original_content = f.read()
+                assert original_content == b"Original content"

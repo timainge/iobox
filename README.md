@@ -2,6 +2,16 @@
 
 A Gmail to Markdown Converter tool that extracts emails from Gmail based on specific criteria and saves them as markdown files with YAML frontmatter for easy archiving, searching, and further processing.
 
+## Background
+
+Iobox was created to address the challenge of effectively managing and utilizing valuable information stored in email inboxes. Whether you're subscribed to industry newsletters, collecting research data, or tracking important communications, this tool provides a foundation for transforming your inbox into a processable knowledge resource.
+
+The tool serves as the first step in workflows where you need to:
+- Download newsletters or emails locally as structured markdown files
+- Process email content for summarization or analysis
+- Create searchable archives of important communications
+- Integrate email content into note-taking systems or knowledge bases
+
 ## Overview
 
 Iobox allows you to:
@@ -10,15 +20,21 @@ Iobox allows you to:
 - Save these emails as markdown files with metadata in YAML frontmatter
 - Create a searchable, portable archive of important communications
 
-Once you have your emails saved locally as markdown files, you can proceed to build additional modules for summarisation, topic extraction, or any other text processing tasks you need.
+The current implementation provides a solid foundation with OAuth 2.0 authentication, flexible search criteria, and robust file management capabilities.
 
 ## Features
 
 - Gmail API integration with secure OAuth 2.0 authentication
 - Flexible search criteria using Gmail's query syntax
 - Email content extraction with both plain text and HTML support
+- **HTML to Markdown conversion**: Properly converts HTML emails to well-formatted Markdown
+  - Preserves formatting (bold, italic, headers)
+  - Converts links and images to Markdown syntax
+  - Handles tables, lists, and complex email structures
+  - Cleans up common email artifacts (tracking pixels, empty links)
 - Markdown conversion with consistent formatting
 - YAML frontmatter for preserving email metadata
+- Attachment download functionality with filtering options
 - Duplicate prevention mechanism
 - Command-line interface for easy use
 
@@ -106,6 +122,8 @@ iobox version
 - `-q, --query`: Gmail search query (required)
 - `-m, --max-results`: Maximum number of results to return (default: 10)
 - `-d, --days`: Number of days back to search (default: 7)
+- `-s, --start-date`: Start date in YYYY/MM/DD format (overrides days parameter if provided)
+- `-e, --end-date`: End date in YYYY/MM/DD format (requires start-date)
 - `-v, --verbose`: Show detailed information for each result
 - `--debug`: Show debug information about API responses
 
@@ -119,8 +137,34 @@ Options:
 - `-m, --message-id`: Gmail message ID to save (for single email mode)
 - `-q, --query`: Search query for emails to save (for batch mode)
 - `--max`: Maximum number of emails to save in batch mode (default: 10)
+- `-d, --days`: Number of days back to search (default: 7)
+- `-s, --start-date`: Start date in YYYY/MM/DD format (overrides days parameter if provided)
+- `-e, --end-date`: End date in YYYY/MM/DD format (requires start-date)
 - `-o, --output-dir`: Directory to save markdown files to (default: '.')
 - `--html-preferred`: Prefer HTML content if available (default: True)
+- `--download-attachments`: Download email attachments (default: False)
+- `--attachment-types`: Filter attachments by file extension (comma-separated, e.g., 'pdf,docx,xlsx')
+
+### Example Search Queries and Date Filtering
+
+```bash
+# Search for emails from the last 7 days (default)
+iobox search -q "from:newsletter@example.com"
+
+# Search for emails from the last 3 days
+iobox search -q "from:newsletter@example.com" -d 3
+
+# Search for emails within a specific date range (using long-form options)
+iobox search -q "from:reports@example.com" --start-date 2025/04/01 --end-date 2025/04/10
+
+# Search using shorthand date range options
+iobox search -q "label:important" -s 2025/03/15 -e 2025/03/31
+
+# Save emails matching a query from a specific date range
+iobox save -q "label:important" -s 2025/03/15 -e 2025/03/31 -o ./important_emails
+```
+
+**Important Note**: Date format must be YYYY/MM/DD with forward slashes and leading zeros for month and day.
 
 ### Example Search Queries
 
@@ -128,6 +172,63 @@ Options:
 - `"subject:newsletter"` - Emails with "newsletter" in the subject
 - `"label:important"` - Emails with the "important" label
 - `"has:attachment"` - Emails with attachments
+
+### Save Examples
+
+```bash
+# Save a specific email as Markdown
+iobox save --message-id MESSAGE_ID -o ./output_folder
+
+# Save multiple emails matching a query from the last 14 days
+iobox save --query "label:important" --max 50 -d 14 -o ./important_emails
+
+# Save emails with attachments and download the attachments too
+iobox save --query "has:attachment" --download-attachments -o ./emails_with_attachments
+
+# Save emails and download only PDF attachments
+iobox save --query "from:reports@example.com" --download-attachments --attachment-types pdf,xlsx -o ./reports
+```
+
+When attachments are downloaded, they are stored in an `attachments/{email_id}` directory structure within the output directory. Filenames are sanitised to ensure they are safe for all operating systems, and duplicate filenames are handled by appending a number to the filename.
+
+## Output Format
+
+Emails are saved as Markdown files with the following structure:
+
+```markdown
+---
+date: Mon, 23 Mar 2025 10:00:00 +1100
+from: sender@example.com
+labels:
+  - INBOX
+  - CATEGORY_UPDATES
+message_id: 123456789abcdef
+saved_date: 2025-08-24T21:30:00.123456
+subject: Your Newsletter Subject
+thread_id: thread123456
+to: recipient@example.com
+attachments:
+  - filename: report.pdf
+    mime_type: application/pdf
+---
+
+# Your Newsletter Subject
+
+[Email content in Markdown format]
+```
+
+### HTML Email Conversion
+
+When processing HTML emails (the default behavior with `--html-preferred`), iobox:
+- Converts HTML tags to proper Markdown syntax (headers, bold, italic, etc.)
+- Preserves links in Markdown format: `[link text](url)`
+- Converts images to Markdown image syntax: `![alt text](image_url)`
+- Converts HTML tables to Markdown tables
+- Handles lists (ordered and unordered) 
+- Cleans up common email artifacts like tracking pixels and empty links
+- Normalizes excessive whitespace and formatting
+
+This ensures that HTML newsletters and formatted emails are readable and properly structured in Markdown format.
 
 ## Project Structure
 
@@ -196,6 +297,33 @@ The test suite includes:
 - Comprehensive mocking of the Gmail API for consistent testing
 
 For development guidelines and detailed project information, see the files in the `memory-bank` directory.
+
+## Next Steps
+
+The following features and improvements are planned for future development, organized by priority:
+
+### High Priority
+- [x] **HTML to Markdown Conversion**: ✅ Implemented - Properly converts HTML emails to well-formatted Markdown using `html2text` library
+- [ ] **Rate Limiting & Error Handling**: Implement exponential backoff for API requests to handle Gmail API rate limiting more gracefully
+- [ ] **Pagination Support**: Add pagination handling in email search for processing large result sets efficiently
+
+### Medium Priority  
+- [ ] **Performance Optimization**: Implement asynchronous programming or multiprocessing for handling large volumes of emails
+- [ ] **Incremental Updates**: Create a system to track the last processed email for more efficient subsequent runs
+- [ ] **Enhanced Security**: Move from file-based credential storage to environment variables or secure vault integration
+- [ ] **Character Encoding**: Improve handling of emails in various languages and character encodings
+
+### Low Priority
+- [ ] **Automatic Categorization**: Integrate machine learning for automatic email categorization
+- [ ] **Summarization Integration**: Add integration with summarization APIs for automatic digest creation
+- [ ] **Web Interface**: Develop a web-based interface for easier configuration and use by non-technical users
+- [ ] **Scheduled Execution**: Implement scheduled runs to keep local archives up-to-date automatically
+
+### Status Legend
+- [ ] Not Started
+- [🔄] In Progress  
+- [✅] Completed
+- [❌] Blocked/Needs Research
 
 ## License
 

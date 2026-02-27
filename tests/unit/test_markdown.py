@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 from iobox.markdown import (
     convert_email_to_markdown,
+    convert_html_to_markdown,
+    _clean_email_markdown,
     generate_yaml_frontmatter,
     create_markdown_filename,
     strip_html_tags
@@ -134,3 +136,175 @@ class TestMarkdownConversion:
         # Verify HTML content is converted to markdown syntax
         assert "# Hello" in markdown_content or "Hello" in markdown_content
         assert "This is an HTML email." in markdown_content
+
+
+class TestHtmlToMarkdownConversion:
+    """Test cases for HTML to markdown conversion functionality."""
+    
+    def test_convert_html_to_markdown_basic(self):
+        """Test basic HTML to markdown conversion."""
+        html_content = "<h1>Hello World</h1><p>This is a <strong>test</strong> email.</p>"
+        markdown = convert_html_to_markdown(html_content)
+        
+        assert "# Hello World" in markdown
+        assert "**test**" in markdown
+        assert "This is a" in markdown
+        assert "email." in markdown
+    
+    def test_convert_html_to_markdown_with_links(self):
+        """Test HTML with links conversion."""
+        html_content = '<p>Visit <a href="https://example.com">our website</a> for more info.</p>'
+        markdown = convert_html_to_markdown(html_content)
+        
+        assert "[our website](https://example.com)" in markdown
+        assert "Visit" in markdown
+        assert "for more info." in markdown
+    
+    def test_convert_html_to_markdown_with_images(self):
+        """Test HTML with images conversion."""
+        html_content = '<img src="https://example.com/image.jpg" alt="Test Image">'
+        markdown = convert_html_to_markdown(html_content)
+        
+        assert "![Test Image](https://example.com/image.jpg)" in markdown
+    
+    def test_convert_html_to_markdown_with_lists(self):
+        """Test HTML lists conversion."""
+        html_content = """
+        <ul>
+            <li>Item 1</li>
+            <li>Item 2</li>
+            <li>Item 3</li>
+        </ul>
+        """
+        markdown = convert_html_to_markdown(html_content)
+        
+        assert "* Item 1" in markdown or "- Item 1" in markdown
+        assert "* Item 2" in markdown or "- Item 2" in markdown
+        assert "* Item 3" in markdown or "- Item 3" in markdown
+    
+    def test_convert_html_to_markdown_with_table(self):
+        """Test HTML table conversion."""
+        html_content = """
+        <table>
+            <tr><th>Name</th><th>Email</th></tr>
+            <tr><td>John</td><td>john@example.com</td></tr>
+            <tr><td>Jane</td><td>jane@example.com</td></tr>
+        </table>
+        """
+        markdown = convert_html_to_markdown(html_content)
+        
+        # Should contain table formatting
+        assert "Name" in markdown
+        assert "Email" in markdown
+        assert "John" in markdown
+        assert "john@example.com" in markdown
+    
+    def test_convert_html_to_markdown_complex_email(self):
+        """Test conversion of complex email HTML."""
+        html_content = """
+        <html>
+        <body>
+            <h2>Newsletter Update</h2>
+            <p>Dear subscriber,</p>
+            <p>Here are the latest updates:</p>
+            <ul>
+                <li><a href="https://example.com/article1">New Article Published</a></li>
+                <li><strong>Important:</strong> Policy Changes</li>
+            </ul>
+            <p>Best regards,<br/>The Team</p>
+            <hr/>
+            <small>Unsubscribe at <a href="https://example.com/unsubscribe">this link</a></small>
+        </body>
+        </html>
+        """
+        markdown = convert_html_to_markdown(html_content)
+        
+        assert "## Newsletter Update" in markdown
+        assert "Dear subscriber" in markdown
+        assert "[New Article Published](https://example.com/article1)" in markdown
+        assert "**Important:**" in markdown
+        assert "The Team" in markdown
+        assert "[this link](https://example.com/unsubscribe)" in markdown
+    
+    def test_convert_html_to_markdown_error_handling(self):
+        """Test error handling with malformed HTML."""
+        malformed_html = "<html><body><p>Unclosed tag<strong>Bold text</body></html>"
+        
+        # Should not raise an exception
+        markdown = convert_html_to_markdown(malformed_html)
+        assert "Bold text" in markdown
+        assert "Unclosed tag" in markdown
+    
+    def test_clean_email_markdown(self):
+        """Test cleaning email-specific markdown artifacts."""
+        messy_markdown = """
+        # Title
+        
+        
+        
+        Some content.
+        
+        ![]()
+        
+        [  ](https://tracker.example.com)
+        
+        Some more content.   
+        ==================
+        
+        Final paragraph.
+        """
+        
+        cleaned = _clean_email_markdown(messy_markdown)
+        
+        # Should have reduced blank lines
+        assert "\n\n\n" not in cleaned
+        # Should remove empty images
+        assert "![]()" not in cleaned
+        # Should remove empty links
+        assert "[  ]" not in cleaned
+        # Should normalize signature lines
+        assert "---" in cleaned
+        # Should not have trailing spaces
+        assert "content.   " not in cleaned
+    
+    def test_convert_email_to_markdown_html_with_body_field(self):
+        """Test email conversion using the body field with HTML content."""
+        email_data = {
+            "message_id": "test-message-1",
+            "subject": "HTML Email Test",
+            "from": "sender@example.com",
+            "to": "recipient@example.com", 
+            "date": "Mon, 23 Mar 2025 10:00:00 +1100",
+            "body": "<h1>Welcome</h1><p>This is an <em>HTML</em> email with <a href='https://example.com'>links</a>.</p>",
+            "content_type": "text/html",
+            "labels": ["INBOX"]
+        }
+        
+        markdown_content = convert_email_to_markdown(email_data)
+        
+        # Should have frontmatter
+        assert "---" in markdown_content
+        assert "subject: HTML Email Test" in markdown_content
+        
+        # Should have converted HTML to markdown
+        assert "# Welcome" in markdown_content
+        assert "*HTML*" in markdown_content or "_HTML_" in markdown_content
+        assert "[links](https://example.com)" in markdown_content
+    
+    def test_convert_email_to_markdown_fallback_to_content_field(self):
+        """Test that conversion falls back to content field if body is missing."""
+        email_data = {
+            "message_id": "test-message-2",
+            "subject": "Fallback Test",
+            "from": "sender@example.com",
+            "date": "Mon, 23 Mar 2025 10:00:00 +1100",
+            "content": "<p>This content is in the <strong>content</strong> field.</p>",
+            "content_type": "text/html",
+            "labels": ["INBOX"]
+        }
+        
+        markdown_content = convert_email_to_markdown(email_data)
+        
+        # Should still work with content field
+        assert "**content**" in markdown_content
+        assert "This content is in" in markdown_content

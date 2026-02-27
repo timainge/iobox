@@ -78,13 +78,73 @@ def convert_html_to_markdown(html_content: str) -> str:
     """
     # Use html2text to convert HTML to Markdown
     h = html2text.HTML2Text()
-    h.ignore_links = False
-    h.ignore_images = False
-    h.ignore_tables = False
-    h.body_width = 0  # No wrap
     
-    markdown = h.handle(html_content)
-    return markdown
+    # Configure for optimal email conversion
+    h.ignore_links = False          # Preserve links
+    h.ignore_images = False         # Preserve image references
+    h.ignore_tables = False         # Convert tables to markdown
+    h.ignore_emphasis = False       # Preserve bold/italic formatting
+    h.body_width = 0                # No line wrapping
+    h.unicode_snob = True           # Use unicode characters when possible
+    h.mark_code = True              # Mark code blocks
+    h.wrap_links = False            # Don't wrap long links
+    h.protect_links = True          # Protect links from line breaking
+    h.default_image_alt = ""        # Don't add default alt text
+    h.single_line_break = False     # Use double line breaks for paragraphs
+    
+    # Handle email-specific formatting
+    h.bypass_tables = False         # Convert HTML tables to markdown tables
+    h.pad_tables = True             # Add padding to table cells
+    
+    try:
+        markdown = h.handle(html_content)
+        # Clean up common email HTML artifacts
+        markdown = _clean_email_markdown(markdown)
+        return markdown
+    except Exception as e:
+        logging.warning(f"Error converting HTML to markdown: {e}")
+        # Fallback to basic HTML tag stripping
+        return strip_html_tags(html_content)
+
+
+def _clean_email_markdown(markdown_content: str) -> str:
+    """
+    Clean up common email HTML artifacts in markdown content.
+    
+    Args:
+        markdown_content: Raw markdown content from html2text
+        
+    Returns:
+        str: Cleaned markdown content
+    """
+    import re
+    
+    # First normalize line endings
+    markdown_content = markdown_content.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # Remove leading/trailing whitespace from all lines  
+    lines = markdown_content.split('\n')
+    lines = [line.rstrip() for line in lines]
+    markdown_content = '\n'.join(lines)
+    
+    # Remove excessive blank lines (more than 2 consecutive)
+    while '\n\n\n' in markdown_content:
+        markdown_content = markdown_content.replace('\n\n\n', '\n\n')
+    
+    # Clean up email tracking pixels and empty image references
+    markdown_content = re.sub(r'!\[\]\([^)]*\)', '', markdown_content)
+    
+    # Remove empty links that are just whitespace
+    markdown_content = re.sub(r'\[\s*\]\([^)]*\)', '', markdown_content)
+    
+    # Clean up email signatures (lines with just dashes or equals, possibly with leading whitespace)
+    markdown_content = re.sub(r'^\s*[-=]{3,}\s*$', '---', markdown_content, flags=re.MULTILINE)
+    
+    # Clean up angle brackets in links (optional - for cleaner output)
+    # html2text adds angle brackets around URLs, we can optionally remove them
+    markdown_content = re.sub(r'\]\(<([^>]+)>\)', r'](\1)', markdown_content)
+    
+    return markdown_content.strip()
 
 
 def convert_email_to_markdown(email_data: Dict[str, Any]) -> str:
