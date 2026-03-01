@@ -1,227 +1,119 @@
 # Iobox Roadmap
 
-This document covers the strategic direction for iobox: expanded Gmail API coverage, consumption modes, packaging, documentation, and CI/CD.
+Strategic direction for iobox, organized by implementation phase. Functional enhancements first, then integration and distribution work.
+
+Each phase has a dedicated spec doc in `docs/specs/` with detailed requirements, file changes, and acceptance criteria.
 
 ## Current State
 
-Iobox currently implements:
-- **Messages (read)**: `messages.list`, `messages.get` (metadata + full), `messages.attachments.get`
-- **Messages (write)**: `messages.send` (plain text only)
-- **Forwarding**: Retrieve-and-resend via `messages.send`
-- **OAuth scopes**: `gmail.readonly` + `gmail.send`
 - **CLI commands**: `search`, `save`, `send`, `forward`, `auth-status`, `version`
-- **Output**: Markdown files with YAML frontmatter, optional attachment downloads
+- **Gmail API coverage**: `messages.list`, `messages.get`, `messages.attachments.get`, `messages.send`
+- **OAuth scopes**: `gmail.readonly` + `gmail.send`
+- **Output**: Markdown + YAML frontmatter, optional attachment downloads
+- **Packaging**: `setup.py` (legacy), no CI/CD, no PyPI publishing
 
-## 1. Gmail API Feature Gaps
+## Phase Overview
 
-### Critical Fixes
-
-| Issue | Impact | Effort |
-|---|---|---|
-| **Pagination missing in `search_emails()`** — `nextPageToken` is never followed, silently truncating results beyond the first page | Data loss | Low |
-| **Label IDs not resolved** — raw IDs like `Label_12345` appear in YAML frontmatter instead of human-readable names; one `labels.list` call (1 quota unit) would build an ID-to-name map | Usability | Low |
-
-### High Priority — New Capabilities
-
-| Feature | Gmail API Methods | Scope Change | Notes |
+| # | Phase | Spec | Status |
 |---|---|---|---|
-| **Label management** — mark read/unread, star, archive, apply custom labels | `messages.modify`, `messages.batchModify` | Add `gmail.modify` (replaces `readonly` + `send`) | Core email workflow; enables post-save tagging |
-| **Trash/untrash** | `messages.trash`, `messages.untrash` | `gmail.modify` | Safe (reversible) message management |
-| **Thread-level export** | `threads.get` | No change | `thread_id` already captured in frontmatter; fetch all messages in a thread as a single markdown file |
-| **Profile in auth-status** | `users.getProfile` | No change | Shows authenticated email address, mailbox size, `historyId`; 1 quota unit |
-| **Include spam/trash flag** | `messages.list` `includeSpamTrash` param | No change | Expose as `--include-spam-trash` on search/save |
+| 1 | [Critical Bug Fixes](#phase-1-critical-bug-fixes) | [specs/01-critical-fixes.md](specs/01-critical-fixes.md) | Not started |
+| 2 | [Gmail Read Enhancements](#phase-2-gmail-read-enhancements) | [specs/02-read-enhancements.md](specs/02-read-enhancements.md) | Not started |
+| 3 | [Gmail Write Operations](#phase-3-gmail-write-operations) | [specs/03-write-operations.md](specs/03-write-operations.md) | Not started |
+| 4 | [Enhanced Send and Drafts](#phase-4-enhanced-send-and-drafts) | [specs/04-send-and-drafts.md](specs/04-send-and-drafts.md) | Not started |
+| 5 | [Performance](#phase-5-performance) | [specs/05-performance.md](specs/05-performance.md) | Not started |
+| 6 | [Packaging and Distribution](#phase-6-packaging-and-distribution) | [specs/06-packaging.md](specs/06-packaging.md) | Not started |
+| 7 | [MCP Server](#phase-7-mcp-server) | [specs/07-mcp-server.md](specs/07-mcp-server.md) | Not started |
+| 8 | [CI/CD](#phase-8-cicd) | [specs/08-cicd.md](specs/08-cicd.md) | Not started |
+| 9 | [Documentation Site](#phase-9-documentation-site) | [specs/09-docs-site.md](specs/09-docs-site.md) | Not started |
 
-### Medium Priority
+---
 
-| Feature | Notes |
-|---|---|
-| **Draft management** — create, list, send drafts | Requires `gmail.compose` scope; natural "compose now, send later" workflow |
-| **HTML email sending** | Current `compose_message()` only does plain text `MIMEText`; support HTML body and attachments |
-| **HTTP batch requests** | Combine multiple `messages.get` calls into one HTTP request; cuts round-trips in half for batch save |
-| **Incremental sync via `history.list`** | Store `historyId` between runs; only fetch new/changed messages; requires persistent state file |
+## Phase 1: Critical Bug Fixes
 
-### Low Priority / Niche
+Fix data-loss bugs and usability issues in the existing functionality.
 
-- `settings.filters.list/create` — manage Gmail filter rules from CLI
-- `settings.sendAs.list` — inspect configured send-as aliases and signatures
-- Vacation responder (`getVacation` / `updateVacation`)
-- Push notifications (`users.watch`) — requires a running server, not applicable to CLI
-- `messages.import` / `messages.insert` — migration use cases
+- **Pagination**: `search_emails()` ignores `nextPageToken`, silently truncating results
+- **Label resolution**: Raw label IDs (`Label_12345`) in YAML frontmatter instead of human-readable names
 
-### OAuth Scope Strategy
+## Phase 2: Gmail Read Enhancements
 
-Current scopes are `gmail.readonly` + `gmail.send`. To enable label management and trash operations, the recommended upgrade path is:
+Expand read capabilities using existing `gmail.readonly` scope.
+
+- **Thread-level export**: Fetch all messages in a thread as a single markdown file
+- **Profile in auth-status**: Show authenticated email address and mailbox stats via `users.getProfile`
+- **Include spam/trash**: Expose `includeSpamTrash` as a CLI flag
+
+## Phase 3: Gmail Write Operations
+
+Add label management and message state changes. Requires scope upgrade to `gmail.modify`.
+
+- **Label management**: Mark read/unread, star/unstar, archive, apply custom labels via `messages.modify`
+- **Bulk label operations**: `messages.batchModify` for efficient batch tagging
+- **Trash/untrash**: Safe (reversible) message deletion
+
+## Phase 4: Enhanced Send and Drafts
+
+Upgrade email composition from plain text to full MIME support.
+
+- **HTML email sending**: Support HTML body and inline attachments in `compose_message()`
+- **Attachment sending**: Attach files to outgoing emails
+- **Draft management**: Create, list, and send drafts via `drafts.*` methods
+
+## Phase 5: Performance
+
+Reduce API round-trips and enable efficient repeated syncing.
+
+- **HTTP batch requests**: Combine multiple `messages.get` calls into single HTTP requests
+- **Incremental sync**: Use `history.list` to only fetch new/changed messages between runs
+- **Refactor `download_email_attachments`**: Move business logic from `cli.py` to `file_manager.py`
+
+## Phase 6: Packaging and Distribution
+
+Modernize packaging for PyPI publishing and library consumption.
+
+- **`pyproject.toml`**: Replace `setup.py` with hatchling-based config
+- **Version single source of truth**: `importlib.metadata` instead of hardcoded `__version__`
+- **Public API surface**: Expand `__init__.py` with `__all__` for library consumers
+- **`py.typed` marker**: PEP 561 support for downstream type checkers
+- **`__main__.py`**: Enable `python -m iobox`
+
+## Phase 7: MCP Server
+
+Expose iobox as an MCP tool server for Claude Desktop, Cursor, and VS Code.
+
+- **`src/iobox/mcp_server.py`**: FastMCP-based server with search, save, send, forward tools
+- **Optional dependency**: `pip install iobox[mcp]`
+- **stdio transport**: Standard for CLI-launched MCP servers
+
+## Phase 8: CI/CD
+
+Automate testing, linting, and publishing via GitHub Actions.
+
+- **CI workflow**: Lint (ruff) + test (pytest matrix) on push/PR
+- **Release workflow**: Build and publish to PyPI on tag push via Trusted Publishing (OIDC)
+- **Pre-commit hooks**: ruff-check + ruff-format
+
+## Phase 9: Documentation Site
+
+User-facing documentation site with auto-generated API reference.
+
+- **mkdocs-material**: Markdown-native static site with search
+- **mkdocstrings**: Auto-generate API docs from Google-style docstrings
+- **GitHub Pages**: Deploy via `mkdocs gh-deploy` or CI
+
+---
+
+## OAuth Scope Progression
 
 | Phase | Scopes | Enables |
 |---|---|---|
 | Current | `readonly` + `send` | Search, save, send, forward |
-| Phase 2 | `modify` (replaces both) | + label management, trash, archive, star |
-| Phase 3 | `modify` + `compose` | + draft create/list/send |
+| Phase 3 | `modify` (replaces both) | + label management, trash, archive, star |
+| Phase 4 | `modify` + `compose` | + draft create/list/send |
 
-### Quota Impact Reference
+## Status Legend
 
-| Operation | Units | Current usage for N emails |
-|---|---|---|
-| `messages.list` | 5 | 1 call |
-| `messages.get` | 5 | 2N calls (metadata + full) |
-| `messages.send` | 100 | 1 per send/forward |
-| `labels.list` | 1 | 0 (should be 1) |
-| `getProfile` | 1 | 0 (should be 1) |
-| Per-user limit | 15,000 units/min | Batch save of 50 emails = ~505 units |
-
-## 2. Consumption Modes
-
-### CLI (current)
-
-The Typer-based CLI is the primary interface. No changes needed to the architecture — it correctly acts as a thin orchestration layer over the library modules.
-
-One improvement: move `download_email_attachments` from `cli.py` into `file_manager.py` — it contains business logic that should be in the library layer.
-
-### Library (Python import)
-
-Currently `src/iobox/__init__.py` only exports `__version__`. Anyone using iobox as a library must know the internal module names.
-
-**Action**: Expand `__init__.py` to expose the full public API with `__all__`:
-- `get_gmail_service`, `check_auth_status`
-- `search_emails`, `validate_date_format`
-- `get_email_content`, `download_attachment`
-- `convert_email_to_markdown`, `convert_html_to_markdown`
-- `save_email_to_markdown`, `create_output_directory`, `check_for_duplicates`, `save_attachment`
-- `send_message`, `compose_message`, `forward_email`
-
-Add a `py.typed` marker (PEP 561) for downstream type checkers.
-
-Add `src/iobox/__main__.py` to enable `python -m iobox`.
-
-### MCP Server (new)
-
-Create `src/iobox/mcp_server.py` using FastMCP (`mcp` package) to expose iobox functions as tools for Claude Desktop, Cursor, VS Code, and other MCP-compatible hosts.
-
-Tools to expose:
-
-| Tool | Wraps | Description |
-|---|---|---|
-| `search_gmail` | `search_emails` | Search Gmail by query, date range, max results |
-| `save_email` | `get_email_content` + `save_email_to_markdown` | Retrieve and save a message as markdown |
-| `send_email` | `compose_message` + `send_message` | Compose and send a new email |
-| `forward_gmail_message` | `forward_email` | Forward an existing message |
-| `check_auth` | `check_auth_status` | Check authentication state |
-
-Transport: `stdio` (standard for CLI-launched MCP servers).
-
-Registration example for Claude Desktop (`claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "iobox": {
-      "command": "python",
-      "args": ["-m", "iobox.mcp_server"]
-    }
-  }
-}
-```
-
-Add `mcp` as an optional dependency: `pip install iobox[mcp]`.
-
-## 3. Packaging and Distribution
-
-### Replace `setup.py` with `pyproject.toml`
-
-The `setup.py` is legacy. Migrate to `pyproject.toml` with hatchling as the build backend:
-
-- Declare all dependencies, optional dependency groups (`dev`, `docs`, `mcp`)
-- Move `pytest.ini` config into `[tool.pytest.ini_options]`
-- Add ruff config in `[tool.ruff]`
-- Add mypy config in `[tool.mypy]`
-- Set `[project.scripts] iobox = "iobox.cli:app"`
-
-### Version Single Source of Truth
-
-Currently `__version__` is hardcoded in both `__init__.py` and `cli.py`. Fix:
-
-1. Define version once in `pyproject.toml` `[project] version = "0.2.0"` (or use `hatch-vcs` for git-tag-based versioning)
-2. In `__init__.py`, read via `importlib.metadata.version("iobox")`
-3. In `cli.py`, import from `iobox.__version__`
-
-### PyPI Publishing
-
-Prerequisites:
-- `pyproject.toml` with `[project]` table
-- `LICENSE` file (MIT)
-- `README.md`
-- PyPI classifiers
-
-Use Trusted Publishing (OIDC) with GitHub Actions — no long-lived API tokens needed.
-
-## 4. CI/CD
-
-### CI Workflow (`.github/workflows/ci.yml`)
-
-Triggers on push/PR to `main`:
-- **Lint**: `ruff check` + `ruff format --check`
-- **Test**: pytest across Python 3.9–3.12 matrix with coverage threshold (`--cov-fail-under=80`)
-- **Coverage reporting**: Upload to Codecov
-
-### Release Workflow (`.github/workflows/release.yml`)
-
-Triggers on `v*` tag push:
-1. Run the CI workflow
-2. Build with `python -m build` (or `uv build`)
-3. Publish to PyPI via `pypa/gh-action-pypi-publish` with `id-token: write` (Trusted Publishing)
-
-### Pre-commit Hooks
-
-`.pre-commit-config.yaml` with:
-- `ruff-check` (with `--fix`)
-- `ruff-format`
-
-## 5. Documentation Site
-
-### mkdocs-material
-
-Use Material for MkDocs with mkdocstrings for auto-generated API docs from Google-style docstrings (already used consistently in the codebase).
-
-Suggested site structure:
-
-```
-docs/
-├── index.md                    # Home / overview
-├── getting-started/
-│   ├── installation.md
-│   ├── authentication.md       # (existing docs/authentication.md)
-│   └── quickstart.md
-├── cli/
-│   ├── search.md
-│   ├── save.md
-│   ├── send.md
-│   ├── forward.md
-│   └── auth-status.md
-├── api/                        # Auto-generated from docstrings
-│   ├── auth.md
-│   ├── email_search.md
-│   ├── email_retrieval.md
-│   ├── markdown_converter.md
-│   ├── file_manager.md
-│   └── email_sender.md
-├── mcp.md                      # MCP server setup and usage
-├── integrations.md             # (existing docs/integrations.md)
-├── roadmap.md                  # This file
-└── changelog.md
-```
-
-Deploy to GitHub Pages: `mkdocs gh-deploy` or via GitHub Actions.
-
-Add `mkdocs-material` and `mkdocstrings[python]` as optional docs dependencies.
-
-## 6. Implementation Order
-
-| Phase | Items | Estimated Effort |
-|---|---|---|
-| **Phase 1: Foundation** | `pyproject.toml` migration, version fix, `__init__.py` public API, `py.typed`, `__main__.py`, `LICENSE` | 1 session |
-| **Phase 2: Critical fixes** | Pagination in `search_emails()`, label name resolution, `getProfile` in auth-status | 1 session |
-| **Phase 3: CI/CD** | `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.pre-commit-config.yaml`, ruff config | 1 session |
-| **Phase 4: MCP server** | `src/iobox/mcp_server.py`, optional `mcp` dependency, Claude Desktop config docs | 1 session |
-| **Phase 5: Gmail write ops** | `messages.modify` (label/star/archive), `messages.trash`, scope upgrade to `gmail.modify` | 1–2 sessions |
-| **Phase 6: Docs site** | mkdocs-material setup, CLI reference pages, API reference, deploy to GitHub Pages | 1–2 sessions |
-| **Phase 7: Enhanced send** | HTML email body, attachment sending, draft management | 1–2 sessions |
-| **Phase 8: Performance** | HTTP batch requests, incremental sync via `history.list`, thread-level export | 2–3 sessions |
+- Not started
+- In progress
+- Blocked
+- Complete
