@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 import logging
 import html2text
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -151,6 +151,72 @@ def convert_email_to_markdown(email_data: Dict[str, Any]) -> str:
     except Exception as e:
         logging.error(f"Error converting email to markdown: {e}")
         raise
+
+
+def convert_thread_to_markdown(messages: List[Dict[str, Any]]) -> str:
+    """
+    Convert a list of thread messages to a combined markdown document.
+
+    Generates a YAML frontmatter block with thread-level metadata, then renders
+    each message as a section separated by horizontal rules.
+
+    Args:
+        messages: List of email data dicts as returned by get_thread_content()
+
+    Returns:
+        str: Combined markdown string with YAML frontmatter
+    """
+    if not messages:
+        return ""
+
+    first = messages[0]
+    thread_id = first.get('thread_id', '')
+    subject = first.get('subject', 'No Subject')
+    message_count = len(messages)
+
+    # Collect unique labels across all messages
+    all_labels: List[str] = []
+    seen: set = set()
+    for msg in messages:
+        for lbl in msg.get('labels', []):
+            if lbl not in seen:
+                all_labels.append(lbl)
+                seen.add(lbl)
+
+    # Date range
+    dates = [msg.get('date', '') for msg in messages if msg.get('date')]
+    date_start = dates[0] if dates else ''
+    date_end = dates[-1] if len(dates) > 1 else date_start
+
+    # Build YAML frontmatter
+    yaml_str = '---\n'
+    yaml_str += f'thread_id: {thread_id}\n'
+    yaml_str += f'message_count: {message_count}\n'
+    yaml_str += f'subject: {subject}\n'
+    yaml_str += f'date_start: {date_start}\n'
+    yaml_str += f'date_end: {date_end}\n'
+    yaml_str += 'labels:\n'
+    for lbl in all_labels:
+        yaml_str += f'  - {lbl}\n'
+    yaml_str += f'saved_date: {datetime.now().isoformat()}\n'
+    yaml_str += '---\n\n'
+
+    # Build message sections
+    sections = []
+    for msg in messages:
+        sender = msg.get('from', 'Unknown')
+        date = msg.get('date', '')
+        body = msg.get('body', '')
+        content_type = msg.get('content_type', 'text/plain')
+
+        section = f'## From: {sender} — {date}\n\n'
+        if content_type == 'text/html':
+            section += convert_html_to_markdown(body)
+        else:
+            section += body
+        sections.append(section)
+
+    return yaml_str + '\n\n---\n\n'.join(sections)
 
 
 def strip_html_tags(html_content: str) -> str:

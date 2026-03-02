@@ -10,9 +10,19 @@ import typer
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from iobox.auth import get_gmail_service, check_auth_status
+from iobox.auth import get_gmail_service, check_auth_status, get_gmail_profile
 from iobox.email_search import search_emails, get_email_content, download_attachment
+from iobox.email_retrieval import (
+    get_label_map,
+    get_thread_content,
+    modify_message_labels,
+    resolve_label_name,
+    batch_modify_labels,
+    trash_message,
+    untrash_message,
+)
 from iobox.markdown import convert_email_to_markdown
+from iobox.markdown_converter import convert_thread_to_markdown
 from iobox.file_manager import (
     create_output_directory,
     save_email_to_markdown,
@@ -73,6 +83,17 @@ def auth_status():
         typer.echo("5. Choose 'Desktop app' as application type")
         typer.echo("6. Download the JSON file and save it as 'credentials.json' in the project root")
 
+    try:
+        service = get_gmail_service()
+        profile = get_gmail_profile(service)
+        typer.echo("\nGmail Profile")
+        typer.echo("-------------------")
+        typer.echo(f"Email: {profile.get('emailAddress', 'Unknown')}")
+        typer.echo(f"Messages: {profile.get('messagesTotal', 0):,}")
+        typer.echo(f"Threads: {profile.get('threadsTotal', 0):,}")
+    except Exception:
+        pass
+
 
 @app.command()
 def search(
@@ -97,21 +118,27 @@ def search(
     debug: bool = typer.Option(
         False, "--debug", help="Show debug information about API responses"
     ),
+    include_spam_trash: bool = typer.Option(
+        False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
+    ),
 ):
     """Search for emails matching the specified query."""
     try:
         # Authenticate with Gmail API
         service = get_gmail_service()
-        
+        label_map = get_label_map(service)
+
         # Search for emails
         typer.echo(f"Searching for emails matching: {query}")
         results = search_emails(
-            service, 
-            query, 
-            max_results, 
-            days, 
-            start_date, 
-            end_date
+            service,
+            query,
+            max_results,
+            days,
+            start_date,
+            end_date,
+            label_map=label_map,
+            include_spam_trash=include_spam_trash,
         )
         
         if not results:
@@ -185,6 +212,9 @@ def save(
     message_id: str = typer.Option(
         None, "--message-id", "-m", help="ID of a specific email to save"
     ),
+    thread_id: str = typer.Option(
+        None, "--thread-id", help="ID of a thread to save as a single file"
+    ),
     query: str = typer.Option(
         None, "--query", "-q", help="Search query for emails to save (for batch mode)"
     ),
@@ -212,53 +242,77 @@ def save(
     attachment_types: str = typer.Option(
         None, "--attachment-types", help="Filter attachments by file extension (comma-separated, e.g., 'pdf,docx,xlsx')"
     ),
+    include_spam_trash: bool = typer.Option(
+        False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
+    ),
 ):
     """
     Save emails as Markdown files.
-    
-    Supports two modes:
+
+    Supports three modes:
     1. Single mode: Save one specific email (use --message-id)
-    2. Batch mode: Save multiple emails matching a query (use --query)
+    2. Thread mode: Save a full thread as a single file (use --thread-id)
+    3. Batch mode: Save multiple emails matching a query (use --query)
     """
     try:
         # Check parameter validity
-        if message_id is None and query is None:
-            typer.echo("Error: You must specify either --message-id (-m) or --query (-q)")
+        if message_id is None and thread_id is None and query is None:
+            typer.echo("Error: You must specify --message-id (-m), --thread-id, or --query (-q)")
             typer.echo("\nFor help, run: iobox save --help")
             raise typer.Exit(code=1)
-            
+
         # Authenticate with Gmail API
         service = get_gmail_service()
-        
+        label_map = get_label_map(service)
+
         # Create output directory if it doesn't exist
         output_dir = create_output_directory(output_dir)
-        
+
         # Parse attachment types if provided
         attachment_filters = []
         if attachment_types:
             attachment_filters = [ext.strip().lower() for ext in attachment_types.split(',')]
-            
+
+        # Thread mode
+        if thread_id is not None:
+            messages = get_thread_content(
+                service,
+                thread_id,
+                preferred_content_type="text/html" if html_preferred else "text/plain",
+            )
+            markdown_content = convert_thread_to_markdown(messages)
+            subject = messages[0].get('subject', 'thread') if messages else 'thread'
+            from iobox.utils import slugify_text
+            subject_slug = slugify_text(subject)
+            filename = f"{subject_slug}_{thread_id}.md"
+            filepath = os.path.join(output_dir, filename)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(markdown_content)
+            typer.echo(f"Successfully saved thread to {filepath}")
+            return
+
         # Single email mode
         if message_id is not None:
             # Get email content
             email_data = get_email_content(
                 service,
                 message_id,
-                preferred_content_type="text/html" if html_preferred else "text/plain"
+                preferred_content_type="text/html" if html_preferred else "text/plain",
+                label_map=label_map,
             )
-            
+
             # Convert to markdown
             markdown_content = convert_email_to_markdown(email_data)
-            
+
             # Save to file
             filepath = save_email_to_markdown(
                 email_data=email_data,
                 markdown_content=markdown_content,
                 output_dir=output_dir
             )
-            
+
             typer.echo(f"Successfully saved email to {filepath}")
-            
+
             # Download attachments if requested
             if download_attachments and email_data.get('attachments'):
                 download_email_attachments(
@@ -267,18 +321,20 @@ def save(
                     output_dir=output_dir,
                     attachment_filters=attachment_filters
                 )
-            
+
         # Batch mode
         else:
             # Search for emails
             typer.echo(f"Searching for emails matching: {query}")
             results = search_emails(
-                service, 
-                query, 
-                max_results, 
+                service,
+                query,
+                max_results,
                 days,
                 start_date,
-                end_date
+                end_date,
+                label_map=label_map,
+                include_spam_trash=include_spam_trash,
             )
             
             if not results:
@@ -310,7 +366,8 @@ def save(
                 email_data = get_email_content(
                     service,
                     message_id,
-                    preferred_content_type="text/html" if html_preferred else "text/plain"
+                    preferred_content_type="text/html" if html_preferred else "text/plain",
+                    label_map=label_map,
                 )
                 
                 # Convert to markdown
@@ -466,6 +523,147 @@ def send(
 
     except Exception as e:
         typer.echo(f"Error sending email: {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def label(
+    message_id: str = typer.Option(
+        None, "--message-id", help="Message ID for single message mode"
+    ),
+    query: str = typer.Option(
+        None, "-q", "--query", help="Search query for batch mode"
+    ),
+    max_results: int = typer.Option(
+        10, "-m", "--max-results", help="Maximum number of messages in batch mode"
+    ),
+    days: int = typer.Option(
+        7, "-d", "--days", help="Number of days back to search"
+    ),
+    mark_read: bool = typer.Option(False, "--mark-read", help="Mark as read"),
+    mark_unread: bool = typer.Option(False, "--mark-unread", help="Mark as unread"),
+    star: bool = typer.Option(False, "--star", help="Star message"),
+    unstar: bool = typer.Option(False, "--unstar", help="Unstar message"),
+    archive: bool = typer.Option(False, "--archive", help="Archive (remove from INBOX)"),
+    add: str = typer.Option(None, "--add", help="Add label by name"),
+    remove: str = typer.Option(None, "--remove", help="Remove label by name"),
+):
+    """
+    Add or remove labels on one or more messages.
+
+    Supports single message mode (--message-id) and batch mode (--query).
+    """
+    try:
+        if message_id is None and query is None:
+            typer.echo("Error: You must specify --message-id or --query (-q)")
+            raise typer.Exit(code=1)
+
+        service = get_gmail_service()
+
+        add_labels: List[str] = []
+        remove_labels: List[str] = []
+
+        if mark_read:
+            remove_labels.append('UNREAD')
+        if mark_unread:
+            add_labels.append('UNREAD')
+        if star:
+            add_labels.append('STARRED')
+        if unstar:
+            remove_labels.append('STARRED')
+        if archive:
+            remove_labels.append('INBOX')
+        if add:
+            add_labels.append(resolve_label_name(service, add))
+        if remove:
+            remove_labels.append(resolve_label_name(service, remove))
+
+        if message_id is not None:
+            modify_message_labels(service, message_id, add_labels or None, remove_labels or None)
+            typer.echo(f"Labels updated for message {message_id}")
+        else:
+            label_map = get_label_map(service)
+            results = search_emails(service, query, max_results, days, label_map=label_map)
+            if not results:
+                typer.echo("No emails found matching the query.")
+                return
+
+            msg_ids = [r['message_id'] for r in results]
+            if len(msg_ids) >= 2:
+                batch_modify_labels(service, msg_ids, add_labels or None, remove_labels or None)
+            else:
+                modify_message_labels(service, msg_ids[0], add_labels or None, remove_labels or None)
+
+            typer.echo(f"Labels updated for {len(msg_ids)} message(s)")
+
+    except Exception as e:
+        typer.echo(f"Error updating labels: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def trash(
+    message_id: str = typer.Option(
+        None, "--message-id", help="Message ID for single message mode"
+    ),
+    query: str = typer.Option(
+        None, "-q", "--query", help="Search query for batch mode"
+    ),
+    untrash: bool = typer.Option(False, "--untrash", help="Restore from trash instead of trashing"),
+    days: int = typer.Option(
+        7, "-d", "--days", help="Number of days back to search"
+    ),
+    max_results: int = typer.Option(
+        10, "-m", "--max-results", help="Maximum number of messages in batch mode"
+    ),
+):
+    """
+    Move messages to trash or restore them from trash.
+
+    Supports single message mode (--message-id) and batch mode (--query).
+    Batch trash requires confirmation before proceeding.
+    """
+    try:
+        if message_id is None and query is None:
+            typer.echo("Error: You must specify --message-id or --query (-q)")
+            raise typer.Exit(code=1)
+
+        service = get_gmail_service()
+        action = "Restore" if untrash else "Trash"
+
+        if message_id is not None:
+            if untrash:
+                untrash_message(service, message_id)
+            else:
+                trash_message(service, message_id)
+            typer.echo(f"{action}ed message {message_id}")
+        else:
+            label_map = get_label_map(service)
+            results = search_emails(service, query, max_results, days, label_map=label_map)
+            if not results:
+                typer.echo("No emails found matching the query.")
+                return
+
+            confirmed = typer.confirm(
+                f"Are you sure you want to {action.lower()} {len(results)} message(s)?"
+            )
+            if not confirmed:
+                typer.echo("Aborted.")
+                raise typer.Exit()
+
+            for r in results:
+                mid = r['message_id']
+                if untrash:
+                    untrash_message(service, mid)
+                else:
+                    trash_message(service, mid)
+
+            typer.echo(f"{action}ed {len(results)} message(s)")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
 
 

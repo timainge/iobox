@@ -11,7 +11,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from iobox.auth import get_gmail_service, check_auth_status, CREDENTIALS_PATH, TOKEN_PATH
+from iobox.auth import get_gmail_service, check_auth_status, get_gmail_profile, CREDENTIALS_PATH, TOKEN_PATH, SCOPES
 
 
 class TestAuthentication:
@@ -141,18 +141,81 @@ class TestAuthentication:
         """Test using an existing valid token."""
         monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
         monkeypatch.setattr("iobox.auth.TOKEN_PATH", str(mock_token_file))
-        
-        # Mock the credentials with a valid token
+
+        # Mock the credentials with a valid token and matching scopes
         mock_creds = MagicMock(valid=True, expired=False)
-        
+        mock_creds.scopes = set(SCOPES)  # Must match current SCOPES to avoid mismatch re-auth
+
         # Mock build service
         mock_service = MagicMock()
-        
+
         with patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds), \
              patch("iobox.auth.build", return_value=mock_service):
-            
+
             service = get_gmail_service()
-            
+
             # Verify refresh was not called (token is valid)
             mock_creds.refresh.assert_not_called()
             assert service == mock_service
+
+
+class TestGetGmailProfile:
+    """Tests for get_gmail_profile()."""
+
+    def test_get_gmail_profile(self, mock_gmail_service):
+        """get_gmail_profile returns the profile dict from the API."""
+        profile_data = {
+            "emailAddress": "user@gmail.com",
+            "messagesTotal": 66327,
+            "threadsTotal": 13902,
+        }
+        mock_get = MagicMock()
+        mock_get.execute.return_value = profile_data
+        mock_gmail_service.users().getProfile.return_value = mock_get
+
+        result = get_gmail_profile(mock_gmail_service)
+
+        assert result["emailAddress"] == "user@gmail.com"
+        assert result["messagesTotal"] == 66327
+        assert result["threadsTotal"] == 13902
+        mock_gmail_service.users().getProfile.assert_called_once_with(userId='me')
+
+
+class TestScopeMismatch:
+    """Tests for scope mismatch detection in get_gmail_service()."""
+
+    def test_scope_mismatch_triggers_reauth(self, monkeypatch, mock_credentials_file, tmp_path):
+        """If token has old scopes, token file is deleted and re-auth is triggered."""
+        token_path = tmp_path / "token.json"
+        # Write a dummy token file so os.path.exists returns True
+        token_path.write_text('{"token": "old"}')
+
+        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr("iobox.auth.TOKEN_PATH", str(token_path))
+
+        # Credentials with old (mismatched) scopes
+        old_scopes = {'https://www.googleapis.com/auth/gmail.readonly'}
+        mock_creds = MagicMock(
+            valid=True,
+            expired=False,
+            scopes=old_scopes,
+        )
+
+        # After deletion, re-auth via OAuth flow
+        mock_flow = MagicMock()
+        new_creds = MagicMock(valid=True, to_json=lambda: '{"token": "new"}')
+        mock_flow.run_local_server.return_value = new_creds
+
+        mock_service = MagicMock()
+
+        with patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds), \
+             patch("iobox.auth.InstalledAppFlow.from_client_secrets_file", return_value=mock_flow), \
+             patch("iobox.auth.build", return_value=mock_service):
+
+            service = get_gmail_service()
+
+            # Token file should have been deleted during scope mismatch detection
+            # (then re-created by the OAuth flow write)
+            assert service == mock_service
+            # The flow was invoked because old creds were discarded
+            mock_flow.run_local_server.assert_called_once()

@@ -514,14 +514,49 @@ class TestEmailContent:
             "size": 30
             # No data field
         }
-        
+
         # Setup mock for attachment get method
         mock_get = MagicMock()
         mock_get.execute.return_value = mock_attachment_response
         mock_gmail_service.users().messages().attachments().get.return_value = mock_get
-        
+
         # Call the function
         result = download_attachment(mock_gmail_service, "message-id", "attachment-id")
-        
+
         # Verify empty bytes returned
         assert result == b''
+
+
+class TestSearchIncludeSpamTrash:
+    """Tests for the include_spam_trash parameter in search_emails()."""
+
+    def test_search_include_spam_trash_passed_to_api(self, mock_gmail_service):
+        """includeSpamTrash=True is forwarded to the messages.list API call."""
+        mock_list = MagicMock()
+        mock_list.execute.return_value = {"messages": [], "resultSizeEstimate": 0}
+        mock_gmail_service.users().messages().list.return_value = mock_list
+
+        search_emails(
+            service=mock_gmail_service,
+            query="in:spam",
+            max_results=5,
+            include_spam_trash=True,
+        )
+
+        call_kwargs = mock_gmail_service.users().messages().list.call_args[1]
+        assert call_kwargs.get("includeSpamTrash") is True
+
+    def test_search_exclude_spam_trash_by_default(self, mock_gmail_service):
+        """includeSpamTrash defaults to False when not specified."""
+        mock_list = MagicMock()
+        mock_list.execute.return_value = {"messages": [], "resultSizeEstimate": 0}
+        mock_gmail_service.users().messages().list.return_value = mock_list
+
+        search_emails(
+            service=mock_gmail_service,
+            query="subject:test",
+            max_results=5,
+        )
+
+        call_kwargs = mock_gmail_service.users().messages().list.call_args[1]
+        assert call_kwargs.get("includeSpamTrash") is False

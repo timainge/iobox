@@ -23,7 +23,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def search_emails(service, query: str, max_results: int = 100, days_back: int = 7,
                  start_date: Optional[str] = None, end_date: Optional[str] = None,
-                 label_map: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+                 label_map: Optional[Dict[str, str]] = None,
+                 include_spam_trash: bool = False) -> List[Dict[str, Any]]:
     """
     Search for emails based on the given query and date range.
 
@@ -37,6 +38,7 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
         label_map: Optional mapping of label ID to display name. When provided,
             label IDs in preview results are resolved to human-readable names.
             If None, raw IDs are returned (backward compatible).
+        include_spam_trash: Whether to include messages from SPAM and TRASH (default: False)
 
     Returns:
         list: List of message dictionaries with basic preview information
@@ -61,7 +63,8 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
         result = service.users().messages().list(
             userId='me',
             q=full_query,
-            maxResults=max_results
+            maxResults=max_results,
+            includeSpamTrash=include_spam_trash
         ).execute()
 
         messages = result.get('messages', [])
@@ -76,7 +79,8 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
                 userId='me',
                 q=full_query,
                 maxResults=max_results - len(messages),
-                pageToken=page_token
+                pageToken=page_token,
+                includeSpamTrash=include_spam_trash
             ).execute()
             batch = result.get('messages', [])
             messages.extend(batch)

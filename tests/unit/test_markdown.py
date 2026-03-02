@@ -17,6 +17,7 @@ from iobox.markdown import (
     create_markdown_filename,
     strip_html_tags
 )
+from iobox.markdown_converter import convert_thread_to_markdown
 
 
 class TestMarkdownConversion:
@@ -308,3 +309,74 @@ class TestHtmlToMarkdownConversion:
         # Should still work with content field
         assert "**content**" in markdown_content
         assert "This content is in" in markdown_content
+
+
+class TestConvertThreadToMarkdown:
+    """Tests for convert_thread_to_markdown()."""
+
+    def _make_message(self, msg_id, sender, date, body, labels=None):
+        return {
+            "message_id": msg_id,
+            "thread_id": "thread-123",
+            "subject": "Test Thread",
+            "from": sender,
+            "to": "me@example.com",
+            "date": date,
+            "labels": labels or ["INBOX"],
+            "body": body,
+            "content_type": "text/plain",
+        }
+
+    def test_convert_thread_to_markdown_frontmatter(self):
+        """YAML frontmatter contains thread_id, message_count, and subject."""
+        messages = [
+            self._make_message("msg-1", "a@example.com", "Mon, 01 Jan 2024 00:00:00 +0000", "Hello"),
+            self._make_message("msg-2", "b@example.com", "Tue, 02 Jan 2024 00:00:00 +0000", "Reply"),
+        ]
+        result = convert_thread_to_markdown(messages)
+
+        assert "thread_id: thread-123" in result
+        assert "message_count: 2" in result
+        assert "subject: Test Thread" in result
+
+    def test_convert_thread_to_markdown_sections(self):
+        """Each message becomes a section with a From/date header."""
+        messages = [
+            self._make_message("msg-1", "a@example.com", "Mon", "First message body"),
+            self._make_message("msg-2", "b@example.com", "Tue", "Second message body"),
+        ]
+        result = convert_thread_to_markdown(messages)
+
+        assert "## From: a@example.com — Mon" in result
+        assert "First message body" in result
+        assert "## From: b@example.com — Tue" in result
+        assert "Second message body" in result
+
+    def test_convert_thread_to_markdown_separator(self):
+        """Messages are separated by horizontal rules."""
+        messages = [
+            self._make_message("msg-1", "a@example.com", "Mon", "Msg 1"),
+            self._make_message("msg-2", "b@example.com", "Tue", "Msg 2"),
+        ]
+        result = convert_thread_to_markdown(messages)
+
+        assert "---" in result
+
+    def test_convert_thread_to_markdown_empty(self):
+        """Empty message list returns empty string."""
+        result = convert_thread_to_markdown([])
+        assert result == ""
+
+    def test_convert_thread_to_markdown_unique_labels(self):
+        """Labels from all messages are deduplicated in frontmatter."""
+        messages = [
+            self._make_message("msg-1", "a@example.com", "Mon", "Msg 1", labels=["INBOX", "UNREAD"]),
+            self._make_message("msg-2", "b@example.com", "Tue", "Msg 2", labels=["INBOX", "STARRED"]),
+        ]
+        result = convert_thread_to_markdown(messages)
+
+        # INBOX should appear exactly once
+        label_lines = [line for line in result.split('\n') if '- INBOX' in line]
+        assert len(label_lines) == 1
+        assert "- STARRED" in result
+        assert "- UNREAD" in result

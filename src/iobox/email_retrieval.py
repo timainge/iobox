@@ -126,6 +126,174 @@ def get_email_content(service, message_id: str = None, msg_id: str = None,
         raise
 
 
+def get_thread_content(service, thread_id: str,
+                       preferred_content_type: str = 'text/plain') -> List[Dict[str, Any]]:
+    """
+    Retrieve all messages in a Gmail thread.
+
+    Args:
+        service: Authenticated Gmail API service
+        thread_id: Thread ID to retrieve
+        preferred_content_type: Preferred content type ('text/plain' or 'text/html')
+
+    Returns:
+        list: List of email data dicts ordered chronologically by internalDate
+    """
+    try:
+        result = service.users().threads().get(
+            userId='me', id=thread_id, format='full'
+        ).execute()
+
+        messages = result.get('messages', [])
+        email_list = []
+
+        for message in messages:
+            payload = message['payload']
+            headers = payload['headers']
+
+            email_data = {
+                'message_id': message['id'],
+                'thread_id': message.get('threadId', thread_id),
+                'subject': next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject'),
+                'from': next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender'),
+                'to': next((h['value'] for h in headers if h['name'].lower() == 'to'), ''),
+                'date': next((h['value'] for h in headers if h['name'].lower() == 'date'), 'Unknown Date'),
+                'labels': message.get('labelIds', []),
+                'internal_date': int(message.get('internalDate', 0)),
+            }
+
+            content, content_type = _extract_content_from_payload(payload, preferred_content_type)
+            email_data['body'] = content
+            email_data['content_type'] = content_type
+
+            email_list.append(email_data)
+
+        # Sort chronologically
+        email_list.sort(key=lambda m: m['internal_date'])
+
+        logging.info(f"Retrieved {len(email_list)} messages for thread {thread_id}")
+        return email_list
+
+    except HttpError as error:
+        logging.error(f"Error retrieving thread {thread_id}: {error}")
+        raise
+    except Exception as e:
+        logging.error(f"Unexpected error retrieving thread: {e}")
+        raise
+
+
+def modify_message_labels(service, message_id: str, add_labels: Optional[List[str]] = None,
+                          remove_labels: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Modify labels on a Gmail message.
+
+    Args:
+        service: Authenticated Gmail API service
+        message_id: Message ID to modify
+        add_labels: List of label IDs to add
+        remove_labels: List of label IDs to remove
+
+    Returns:
+        dict: Modified message resource
+    """
+    body = {}
+    if add_labels:
+        body['addLabelIds'] = add_labels
+    if remove_labels:
+        body['removeLabelIds'] = remove_labels
+    return service.users().messages().modify(
+        userId='me', id=message_id, body=body
+    ).execute()
+
+
+def resolve_label_name(service, label_name: str) -> str:
+    """
+    Resolve a human-readable label name to a Gmail label ID.
+
+    System labels (INBOX, UNREAD, STARRED, SENT, DRAFT, SPAM, TRASH, IMPORTANT)
+    and CATEGORY_* labels pass through as uppercase. Custom labels are looked up
+    via the label map.
+
+    Args:
+        service: Authenticated Gmail API service
+        label_name: Human-readable label name or system label
+
+    Returns:
+        str: Gmail label ID
+
+    Raises:
+        ValueError: If the label name cannot be resolved
+    """
+    system_labels = {'INBOX', 'UNREAD', 'STARRED', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'IMPORTANT'}
+    if label_name.upper() in system_labels:
+        return label_name.upper()
+    if label_name.upper().startswith('CATEGORY_'):
+        return label_name.upper()
+    label_map = get_label_map(service)
+    name_to_id = {v: k for k, v in label_map.items()}
+    if label_name in name_to_id:
+        return name_to_id[label_name]
+    raise ValueError(f"Label '{label_name}' not found")
+
+
+def batch_modify_labels(service, message_ids: List[str], add_labels: Optional[List[str]] = None,
+                        remove_labels: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Apply label changes to multiple messages in one API call (up to 1000 per chunk).
+
+    Args:
+        service: Authenticated Gmail API service
+        message_ids: List of message IDs to modify
+        add_labels: List of label IDs to add
+        remove_labels: List of label IDs to remove
+
+    Returns:
+        dict: Result with modified_count
+    """
+    body: Dict[str, Any] = {}
+    if add_labels:
+        body['addLabelIds'] = add_labels
+    if remove_labels:
+        body['removeLabelIds'] = remove_labels
+
+    for i in range(0, len(message_ids), 1000):
+        chunk_body = dict(body)
+        chunk_body['ids'] = message_ids[i:i + 1000]
+        service.users().messages().batchModify(
+            userId='me', body=chunk_body
+        ).execute()
+
+    return {'modified_count': len(message_ids)}
+
+
+def trash_message(service, message_id: str) -> Dict[str, Any]:
+    """
+    Move a message to trash.
+
+    Args:
+        service: Authenticated Gmail API service
+        message_id: Message ID to trash
+
+    Returns:
+        dict: Updated message resource
+    """
+    return service.users().messages().trash(userId='me', id=message_id).execute()
+
+
+def untrash_message(service, message_id: str) -> Dict[str, Any]:
+    """
+    Remove a message from trash.
+
+    Args:
+        service: Authenticated Gmail API service
+        message_id: Message ID to untrash
+
+    Returns:
+        dict: Updated message resource
+    """
+    return service.users().messages().untrash(userId='me', id=message_id).execute()
+
+
 def _find_attachments(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Find attachments in message parts.

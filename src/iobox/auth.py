@@ -22,8 +22,8 @@ load_dotenv()
 
 # If modifying these scopes, delete the token.json file.
 SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.compose',
 ]
 
 # Get credential paths from environment variables or use defaults
@@ -54,7 +54,16 @@ def get_gmail_service():
     if os.path.exists(TOKEN_PATH):
         logger.info(f"Loading existing credentials from {TOKEN_PATH}")
         creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-    
+
+        # Detect scope mismatch and trigger re-auth if required scopes are missing
+        if creds and creds.valid and hasattr(creds, 'scopes') and creds.scopes:
+            required = set(SCOPES)
+            current = set(creds.scopes)
+            if not required.issubset(current):
+                logger.warning("Scope upgrade required. Re-authenticating...")
+                os.remove(TOKEN_PATH)
+                creds = None
+
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -82,6 +91,19 @@ def get_gmail_service():
     logger.info("Successfully authenticated with Gmail API")
     service = build('gmail', 'v1', credentials=creds)
     return service
+
+
+def get_gmail_profile(service) -> dict:
+    """
+    Get Gmail profile info including email address and mailbox stats.
+
+    Args:
+        service: Authenticated Gmail API service
+
+    Returns:
+        dict: Profile data with emailAddress, messagesTotal, threadsTotal
+    """
+    return service.users().getProfile(userId='me').execute()
 
 
 def check_auth_status():
