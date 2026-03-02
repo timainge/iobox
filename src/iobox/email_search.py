@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional
 from iobox.email_retrieval import (
     get_email_content,
     download_attachment,
+    get_label_map,
 )
 
 # Set up logging
@@ -21,7 +22,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 def search_emails(service, query: str, max_results: int = 100, days_back: int = 7,
-                 start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict[str, Any]]:
+                 start_date: Optional[str] = None, end_date: Optional[str] = None,
+                 label_map: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """
     Search for emails based on the given query and date range.
 
@@ -32,6 +34,9 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
         days_back: Number of days back to search (default: 7)
         start_date: Start date in YYYY/MM/DD format (overrides days_back if provided)
         end_date: End date in YYYY/MM/DD format (defaults to today if start_date is provided)
+        label_map: Optional mapping of label ID to display name. When provided,
+            label IDs in preview results are resolved to human-readable names.
+            If None, raw IDs are returned (backward compatible).
 
     Returns:
         list: List of message dictionaries with basic preview information
@@ -52,6 +57,7 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
 
         logging.info(f"Searching for emails with query: {full_query}")
 
+        # First page
         result = service.users().messages().list(
             userId='me',
             q=full_query,
@@ -59,6 +65,25 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
         ).execute()
 
         messages = result.get('messages', [])
+        page_token = result.get('nextPageToken')
+        page_num = 1
+
+        # Paginate while more results exist and we haven't reached max_results
+        while page_token and len(messages) < max_results:
+            page_num += 1
+            logging.info(f"Fetching page {page_num}...")
+            result = service.users().messages().list(
+                userId='me',
+                q=full_query,
+                maxResults=max_results - len(messages),
+                pageToken=page_token
+            ).execute()
+            batch = result.get('messages', [])
+            messages.extend(batch)
+            page_token = result.get('nextPageToken')
+
+        # Truncate to exactly max_results
+        messages = messages[:max_results]
 
         if not messages:
             logging.info(f"Found 0 matching emails")
@@ -79,6 +104,13 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
 
             headers = {h['name']: h['value'] for h in msg.get('payload', {}).get('headers', [])}
 
+            raw_labels = msg.get('labelIds', [])
+            resolved_labels = (
+                [label_map.get(lid, lid) for lid in raw_labels]
+                if label_map is not None
+                else raw_labels
+            )
+
             email_list.append({
                 'message_id': email_id,
                 'thread_id': msg.get('threadId', ''),
@@ -86,7 +118,7 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
                 'from': headers.get('From', 'Unknown'),
                 'date': headers.get('Date', ''),
                 'snippet': msg.get('snippet', ''),
-                'labels': msg.get('labelIds', [])
+                'labels': resolved_labels
             })
 
         return email_list

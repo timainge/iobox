@@ -7,14 +7,47 @@ from the Gmail API.
 
 import base64
 import logging
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from googleapiclient.errors import HttpError
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Module-level cache for label ID → display name mapping.
+# Populated lazily by get_label_map() and shared across calls within one session.
+_label_cache: Dict[str, str] = {}
+
+
+def get_label_map(service) -> Dict[str, str]:
+    """
+    Fetch the Gmail label ID-to-name mapping for the authenticated user.
+
+    Results are cached at module level so the API is called at most once per
+    process invocation. If the API call fails, an empty dict is returned so
+    callers can gracefully fall back to raw label IDs.
+
+    Args:
+        service: Authenticated Gmail API service
+
+    Returns:
+        dict: Mapping of label ID → display name (e.g. {"Label_12345": "Newsletter"})
+    """
+    global _label_cache
+    if _label_cache:
+        return _label_cache
+    try:
+        response = service.users().labels().list(userId='me').execute()
+        labels = response.get('labels', [])
+        _label_cache = {label['id']: label['name'] for label in labels}
+        logging.info(f"Fetched label map with {len(_label_cache)} entries")
+        return _label_cache
+    except Exception as e:
+        logging.warning(f"Failed to fetch label map, returning empty dict: {e}")
+        return {}
+
 
 def get_email_content(service, message_id: str = None, msg_id: str = None,
-                      preferred_content_type: str = 'text/plain') -> Dict[str, Any]:
+                      preferred_content_type: str = 'text/plain',
+                      label_map: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Retrieve the full content of an email by its ID.
 
@@ -23,6 +56,11 @@ def get_email_content(service, message_id: str = None, msg_id: str = None,
         message_id: Email message ID (new parameter name)
         msg_id: Email message ID (legacy parameter name)
         preferred_content_type: Preferred content type ('text/plain' or 'text/html')
+        label_map: Optional mapping of label ID to display name. When provided,
+            raw label IDs in the returned data are resolved to human-readable
+            names. System labels (INBOX, UNREAD, etc.) pass through unchanged
+            when the map contains their IDs. If None, raw IDs are returned
+            (backward compatible).
 
     Returns:
         dict: Email data including subject, sender, date, content, and metadata
@@ -43,12 +81,19 @@ def get_email_content(service, message_id: str = None, msg_id: str = None,
         payload = message['payload']
         headers = payload['headers']
 
+        raw_labels = message.get('labelIds', [])
+        resolved_labels = (
+            [label_map.get(lid, lid) for lid in raw_labels]
+            if label_map is not None
+            else raw_labels
+        )
+
         email_data = {
             'message_id': email_id,
             'subject': next((header['value'] for header in headers if header['name'].lower() == 'subject'), 'No Subject'),
             'from': next((header['value'] for header in headers if header['name'].lower() == 'from'), 'Unknown Sender'),
             'date': next((header['value'] for header in headers if header['name'].lower() == 'date'), 'Unknown Date'),
-            'labels': message.get('labelIds', []),
+            'labels': resolved_labels,
             'snippet': message.get('snippet', ''),
             'thread_id': message.get('threadId', '')
         }

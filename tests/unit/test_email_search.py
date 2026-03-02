@@ -339,12 +339,141 @@ class TestEmailSearch:
         """Test the date format validation function."""
         # Test with valid date format
         assert validate_date_format("2025/04/01") is True
-        
+
         # Test with invalid formats
         assert validate_date_format("2025-04-01") is False  # Wrong separator
         assert validate_date_format("01/04/2025") is False  # Wrong order
         assert validate_date_format("2025/4/1") is False    # Missing leading zeros
         assert validate_date_format("not-a-date") is False  # Not a date at all
+
+    # ------------------------------------------------------------------
+    # Pagination tests
+    # ------------------------------------------------------------------
+
+    def _make_msg_get_side_effect(self, msg_ids):
+        """Return a side_effect callable that yields metadata mocks by ID."""
+        def side_effect(userId, id, format, metadataHeaders=None):
+            return MagicMock(execute=MagicMock(return_value={
+                "id": id,
+                "threadId": f"thread-{id}",
+                "snippet": f"Snippet for {id}",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": f"Subject {id}"},
+                        {"name": "From", "value": "sender@example.com"},
+                        {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"}
+                    ]
+                }
+            }))
+        return side_effect
+
+    def test_search_pagination_two_pages(self, mock_gmail_service):
+        """Both pages are fetched and their messages combined when nextPageToken present."""
+        page1_response = {
+            "messages": [
+                {"id": "msg-1", "threadId": "thread-1"},
+                {"id": "msg-2", "threadId": "thread-2"},
+            ],
+            "nextPageToken": "token-page-2",
+            "resultSizeEstimate": 4
+        }
+        page2_response = {
+            "messages": [
+                {"id": "msg-3", "threadId": "thread-3"},
+                {"id": "msg-4", "threadId": "thread-4"},
+            ],
+            "resultSizeEstimate": 4
+        }
+
+        mock_list1 = MagicMock()
+        mock_list1.execute.return_value = page1_response
+        mock_list2 = MagicMock()
+        mock_list2.execute.return_value = page2_response
+
+        list_mock = MagicMock(side_effect=[mock_list1, mock_list2])
+        mock_gmail_service.users().messages().list = list_mock
+        mock_gmail_service.users().messages().get = MagicMock(
+            side_effect=self._make_msg_get_side_effect(["msg-1", "msg-2", "msg-3", "msg-4"])
+        )
+
+        results = search_emails(
+            service=mock_gmail_service,
+            query="from:example.com",
+            max_results=10
+        )
+
+        assert len(results) == 4
+        assert results[0]["message_id"] == "msg-1"
+        assert results[3]["message_id"] == "msg-4"
+        assert list_mock.call_count == 2
+
+    def test_search_pagination_truncation(self, mock_gmail_service):
+        """Total results are truncated to exactly max_results even if pages return more."""
+        page1_response = {
+            "messages": [
+                {"id": "msg-1", "threadId": "thread-1"},
+                {"id": "msg-2", "threadId": "thread-2"},
+            ],
+            "nextPageToken": "token-page-2",
+            "resultSizeEstimate": 4
+        }
+        page2_response = {
+            "messages": [
+                {"id": "msg-3", "threadId": "thread-3"},
+                {"id": "msg-4", "threadId": "thread-4"},
+            ],
+            "resultSizeEstimate": 4
+        }
+
+        mock_list1 = MagicMock()
+        mock_list1.execute.return_value = page1_response
+        mock_list2 = MagicMock()
+        mock_list2.execute.return_value = page2_response
+
+        list_mock = MagicMock(side_effect=[mock_list1, mock_list2])
+        mock_gmail_service.users().messages().list = list_mock
+        mock_gmail_service.users().messages().get = MagicMock(
+            side_effect=self._make_msg_get_side_effect(["msg-1", "msg-2", "msg-3"])
+        )
+
+        results = search_emails(
+            service=mock_gmail_service,
+            query="from:example.com",
+            max_results=3  # Should truncate to exactly 3
+        )
+
+        assert len(results) == 3
+        assert results[0]["message_id"] == "msg-1"
+        assert results[2]["message_id"] == "msg-3"
+
+    def test_search_pagination_single_page(self, mock_gmail_service):
+        """Single-page behavior is unchanged when no nextPageToken is present."""
+        single_page_response = {
+            "messages": [
+                {"id": "msg-1", "threadId": "thread-1"},
+                {"id": "msg-2", "threadId": "thread-2"},
+            ],
+            "resultSizeEstimate": 2
+            # No nextPageToken
+        }
+
+        mock_list = MagicMock()
+        mock_list.execute.return_value = single_page_response
+        mock_gmail_service.users().messages().list = MagicMock(return_value=mock_list)
+        mock_gmail_service.users().messages().get = MagicMock(
+            side_effect=self._make_msg_get_side_effect(["msg-1", "msg-2"])
+        )
+
+        results = search_emails(
+            service=mock_gmail_service,
+            query="from:example.com",
+            max_results=10
+        )
+
+        assert len(results) == 2
+        assert results[0]["message_id"] == "msg-1"
+        assert results[1]["message_id"] == "msg-2"
+        mock_gmail_service.users().messages().list.assert_called_once()
 
 
 class TestEmailContent:
