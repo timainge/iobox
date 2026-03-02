@@ -24,6 +24,7 @@ load_dotenv()
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.compose',
 ]
 
 # Get credential paths from environment variables or use defaults

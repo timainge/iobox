@@ -7,8 +7,12 @@ via the Gmail API.
 
 import base64
 import logging
+import mimetypes
 from email.mime.text import MIMEText
-from typing import Dict, Any, Optional
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+from typing import Dict, Any, Optional, List
 
 from googleapiclient.errors import HttpError
 
@@ -20,22 +24,60 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 def compose_message(to: str, subject: str, body: str,
                     from_addr: Optional[str] = None,
                     cc: Optional[str] = None,
-                    bcc: Optional[str] = None) -> Dict[str, str]:
+                    bcc: Optional[str] = None,
+                    content_type: str = 'plain',
+                    attachments: Optional[List[str]] = None) -> Dict[str, str]:
     """
     Compose an RFC 2822 email message encoded for the Gmail API.
 
     Args:
         to: Recipient email address
         subject: Email subject line
-        body: Plain-text email body
+        body: Email body text
         from_addr: Sender email address (optional, Gmail uses authenticated user by default)
         cc: CC recipients (comma-separated)
         bcc: BCC recipients (comma-separated)
+        content_type: 'plain' for plain text (default) or 'html' for HTML
+        attachments: Optional list of file paths to attach
 
     Returns:
         dict: Message body with 'raw' base64url-encoded RFC 2822 payload
     """
-    message = MIMEText(body)
+    text_part = MIMEText(body, content_type)
+
+    if attachments:
+        if content_type == 'html':
+            # nested multipart: mixed outer, alternative inner
+            outer = MIMEMultipart('mixed')
+            inner = MIMEMultipart('alternative')
+            inner.attach(MIMEText(body, 'plain'))
+            inner.attach(MIMEText(body, 'html'))
+            outer.attach(inner)
+        else:
+            outer = MIMEMultipart('mixed')
+            outer.attach(text_part)
+
+        for file_path in attachments:
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if mime_type is None:
+                mime_type = 'application/octet-stream'
+            main_type, sub_type = mime_type.split('/', 1)
+
+            with open(file_path, 'rb') as f:
+                file_data = f.read()
+
+            part = MIMEBase(main_type, sub_type)
+            part.set_payload(file_data)
+            encoders.encode_base64(part)
+            import os
+            filename = os.path.basename(file_path)
+            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+            outer.attach(part)
+
+        message = outer
+    else:
+        message = text_part
+
     message['to'] = to
     message['subject'] = subject
 
@@ -137,3 +179,99 @@ def forward_email(service, message_id: str, to: str,
         additional_text=additional_text,
     )
     return send_message(service, message)
+
+
+def create_draft(service, message: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Create a Gmail draft.
+
+    Args:
+        service: Authenticated Gmail API service
+        message: Message body dict with 'raw' key
+
+    Returns:
+        dict: The draft resource dict from the Gmail API
+    """
+    draft = service.users().drafts().create(
+        userId='me', body={'message': message}
+    ).execute()
+    return draft
+
+
+def list_drafts(service, max_results: int = 10) -> List[Dict[str, Any]]:
+    """
+    List Gmail drafts.
+
+    Args:
+        service: Authenticated Gmail API service
+        max_results: Maximum number of drafts to return
+
+    Returns:
+        list: List of dicts with id, subject, and snippet for each draft
+    """
+    result = service.users().drafts().list(
+        userId='me', maxResults=max_results
+    ).execute()
+    drafts = result.get('drafts', [])
+    draft_list = []
+    for d in drafts:
+        draft_data = service.users().drafts().get(
+            userId='me', id=d['id'], format='metadata'
+        ).execute()
+        msg = draft_data.get('message', {})
+        headers = {h['name']: h['value'] for h in msg.get('payload', {}).get('headers', [])}
+        draft_list.append({
+            'id': d['id'],
+            'subject': headers.get('Subject', '(no subject)'),
+            'snippet': msg.get('snippet', ''),
+        })
+    return draft_list
+
+
+def get_draft(service, draft_id: str) -> Dict[str, Any]:
+    """
+    Get a specific draft by ID.
+
+    Args:
+        service: Authenticated Gmail API service
+        draft_id: The draft ID to retrieve
+
+    Returns:
+        dict: The full draft resource dict from the Gmail API
+    """
+    return service.users().drafts().get(
+        userId='me', id=draft_id, format='full'
+    ).execute()
+
+
+def send_draft(service, draft_id: str) -> Dict[str, Any]:
+    """
+    Send an existing draft.
+
+    Args:
+        service: Authenticated Gmail API service
+        draft_id: The draft ID to send
+
+    Returns:
+        dict: Gmail API send response
+    """
+    return service.users().drafts().send(
+        userId='me', body={'id': draft_id}
+    ).execute()
+
+
+def delete_draft(service, draft_id: str) -> Dict[str, Any]:
+    """
+    Permanently delete a draft.
+
+    Args:
+        service: Authenticated Gmail API service
+        draft_id: The draft ID to delete
+
+    Returns:
+        dict: Status dict with 'status' and 'draft_id' keys
+    """
+    service.users().drafts().delete(
+        userId='me', id=draft_id
+    ).execute()
+    return {'status': 'deleted', 'draft_id': draft_id}

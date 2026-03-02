@@ -220,7 +220,7 @@ class TestCliCommands:
             assert "Email sent successfully" in result.stdout
             mock_compose.assert_called_once_with(
                 to="bob@example.com", subject="Hello", body="Hi there",
-                cc=None, bcc=None
+                cc=None, bcc=None, content_type='plain', attachments=None
             )
 
     def test_send_with_body_file(self, tmp_path):
@@ -244,7 +244,29 @@ class TestCliCommands:
             assert "Email sent successfully" in result.stdout
             mock_compose.assert_called_once_with(
                 to="bob@example.com", subject="Hello", body="File body content",
-                cc=None, bcc=None
+                cc=None, bcc=None, content_type='plain', attachments=None
+            )
+
+    def test_send_html_flag(self):
+        """Test send with --html flag sets content_type to html."""
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
+             patch("iobox.cli.send_message", return_value={"id": "sent-3"}):
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "send",
+                "--to", "bob@example.com",
+                "--subject", "Hello HTML",
+                "--body", "<b>Hi</b>",
+                "--html",
+            ])
+
+            assert result.exit_code == 0
+            assert "Email sent successfully" in result.stdout
+            mock_compose.assert_called_once_with(
+                to="bob@example.com", subject="Hello HTML", body="<b>Hi</b>",
+                cc=None, bcc=None, content_type='html', attachments=None
             )
 
     def test_send_no_body(self):
@@ -259,3 +281,85 @@ class TestCliCommands:
             ])
 
             assert result.exit_code == 1
+
+
+class TestDraftCommands:
+    """Test cases for draft CLI commands."""
+
+    def test_draft_create_command(self):
+        """Test draft-create command creates a draft."""
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
+             patch("iobox.cli.create_draft", return_value={"id": "draft-1"}) as mock_create:
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "draft-create",
+                "--to", "bob@example.com",
+                "--subject", "Draft Subject",
+                "--body", "Draft body",
+            ])
+
+            assert result.exit_code == 0
+            assert "Draft created successfully" in result.stdout
+            assert "draft-1" in result.stdout
+            mock_create.assert_called_once()
+
+    def test_draft_list_command(self):
+        """Test draft-list command lists drafts."""
+        mock_drafts = [
+            {"id": "draft-1", "subject": "First Draft", "snippet": "First snippet"},
+            {"id": "draft-2", "subject": "Second Draft", "snippet": "Second snippet"},
+        ]
+
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.list_drafts", return_value=mock_drafts):
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, ["draft-list"])
+
+            assert result.exit_code == 0
+            assert "draft-1" in result.stdout
+            assert "First Draft" in result.stdout
+            assert "draft-2" in result.stdout
+
+    def test_draft_list_empty(self):
+        """Test draft-list when no drafts exist."""
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.list_drafts", return_value=[]):
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, ["draft-list"])
+
+            assert result.exit_code == 0
+            assert "No drafts found" in result.stdout
+
+    def test_draft_send_command(self):
+        """Test draft-send command sends a draft."""
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.send_draft", return_value={"id": "sent-from-draft"}) as mock_send:
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "draft-send",
+                "--draft-id", "draft-1",
+            ])
+
+            assert result.exit_code == 0
+            assert "Draft sent successfully" in result.stdout
+            mock_send.assert_called_once_with(mock_service.return_value, "draft-1")
+
+    def test_draft_delete_command(self):
+        """Test draft-delete command deletes a draft."""
+        with patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.delete_draft", return_value={"status": "deleted", "draft_id": "draft-1"}) as mock_delete:
+            mock_service.return_value = MagicMock()
+
+            result = runner.invoke(app, [
+                "draft-delete",
+                "--draft-id", "draft-1",
+            ])
+
+            assert result.exit_code == 0
+            assert "Draft deleted successfully" in result.stdout
+            mock_delete.assert_called_once_with(mock_service.return_value, "draft-1")

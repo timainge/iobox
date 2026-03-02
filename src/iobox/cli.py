@@ -24,6 +24,10 @@ from iobox.email_sender import (
     compose_forward_message,
     send_message,
     forward_email,
+    create_draft,
+    list_drafts,
+    send_draft,
+    delete_draft,
 )
 
 # Version
@@ -440,6 +444,12 @@ def send(
     bcc: str = typer.Option(
         None, "--bcc", help="BCC recipients (comma-separated)"
     ),
+    html: bool = typer.Option(
+        False, "--html", help="Send body as HTML content"
+    ),
+    attach: Optional[List[str]] = typer.Option(
+        None, "--attach", help="File path to attach (can be specified multiple times)"
+    ),
 ):
     """
     Compose and send an email.
@@ -451,21 +461,163 @@ def send(
             typer.echo("Error: You must specify either --body (-b) or --body-file (-f)")
             raise typer.Exit(code=1)
 
+        content_type = 'plain'
         if body_file is not None:
             file_path = Path(body_file)
             if not file_path.exists():
                 typer.echo(f"Error: File not found: {body_file}")
                 raise typer.Exit(code=1)
             body = file_path.read_text(encoding='utf-8')
+            if file_path.suffix.lower() == '.html':
+                content_type = 'html'
+
+        if html:
+            content_type = 'html'
+
+        if attach:
+            for file_path in attach:
+                if not Path(file_path).exists():
+                    typer.echo(f"Error: Attachment file not found: {file_path}")
+                    raise typer.Exit(code=1)
 
         service = get_gmail_service()
-        message = compose_message(to=to, subject=subject, body=body, cc=cc, bcc=bcc)
+        message = compose_message(
+            to=to, subject=subject, body=body, cc=cc, bcc=bcc,
+            content_type=content_type, attachments=attach or None
+        )
         result = send_message(service, message)
 
         typer.echo(f"Email sent successfully. Message ID: {result.get('id', 'unknown')}")
 
     except Exception as e:
         typer.echo(f"Error sending email: {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="draft-create")
+def draft_create(
+    to: str = typer.Option(
+        ..., "--to", "-t", help="Recipient email address"
+    ),
+    subject: str = typer.Option(
+        ..., "--subject", "-s", help="Email subject line"
+    ),
+    body: str = typer.Option(
+        None, "--body", "-b", help="Email body text (inline)"
+    ),
+    body_file: str = typer.Option(
+        None, "--body-file", "-f", help="Path to file containing email body"
+    ),
+    cc: str = typer.Option(
+        None, "--cc", help="CC recipients (comma-separated)"
+    ),
+    bcc: str = typer.Option(
+        None, "--bcc", help="BCC recipients (comma-separated)"
+    ),
+    html: bool = typer.Option(
+        False, "--html", help="Use HTML content type"
+    ),
+    attach: Optional[List[str]] = typer.Option(
+        None, "--attach", help="File path to attach (can be specified multiple times)"
+    ),
+):
+    """Create an email draft without sending it."""
+    try:
+        if body is None and body_file is None:
+            typer.echo("Error: You must specify either --body (-b) or --body-file (-f)")
+            raise typer.Exit(code=1)
+
+        content_type = 'plain'
+        if body_file is not None:
+            file_path = Path(body_file)
+            if not file_path.exists():
+                typer.echo(f"Error: File not found: {body_file}")
+                raise typer.Exit(code=1)
+            body = file_path.read_text(encoding='utf-8')
+            if file_path.suffix.lower() == '.html':
+                content_type = 'html'
+
+        if html:
+            content_type = 'html'
+
+        if attach:
+            for file_path in attach:
+                if not Path(file_path).exists():
+                    typer.echo(f"Error: Attachment file not found: {file_path}")
+                    raise typer.Exit(code=1)
+
+        service = get_gmail_service()
+        message = compose_message(
+            to=to, subject=subject, body=body, cc=cc, bcc=bcc,
+            content_type=content_type, attachments=attach or None
+        )
+        result = create_draft(service, message)
+
+        typer.echo(f"Draft created successfully. Draft ID: {result.get('id', 'unknown')}")
+
+    except Exception as e:
+        typer.echo(f"Error creating draft: {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="draft-list")
+def draft_list(
+    max_results: int = typer.Option(
+        10, "--max", "-m", help="Maximum number of drafts to list"
+    ),
+):
+    """List Gmail drafts."""
+    try:
+        service = get_gmail_service()
+        drafts = list_drafts(service, max_results=max_results)
+
+        if not drafts:
+            typer.echo("No drafts found.")
+            return
+
+        typer.echo(f"Found {len(drafts)} draft(s):")
+        for draft in drafts:
+            typer.echo(f"\nID: {draft['id']}")
+            typer.echo(f"  Subject: {draft['subject']}")
+            if draft['snippet']:
+                typer.echo(f"  Preview: {draft['snippet'][:70]}")
+
+    except Exception as e:
+        typer.echo(f"Error listing drafts: {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="draft-send")
+def draft_send(
+    draft_id: str = typer.Option(
+        ..., "--draft-id", help="ID of the draft to send"
+    ),
+):
+    """Send an existing draft."""
+    try:
+        service = get_gmail_service()
+        result = send_draft(service, draft_id)
+        typer.echo(f"Draft sent successfully. Message ID: {result.get('id', 'unknown')}")
+
+    except Exception as e:
+        typer.echo(f"Error sending draft: {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="draft-delete")
+def draft_delete(
+    draft_id: str = typer.Option(
+        ..., "--draft-id", help="ID of the draft to delete"
+    ),
+):
+    """Permanently delete a draft."""
+    try:
+        service = get_gmail_service()
+        result = delete_draft(service, draft_id)
+        typer.echo(f"Draft deleted successfully. Draft ID: {result.get('draft_id', draft_id)}")
+
+    except Exception as e:
+        typer.echo(f"Error deleting draft: {e}")
         raise typer.Exit(code=1)
 
 
