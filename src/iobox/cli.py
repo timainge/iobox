@@ -827,14 +827,15 @@ def trash(
             raise typer.Exit(code=1)
 
         service = get_gmail_service()
-        action = "Restore" if untrash else "Trash"
+        past_tense = "Restored" if untrash else "Trashed"
+        verb = "restore" if untrash else "trash"
 
         if message_id is not None:
             if untrash:
                 untrash_message(service, message_id)
             else:
                 trash_message(service, message_id)
-            typer.echo(f"{action}ed message {message_id}")
+            typer.echo(f"{past_tense} message {message_id}")
         else:
             label_map = get_label_map(service)
             results = search_emails(service, query, max_results, days, label_map=label_map)
@@ -843,7 +844,7 @@ def trash(
                 return
 
             confirmed = typer.confirm(
-                f"Are you sure you want to {action.lower()} {len(results)} message(s)?"
+                f"Are you sure you want to {verb} {len(results)} message(s)?"
             )
             if not confirmed:
                 typer.echo("Aborted.")
@@ -856,7 +857,7 @@ def trash(
                 else:
                     trash_message(service, mid)
 
-            typer.echo(f"{action}ed {len(results)} message(s)")
+            typer.echo(f"{past_tense} {len(results)} message(s)")
 
     except typer.Exit:
         raise
