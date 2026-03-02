@@ -12,6 +12,10 @@ from iobox.email_sender import (
     compose_forward_message,
     send_message,
     forward_email,
+    create_draft,
+    list_drafts,
+    send_draft,
+    delete_draft,
 )
 
 
@@ -203,3 +207,175 @@ class TestForwardEmail:
         raw_bytes = base64.urlsafe_b64decode(raw)
         msg = message_from_bytes(raw_bytes)
         assert "Please review" in msg.get_payload()
+
+
+class TestComposeHtmlMessage:
+    """Test cases for HTML email composition."""
+
+    def test_compose_html_message(self):
+        result = compose_message(
+            to="bob@example.com",
+            subject="Hello HTML",
+            body="<b>Hi there</b>",
+            content_type='html',
+        )
+
+        assert "raw" in result
+        raw_bytes = base64.urlsafe_b64decode(result["raw"])
+        msg = message_from_bytes(raw_bytes)
+
+        assert msg["to"] == "bob@example.com"
+        assert msg["subject"] == "Hello HTML"
+        assert msg.get_content_type() == "text/html"
+
+    def test_compose_plain_is_default(self):
+        result = compose_message(to="bob@example.com", subject="Test", body="plain body")
+        raw_bytes = base64.urlsafe_b64decode(result["raw"])
+        msg = message_from_bytes(raw_bytes)
+        assert msg.get_content_type() == "text/plain"
+
+
+class TestComposeWithAttachment:
+    """Test cases for email composition with attachments."""
+
+    def test_compose_with_attachment(self, tmp_path):
+        attach_file = tmp_path / "test.txt"
+        attach_file.write_text("attachment content")
+
+        result = compose_message(
+            to="bob@example.com",
+            subject="With Attachment",
+            body="See attached",
+            attachments=[str(attach_file)],
+        )
+
+        assert "raw" in result
+        raw_bytes = base64.urlsafe_b64decode(result["raw"])
+        msg = message_from_bytes(raw_bytes)
+
+        assert msg.get_content_type() == "multipart/mixed"
+        payloads = msg.get_payload()
+        assert len(payloads) == 2
+        # First part is text body
+        assert payloads[0].get_content_type() == "text/plain"
+        # Second part is the attachment
+        assert payloads[1].get_filename() == "test.txt"
+
+    def test_compose_html_with_attachment(self, tmp_path):
+        attach_file = tmp_path / "report.pdf"
+        attach_file.write_bytes(b"%PDF-fake-content")
+
+        result = compose_message(
+            to="bob@example.com",
+            subject="HTML with Attachment",
+            body="<p>See attached</p>",
+            content_type='html',
+            attachments=[str(attach_file)],
+        )
+
+        assert "raw" in result
+        raw_bytes = base64.urlsafe_b64decode(result["raw"])
+        msg = message_from_bytes(raw_bytes)
+
+        # Outer message is mixed
+        assert msg.get_content_type() == "multipart/mixed"
+        payloads = msg.get_payload()
+        assert len(payloads) == 2
+        # First part is multipart/alternative
+        assert payloads[0].get_content_type() == "multipart/alternative"
+        # Second part is the attachment
+        assert payloads[1].get_filename() == "report.pdf"
+
+
+class TestDraftFunctions:
+    """Test cases for draft management functions."""
+
+    def test_create_draft(self):
+        mock_service = MagicMock()
+        expected = {"id": "draft-1", "message": {"id": "msg-1"}}
+        mock_service.users().drafts().create.return_value.execute.return_value = expected
+
+        message = {"raw": "dGVzdA=="}
+        result = create_draft(mock_service, message)
+
+        mock_service.users().drafts().create.assert_called_once_with(
+            userId='me', body={'message': message}
+        )
+        assert result["id"] == "draft-1"
+
+    def test_list_drafts(self):
+        mock_service = MagicMock()
+
+        # list returns draft stubs
+        mock_service.users().drafts().list.return_value.execute.return_value = {
+            'drafts': [{'id': 'draft-1'}, {'id': 'draft-2'}]
+        }
+
+        # get returns draft detail for each
+        def mock_get_execute():
+            return MagicMock(execute=MagicMock(side_effect=[
+                {
+                    'message': {
+                        'snippet': 'First draft snippet',
+                        'payload': {
+                            'headers': [{'name': 'Subject', 'value': 'First Draft'}]
+                        }
+                    }
+                },
+                {
+                    'message': {
+                        'snippet': 'Second draft snippet',
+                        'payload': {
+                            'headers': [{'name': 'Subject', 'value': 'Second Draft'}]
+                        }
+                    }
+                },
+            ]))
+
+        draft_get_results = [
+            {
+                'message': {
+                    'snippet': 'First draft snippet',
+                    'payload': {'headers': [{'name': 'Subject', 'value': 'First Draft'}]}
+                }
+            },
+            {
+                'message': {
+                    'snippet': 'Second draft snippet',
+                    'payload': {'headers': [{'name': 'Subject', 'value': 'Second Draft'}]}
+                }
+            },
+        ]
+        mock_service.users().drafts().get.return_value.execute.side_effect = draft_get_results
+
+        result = list_drafts(mock_service, max_results=10)
+
+        assert len(result) == 2
+        assert result[0]['id'] == 'draft-1'
+        assert result[0]['subject'] == 'First Draft'
+        assert result[0]['snippet'] == 'First draft snippet'
+        assert result[1]['id'] == 'draft-2'
+        assert result[1]['subject'] == 'Second Draft'
+
+    def test_send_draft(self):
+        mock_service = MagicMock()
+        expected = {"id": "sent-msg-1", "labelIds": ["SENT"]}
+        mock_service.users().drafts().send.return_value.execute.return_value = expected
+
+        result = send_draft(mock_service, "draft-1")
+
+        mock_service.users().drafts().send.assert_called_once_with(
+            userId='me', body={'id': 'draft-1'}
+        )
+        assert result["id"] == "sent-msg-1"
+
+    def test_delete_draft(self):
+        mock_service = MagicMock()
+        mock_service.users().drafts().delete.return_value.execute.return_value = None
+
+        result = delete_draft(mock_service, "draft-1")
+
+        mock_service.users().drafts().delete.assert_called_once_with(
+            userId='me', id='draft-1'
+        )
+        assert result == {'status': 'deleted', 'draft_id': 'draft-1'}
