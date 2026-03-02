@@ -26,8 +26,7 @@ from iobox.email_sender import (
     forward_email,
 )
 
-# Version
-__version__ = "0.1.0"
+from iobox import __version__
 
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
