@@ -43,3 +43,10 @@ ENV/
 .DS_Store
 Thumbs.db
 usage.md
+
+# Coverage
+.coverage
+htmlcov/
+
+# Fan-out scratchpad
+.fan-out-scratchpad
