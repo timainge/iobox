@@ -465,3 +465,140 @@ class TestNewCliFeatures:
         assert result.exit_code == 0
         mock_trash.assert_not_called()
         assert "Aborted" in result.stdout
+
+
+class TestSyncFlag:
+    """Tests for the --sync flag on the save command."""
+
+    def _mock_email_data(self, msg_id="m1"):
+        return {
+            "message_id": msg_id,
+            "subject": "Test Subject",
+            "content": "body",
+            "content_type": "text/plain",
+            "from": "a@b.com",
+            "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+            "labels": [],
+            "attachments": [],
+            "body": "body",
+            "snippet": "snip",
+            "thread_id": "thread-1",
+            "html_content": "",
+            "plain_content": "body",
+        }
+
+    def test_save_with_sync_first_run(self, tmp_path):
+        """First --sync run: no history state, does full search, saves state."""
+        mock_email = self._mock_email_data("m1")
+        mock_profile = {"historyId": "hist-100"}
+
+        with patch("iobox.cli.get_gmail_service") as mock_svc, \
+             patch("iobox.cli.get_label_map", return_value={}), \
+             patch("iobox.cli.SyncState") as MockSyncState, \
+             patch("iobox.cli.get_new_messages") as mock_gnm, \
+             patch("iobox.cli.search_emails", return_value=[{"message_id": "m1"}]), \
+             patch("iobox.cli.batch_get_emails", return_value=[mock_email]), \
+             patch("iobox.cli.convert_email_to_markdown", return_value="# md"), \
+             patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m1.md")), \
+             patch("iobox.cli.create_output_directory", return_value=str(tmp_path)), \
+             patch("iobox.cli.check_for_duplicates", return_value=[]):
+
+            mock_svc_instance = MagicMock()
+            mock_svc.return_value = mock_svc_instance
+            mock_svc_instance.users().getProfile.return_value = MagicMock(
+                execute=MagicMock(return_value=mock_profile)
+            )
+
+            # Simulate no existing state file
+            mock_state = MagicMock()
+            mock_state.load.return_value = False
+            mock_state.last_history_id = None
+            MockSyncState.return_value = mock_state
+
+            result = runner.invoke(app, [
+                "save", "--query", "from:test@example.com",
+                "--output-dir", str(tmp_path), "--sync"
+            ])
+
+        assert result.exit_code == 0
+        # Should NOT call get_new_messages on first run (no history)
+        mock_gnm.assert_not_called()
+        # Should save state after completion
+        mock_state.update.assert_called_once()
+
+    def test_save_with_sync_incremental(self, tmp_path):
+        """Subsequent --sync run: uses history to get only new message IDs."""
+        mock_email = self._mock_email_data("m-new")
+        mock_profile = {"historyId": "hist-200"}
+
+        with patch("iobox.cli.get_gmail_service") as mock_svc, \
+             patch("iobox.cli.get_label_map", return_value={}), \
+             patch("iobox.cli.SyncState") as MockSyncState, \
+             patch("iobox.cli.get_new_messages", return_value=["m-new"]) as mock_gnm, \
+             patch("iobox.cli.search_emails") as mock_search, \
+             patch("iobox.cli.batch_get_emails", return_value=[mock_email]), \
+             patch("iobox.cli.convert_email_to_markdown", return_value="# md"), \
+             patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-new.md")), \
+             patch("iobox.cli.create_output_directory", return_value=str(tmp_path)), \
+             patch("iobox.cli.check_for_duplicates", return_value=[]):
+
+            mock_svc_instance = MagicMock()
+            mock_svc.return_value = mock_svc_instance
+            mock_svc_instance.users().getProfile.return_value = MagicMock(
+                execute=MagicMock(return_value=mock_profile)
+            )
+
+            mock_state = MagicMock()
+            mock_state.load.return_value = True
+            mock_state.last_history_id = "hist-100"
+            MockSyncState.return_value = mock_state
+
+            result = runner.invoke(app, [
+                "save", "--query", "from:test@example.com",
+                "--output-dir", str(tmp_path), "--sync"
+            ])
+
+        assert result.exit_code == 0
+        # Incremental: get_new_messages should be called with the saved history ID
+        mock_gnm.assert_called_once_with(mock_svc_instance, "hist-100")
+        # search_emails should NOT be called (we got IDs from history)
+        mock_search.assert_not_called()
+        # State should be updated
+        mock_state.update.assert_called_once()
+
+    def test_save_with_sync_history_expired_falls_back(self, tmp_path):
+        """When get_new_messages returns None, falls back to full search."""
+        mock_email = self._mock_email_data("m-full")
+        mock_profile = {"historyId": "hist-300"}
+
+        with patch("iobox.cli.get_gmail_service") as mock_svc, \
+             patch("iobox.cli.get_label_map", return_value={}), \
+             patch("iobox.cli.SyncState") as MockSyncState, \
+             patch("iobox.cli.get_new_messages", return_value=None), \
+             patch("iobox.cli.search_emails", return_value=[{"message_id": "m-full"}]) as mock_search, \
+             patch("iobox.cli.batch_get_emails", return_value=[mock_email]), \
+             patch("iobox.cli.convert_email_to_markdown", return_value="# md"), \
+             patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-full.md")), \
+             patch("iobox.cli.create_output_directory", return_value=str(tmp_path)), \
+             patch("iobox.cli.check_for_duplicates", return_value=[]):
+
+            mock_svc_instance = MagicMock()
+            mock_svc.return_value = mock_svc_instance
+            mock_svc_instance.users().getProfile.return_value = MagicMock(
+                execute=MagicMock(return_value=mock_profile)
+            )
+
+            mock_state = MagicMock()
+            mock_state.load.return_value = True
+            mock_state.last_history_id = "hist-old"
+            MockSyncState.return_value = mock_state
+
+            result = runner.invoke(app, [
+                "save", "--query", "from:test@example.com",
+                "--output-dir", str(tmp_path), "--sync"
+            ])
+
+        assert result.exit_code == 0
+        # Falls back to full search
+        mock_search.assert_called_once()
+        assert "Falling back" in result.stdout or result.exit_code == 0

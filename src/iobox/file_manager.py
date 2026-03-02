@@ -4,9 +4,11 @@ File Management Module.
 This module handles file operations including duplicate prevention.
 """
 
+import json
 import os
 import logging
 import re
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from iobox.utils import create_markdown_filename
@@ -199,42 +201,153 @@ def create_attachments_directory(output_dir: str, email_id: str) -> str:
         raise
 
 
-def save_attachment(attachment_data: bytes, 
-                   filename: str, 
-                   email_id: str, 
+def save_attachment(attachment_data: bytes,
+                   filename: str,
+                   email_id: str,
                    output_dir: str) -> str:
     """
     Save an email attachment to disk.
-    
+
     Args:
         attachment_data: Binary attachment data
         filename: Original attachment filename
         email_id: Email message ID
         output_dir: Base output directory
-        
+
     Returns:
         str: Path to the saved attachment file
     """
     # Create attachments directory
     attachments_dir = create_attachments_directory(output_dir, email_id)
-    
+
     # Sanitize filename
     safe_filename = sanitize_filename(filename)
-    
+
     # Create full path
     filepath = os.path.join(attachments_dir, safe_filename)
-    
+
     # Handle duplicate filenames
     if check_file_exists(filepath):
         filepath = handle_duplicate_filename(filepath)
-    
+
     # Write attachment data to file
     try:
         with open(filepath, 'wb') as f:
             f.write(attachment_data)
-        
+
         logging.info(f"Saved attachment to: {filepath}")
         return filepath
     except Exception as e:
         logging.error(f"Error saving attachment: {e}")
         raise
+
+
+class SyncState:
+    """Manages incremental sync state for a directory."""
+
+    FILENAME = '.iobox-sync.json'
+
+    def __init__(self, directory: str):
+        self.filepath = os.path.join(directory, self.FILENAME)
+        self.last_history_id: Optional[str] = None
+        self.last_sync_time: Optional[str] = None
+        self.synced_message_ids: List[str] = []
+
+    def load(self) -> bool:
+        """Load sync state from file. Returns True if state exists."""
+        if os.path.exists(self.filepath):
+            with open(self.filepath, 'r') as f:
+                data = json.load(f)
+            self.last_history_id = data.get('last_history_id')
+            self.last_sync_time = data.get('last_sync_time')
+            self.synced_message_ids = data.get('synced_message_ids', [])
+            return True
+        return False
+
+    def save(self) -> None:
+        """Save current sync state to file."""
+        data = {
+            'last_history_id': self.last_history_id,
+            'last_sync_time': datetime.utcnow().isoformat(),
+            'synced_message_ids': self.synced_message_ids,
+        }
+        with open(self.filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def update(self, history_id: str, new_message_ids: List[str]) -> None:
+        """Update state with new sync results."""
+        self.last_history_id = history_id
+        self.synced_message_ids = list(set(self.synced_message_ids + new_message_ids))
+        self.save()
+
+
+def download_email_attachments(service, email_data: Dict[str, Any],
+                               output_dir: str,
+                               attachment_filters: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Download all attachments for an email.
+
+    Args:
+        service: Authenticated Gmail API service
+        email_data: Email data dictionary
+        output_dir: Directory to save attachments to
+        attachment_filters: List of file extensions to filter by (e.g. ['pdf', 'docx'])
+
+    Returns:
+        dict: Result with downloaded_count, skipped_count, and errors list
+    """
+    from iobox.email_retrieval import download_attachment
+
+    message_id = email_data.get('message_id', '')
+    attachments = email_data.get('attachments', [])
+
+    if not attachments:
+        logging.info("No attachments found")
+        return {'downloaded_count': 0, 'skipped_count': 0, 'errors': []}
+
+    logging.info(f"Found {len(attachments)} attachments for message {message_id}")
+
+    downloaded_count = 0
+    skipped_count = 0
+    errors: List[str] = []
+
+    for attachment in attachments:
+        if attachment_filters:
+            filename = attachment.get('filename', '')
+            ext = os.path.splitext(filename)[1].lower().lstrip('.')
+            if ext and ext not in attachment_filters:
+                logging.info(f"Skipping attachment (type filter): {filename}")
+                skipped_count += 1
+                continue
+
+        attachment_id = attachment.get('id', '')
+        filename = attachment.get('filename', '')
+
+        if not attachment_id or not filename:
+            logging.info("Skipping attachment with missing ID or filename")
+            skipped_count += 1
+            continue
+
+        try:
+            logging.info(f"Downloading attachment: {filename}")
+            attachment_data = download_attachment(service, message_id, attachment_id)
+
+            if attachment_data:
+                filepath = save_attachment(
+                    attachment_data=attachment_data,
+                    filename=filename,
+                    email_id=message_id,
+                    output_dir=output_dir
+                )
+                downloaded_count += 1
+                logging.info(f"Saved attachment to: {filepath}")
+            else:
+                msg = f"Failed to download attachment: {filename}"
+                logging.error(msg)
+                errors.append(msg)
+        except Exception as e:
+            msg = f"Error downloading attachment {filename}: {e}"
+            logging.error(msg)
+            errors.append(msg)
+
+    return {'downloaded_count': downloaded_count, 'skipped_count': skipped_count, 'errors': errors}

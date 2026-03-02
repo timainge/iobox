@@ -11,7 +11,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from iobox.auth import get_gmail_service, check_auth_status, get_gmail_profile
-from iobox.email_search import search_emails, get_email_content, download_attachment
+from iobox.email_search import search_emails, get_email_content, download_attachment, get_new_messages
 from iobox.email_retrieval import (
     get_label_map,
     get_thread_content,
@@ -20,6 +20,7 @@ from iobox.email_retrieval import (
     batch_modify_labels,
     trash_message,
     untrash_message,
+    batch_get_emails,
 )
 from iobox.markdown import convert_email_to_markdown
 from iobox.markdown_converter import convert_thread_to_markdown
@@ -28,6 +29,8 @@ from iobox.file_manager import (
     save_email_to_markdown,
     save_attachment,
     check_for_duplicates,
+    SyncState,
+    download_email_attachments,
 )
 from iobox.email_sender import (
     compose_message,
@@ -245,6 +248,9 @@ def save(
     include_spam_trash: bool = typer.Option(
         False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
     ),
+    sync: bool = typer.Option(
+        False, "--sync", help="Enable incremental sync: only fetch new emails since last run"
+    ),
 ):
     """
     Save emails as Markdown files.
@@ -315,83 +321,124 @@ def save(
 
             # Download attachments if requested
             if download_attachments and email_data.get('attachments'):
-                download_email_attachments(
+                att_result = download_email_attachments(
                     service=service,
                     email_data=email_data,
                     output_dir=output_dir,
                     attachment_filters=attachment_filters
                 )
+                typer.echo(f"  Downloaded {att_result['downloaded_count']} attachment(s)")
+                for err in att_result['errors']:
+                    typer.echo(f"  Warning: {err}")
 
         # Batch mode
         else:
-            # Search for emails
-            typer.echo(f"Searching for emails matching: {query}")
-            results = search_emails(
-                service,
-                query,
-                max_results,
-                days,
-                start_date,
-                end_date,
-                label_map=label_map,
-                include_spam_trash=include_spam_trash,
-            )
-            
-            if not results:
-                typer.echo("No emails found matching the query.")
-                return
-                
-            total_emails = len(results)
+            # Incremental sync: try to use history if --sync is set
+            sync_state = SyncState(output_dir)
+            message_ids_to_fetch: Optional[List[str]] = None
+
+            if sync:
+                state_exists = sync_state.load()
+                if state_exists and sync_state.last_history_id:
+                    typer.echo(f"Incremental sync: checking for new emails since historyId {sync_state.last_history_id}...")
+                    new_ids = get_new_messages(service, sync_state.last_history_id)
+                    if new_ids is not None:
+                        typer.echo(f"Found {len(new_ids)} new message(s) since last sync.")
+                        message_ids_to_fetch = new_ids
+                    else:
+                        typer.echo("Sync history expired. Falling back to full query.")
+
+            if message_ids_to_fetch is not None:
+                # Use pre-fetched IDs from incremental sync
+                if not message_ids_to_fetch:
+                    typer.echo("No new emails since last sync.")
+                    # Still update the history ID
+                    profile = service.users().getProfile(userId='me').execute()
+                    sync_state.update(profile.get('historyId', sync_state.last_history_id), [])
+                    return
+                results_for_batch = [{'message_id': mid} for mid in message_ids_to_fetch]
+            else:
+                # Full search
+                typer.echo(f"Searching for emails matching: {query}")
+                search_results = search_emails(
+                    service,
+                    query,
+                    max_results,
+                    days,
+                    start_date,
+                    end_date,
+                    label_map=label_map,
+                    include_spam_trash=include_spam_trash,
+                )
+                if not search_results:
+                    typer.echo("No emails found matching the query.")
+                    if sync:
+                        profile = service.users().getProfile(userId='me').execute()
+                        sync_state.update(profile.get('historyId', ''), [])
+                    return
+                results_for_batch = search_results
+
+            total_emails = len(results_for_batch)
             typer.echo(f"\nFound {total_emails} emails to process.")
-            
-            # Process each email
+
+            # Check for already processed emails
+            all_message_ids = [r['message_id'] for r in results_for_batch]
+            duplicates = check_for_duplicates(all_message_ids, output_dir)
+            ids_to_process = [mid for mid in all_message_ids if mid not in duplicates]
+
+            for mid in duplicates:
+                typer.echo(f"Skipping already processed email: {mid}")
+
             saved_count = 0
             attachment_count = 0
-            
-            # Check for already processed emails
-            message_ids = [result['message_id'] for result in results]
-            duplicates = check_for_duplicates(message_ids, output_dir)
-            
-            for i, email_summary in enumerate(results):
-                message_id = email_summary['message_id']
-                
-                # Skip already processed emails
-                if message_id in duplicates:
-                    typer.echo(f"Skipping already processed email: {message_id}")
-                    continue
-                
-                typer.echo(f"\nProcessing email {i+1}/{total_emails}: {email_summary.get('subject', 'No Subject')}")
-                
-                # Get full email content
-                email_data = get_email_content(
+
+            # Batch-fetch full content for all non-duplicate emails
+            if ids_to_process:
+                typer.echo(f"Fetching {len(ids_to_process)} email(s) in batch...")
+                email_batch = batch_get_emails(
                     service,
-                    message_id,
+                    ids_to_process,
                     preferred_content_type="text/html" if html_preferred else "text/plain",
                     label_map=label_map,
                 )
-                
-                # Convert to markdown
-                markdown_content = convert_email_to_markdown(email_data)
-                
-                # Save to file
-                filepath = save_email_to_markdown(
-                    email_data=email_data,
-                    markdown_content=markdown_content,
-                    output_dir=output_dir
-                )
-                
-                saved_count += 1
-                
-                # Download attachments if requested
-                if download_attachments and email_data.get('attachments'):
-                    email_attachment_count = download_email_attachments(
-                        service=service,
+
+                for idx, email_data in enumerate(email_batch, 1):
+                    if 'error' in email_data:
+                        typer.echo(f"  Skipping email {email_data['message_id']}: {email_data['error']}")
+                        continue
+
+                    typer.echo(f"Processing email {idx}/{len(ids_to_process)}: {email_data.get('subject', 'No Subject')}")
+
+                    # Convert to markdown
+                    markdown_content = convert_email_to_markdown(email_data)
+
+                    # Save to file
+                    save_email_to_markdown(
                         email_data=email_data,
-                        output_dir=output_dir,
-                        attachment_filters=attachment_filters
+                        markdown_content=markdown_content,
+                        output_dir=output_dir
                     )
-                    attachment_count += email_attachment_count
-            
+
+                    saved_count += 1
+
+                    # Download attachments if requested
+                    if download_attachments and email_data.get('attachments'):
+                        result_dict = download_email_attachments(
+                            service=service,
+                            email_data=email_data,
+                            output_dir=output_dir,
+                            attachment_filters=attachment_filters
+                        )
+                        attachment_count += result_dict['downloaded_count']
+                        for err in result_dict['errors']:
+                            typer.echo(f"  Warning: {err}")
+
+            # Update sync state after successful save
+            if sync:
+                profile = service.users().getProfile(userId='me').execute()
+                sync_state.update(profile.get('historyId', ''), ids_to_process)
+                typer.echo(f"Sync state updated (historyId: {profile.get('historyId', 'unknown')})")
+
             # Summary message
             typer.echo(f"\nCompleted processing {total_emails} emails:")
             typer.echo(f"  - {saved_count} emails saved to markdown")
@@ -666,70 +713,6 @@ def trash(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
 
-
-def download_email_attachments(service, email_data: Dict[str, Any],
-                              output_dir: str, attachment_filters: List[str] = None) -> int:
-    """
-    Download all attachments for an email.
-    
-    Args:
-        service: Authenticated Gmail API service
-        email_data: Email data dictionary
-        output_dir: Directory to save attachments to
-        attachment_filters: List of file extensions to filter by
-        
-    Returns:
-        int: Number of attachments downloaded
-    """
-    message_id = email_data.get('message_id', '')
-    attachments = email_data.get('attachments', [])
-    
-    if not attachments:
-        typer.echo("  No attachments found")
-        return 0
-    
-    typer.echo(f"  Found {len(attachments)} attachments")
-    
-    downloaded_count = 0
-    for attachment in attachments:
-        # Check if this attachment should be filtered
-        if attachment_filters:
-            filename = attachment.get('filename', '')
-            ext = os.path.splitext(filename)[1].lower().lstrip('.')
-            if ext and ext not in attachment_filters:
-                typer.echo(f"  Skipping attachment (type filter): {filename}")
-                continue
-        
-        attachment_id = attachment.get('id', '')
-        filename = attachment.get('filename', '')
-        
-        if not attachment_id or not filename:
-            typer.echo("  Skipping attachment with missing ID or filename")
-            continue
-        
-        try:
-            typer.echo(f"  Downloading attachment: {filename}")
-            attachment_data = download_attachment(service, message_id, attachment_id)
-            
-            if attachment_data:
-                # Save attachment to disk
-                filepath = save_attachment(
-                    attachment_data=attachment_data,
-                    filename=filename,
-                    email_id=message_id,
-                    output_dir=output_dir
-                )
-                
-                downloaded_count += 1
-                typer.echo(f"  Saved attachment to: {filepath}")
-            else:
-                typer.echo(f"  Failed to download attachment: {filename}")
-        
-        except Exception as e:
-            typer.echo(f"  Error downloading attachment {filename}: {e}")
-            continue
-    
-    return downloaded_count
 
 
 @app.callback()

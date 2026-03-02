@@ -6,9 +6,10 @@ for saving email content to markdown files and handling duplicates.
 """
 
 import os
+import json
 import pytest
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, MagicMock
 
 from iobox.file_manager import (
     save_email_to_markdown,
@@ -17,7 +18,9 @@ from iobox.file_manager import (
     handle_duplicate_filename,
     sanitize_filename,
     create_attachments_directory,
-    save_attachment
+    save_attachment,
+    SyncState,
+    download_email_attachments,
 )
 
 
@@ -323,3 +326,128 @@ This is the test email body.
             with open(original_path, 'rb') as f:
                 original_content = f.read()
                 assert original_content == b"Original content"
+
+
+class TestSyncState:
+    """Tests for the SyncState class."""
+
+    def test_sync_state_save_and_load(self, tmp_path):
+        """SyncState persists and reloads data correctly."""
+        state = SyncState(str(tmp_path))
+        state.last_history_id = "hist-999"
+        state.synced_message_ids = ["msg-1", "msg-2"]
+        state.save()
+
+        # Verify JSON file was created
+        assert os.path.exists(os.path.join(str(tmp_path), SyncState.FILENAME))
+
+        # Load in a fresh instance
+        state2 = SyncState(str(tmp_path))
+        loaded = state2.load()
+
+        assert loaded is True
+        assert state2.last_history_id == "hist-999"
+        assert set(state2.synced_message_ids) == {"msg-1", "msg-2"}
+
+    def test_sync_state_load_returns_false_when_missing(self, tmp_path):
+        """load() returns False when no state file exists."""
+        state = SyncState(str(tmp_path))
+        result = state.load()
+        assert result is False
+        assert state.last_history_id is None
+        assert state.synced_message_ids == []
+
+    def test_sync_state_update_merges_ids(self, tmp_path):
+        """update() merges new message IDs with existing ones and saves."""
+        state = SyncState(str(tmp_path))
+        state.synced_message_ids = ["msg-1", "msg-2"]
+        state.update("hist-500", ["msg-2", "msg-3", "msg-4"])
+
+        assert state.last_history_id == "hist-500"
+        assert set(state.synced_message_ids) == {"msg-1", "msg-2", "msg-3", "msg-4"}
+
+        # Verify persisted
+        state2 = SyncState(str(tmp_path))
+        state2.load()
+        assert set(state2.synced_message_ids) == {"msg-1", "msg-2", "msg-3", "msg-4"}
+        assert state2.last_history_id == "hist-500"
+
+    def test_sync_state_update_without_prior_load(self, tmp_path):
+        """update() can be called on a fresh SyncState without prior load()."""
+        state = SyncState(str(tmp_path))
+        state.update("hist-100", ["msg-a", "msg-b"])
+
+        state2 = SyncState(str(tmp_path))
+        state2.load()
+        assert set(state2.synced_message_ids) == {"msg-a", "msg-b"}
+
+
+class TestDownloadEmailAttachments:
+    """Tests for the download_email_attachments() function moved to file_manager."""
+
+    def _make_email_data(self, attachments=None):
+        return {
+            "message_id": "msg-test",
+            "attachments": attachments or [],
+        }
+
+    def test_no_attachments_returns_zero(self):
+        """Returns zero counts when email has no attachments."""
+        mock_service = MagicMock()
+        email_data = self._make_email_data([])
+
+        result = download_email_attachments(mock_service, email_data, "/tmp/out")
+
+        assert result['downloaded_count'] == 0
+        assert result['skipped_count'] == 0
+        assert result['errors'] == []
+
+    def test_download_success(self, tmp_path):
+        """Successfully downloaded attachment is counted."""
+        mock_service = MagicMock()
+        email_data = self._make_email_data([
+            {"id": "att-1", "filename": "report.pdf", "mime_type": "application/pdf", "size": 100}
+        ])
+
+        with patch("iobox.email_retrieval.download_attachment", return_value=b"pdf-content") as mock_dl, \
+             patch("iobox.file_manager.save_attachment", return_value=str(tmp_path / "report.pdf")):
+            result = download_email_attachments(mock_service, email_data, str(tmp_path))
+
+        assert result['downloaded_count'] == 1
+        assert result['skipped_count'] == 0
+        assert result['errors'] == []
+        mock_dl.assert_called_once_with(mock_service, "msg-test", "att-1")
+
+    def test_filter_by_extension(self, tmp_path):
+        """Attachments not matching the filter are skipped."""
+        mock_service = MagicMock()
+        email_data = self._make_email_data([
+            {"id": "att-1", "filename": "report.pdf", "mime_type": "application/pdf", "size": 100},
+            {"id": "att-2", "filename": "image.png", "mime_type": "image/png", "size": 50},
+        ])
+
+        with patch("iobox.email_retrieval.download_attachment", return_value=b"data") as mock_dl, \
+             patch("iobox.file_manager.save_attachment", return_value=str(tmp_path / "report.pdf")):
+            result = download_email_attachments(
+                mock_service, email_data, str(tmp_path),
+                attachment_filters=["pdf"]
+            )
+
+        assert result['downloaded_count'] == 1
+        assert result['skipped_count'] == 1
+        # Only pdf was downloaded
+        mock_dl.assert_called_once_with(mock_service, "msg-test", "att-1")
+
+    def test_download_error_recorded(self, tmp_path):
+        """Errors during download are collected in the errors list."""
+        mock_service = MagicMock()
+        email_data = self._make_email_data([
+            {"id": "att-1", "filename": "file.pdf", "mime_type": "application/pdf", "size": 100}
+        ])
+
+        with patch("iobox.email_retrieval.download_attachment", side_effect=Exception("network error")):
+            result = download_email_attachments(mock_service, email_data, str(tmp_path))
+
+        assert result['downloaded_count'] == 0
+        assert len(result['errors']) == 1
+        assert "file.pdf" in result['errors'][0]

@@ -20,6 +20,7 @@ from iobox.email_retrieval import (
     batch_modify_labels,
     trash_message,
     untrash_message,
+    batch_get_emails,
     _find_attachments,
     _extract_content_from_payload,
     _extract_content_from_parts,
@@ -407,3 +408,133 @@ class TestTrashUntrash:
 
         mock_gmail_service.users().messages().untrash.assert_called_once_with(userId='me', id='msg-1')
         assert result["id"] == "msg-1"
+
+
+def _make_full_message(msg_id, subject="Subject", sender="a@b.com"):
+    """Build a minimal full-format Gmail API message for batch tests."""
+    body_b64 = base64.urlsafe_b64encode(b"Hello world").decode()
+    return {
+        "id": msg_id,
+        "threadId": f"thread-{msg_id}",
+        "labelIds": ["INBOX"],
+        "snippet": "snippet",
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "From", "value": sender},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Subject", "value": subject},
+                {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
+            ],
+            "body": {"data": body_b64, "size": 11},
+        },
+    }
+
+
+class TestBatchGetEmails:
+    """Tests for batch_get_emails()."""
+
+    def test_batch_get_emails_all_succeed(self, mock_gmail_service):
+        """All messages in a batch are processed and returned in order."""
+        msg_ids = ["msg1", "msg2", "msg3"]
+        responses = {mid: _make_full_message(mid) for mid in msg_ids}
+
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]['callback']
+            for req_id, resp in responses.items():
+                callback(req_id, resp, None)
+
+        mock_batch.execute.side_effect = fake_execute
+
+        result = batch_get_emails(mock_gmail_service, msg_ids)
+
+        assert len(result) == 3
+        assert result[0]['message_id'] == 'msg1'
+        assert result[1]['message_id'] == 'msg2'
+        assert result[2]['message_id'] == 'msg3'
+        # No error keys
+        for item in result:
+            assert 'error' not in item
+
+    def test_batch_get_emails_partial_failure(self, mock_gmail_service):
+        """Failed messages appear with 'error' key; successful ones are processed normally."""
+        msg_ids = ["msg1", "msg2", "msg3", "msg4", "msg5"]
+        responses = {
+            "msg1": _make_full_message("msg1"),
+            "msg3": _make_full_message("msg3"),
+            "msg4": _make_full_message("msg4"),
+        }
+        # msg2 and msg5 will fail
+        error_ids = {"msg2": Exception("API error for msg2"), "msg5": Exception("API error for msg5")}
+
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]['callback']
+            for req_id, resp in responses.items():
+                callback(req_id, resp, None)
+            for req_id, exc in error_ids.items():
+                callback(req_id, None, exc)
+
+        mock_batch.execute.side_effect = fake_execute
+
+        result = batch_get_emails(mock_gmail_service, msg_ids)
+
+        assert len(result) == 5
+        # Check order
+        assert result[0]['message_id'] == 'msg1'
+        assert 'error' not in result[0]
+
+        assert result[1]['message_id'] == 'msg2'
+        assert 'error' in result[1]
+
+        assert result[2]['message_id'] == 'msg3'
+        assert 'error' not in result[2]
+
+        assert result[3]['message_id'] == 'msg4'
+        assert 'error' not in result[3]
+
+        assert result[4]['message_id'] == 'msg5'
+        assert 'error' in result[4]
+
+    def test_batch_get_emails_chunks_of_50(self, mock_gmail_service):
+        """More than 50 message IDs triggers multiple batch executions."""
+        msg_ids = [f"msg-{i}" for i in range(75)]
+        responses = {mid: _make_full_message(mid) for mid in msg_ids}
+
+        # Track how many batches were created
+        batches_created = []
+
+        def make_mock_batch(*args, **kwargs):
+            mock_batch = MagicMock()
+            callback = kwargs.get('callback')
+            # Track which IDs are added to this batch
+            ids_in_batch = []
+            original_add = mock_batch.add
+
+            def track_add(request, request_id=None):
+                ids_in_batch.append(request_id)
+
+            mock_batch.add.side_effect = track_add
+
+            def fake_execute():
+                for mid in ids_in_batch:
+                    if mid in responses:
+                        callback(mid, responses[mid], None)
+
+            mock_batch.execute.side_effect = fake_execute
+            batches_created.append(mock_batch)
+            return mock_batch
+
+        mock_gmail_service.new_batch_http_request.side_effect = make_mock_batch
+
+        result = batch_get_emails(mock_gmail_service, msg_ids)
+
+        # Should have created 2 batches (50 + 25)
+        assert mock_gmail_service.new_batch_http_request.call_count == 2
+        assert len(result) == 75
+        assert all('error' not in item for item in result)

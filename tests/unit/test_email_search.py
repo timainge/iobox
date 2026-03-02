@@ -9,7 +9,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 import base64
 
-from iobox.email_search import search_emails, get_email_content, download_attachment, validate_date_format
+from iobox.email_search import (
+    search_emails, get_email_content, download_attachment, validate_date_format,
+    batch_get_metadata, get_new_messages,
+)
 from tests.fixtures.mock_responses import (
     MOCK_PLAIN_TEXT_MESSAGE,
     MOCK_HTML_MESSAGE,
@@ -18,12 +21,40 @@ from tests.fixtures.mock_responses import (
 )
 
 
+def _setup_batch_mock(mock_service, responses):
+    """
+    Configure mock_service.new_batch_http_request so that batch.execute()
+    triggers the registered callback with the given responses dict.
+
+    responses: {message_id: response_dict}
+    """
+    mock_batch = MagicMock()
+    ids_added = []
+
+    def track_add(request, request_id=None):
+        ids_added.append(request_id)
+
+    mock_batch.add.side_effect = track_add
+
+    def fake_execute():
+        callback = mock_service.new_batch_http_request.call_args[1]['callback']
+        for mid in ids_added:
+            if mid in responses:
+                callback(mid, responses[mid], None)
+            else:
+                callback(mid, None, Exception(f"Not found: {mid}"))
+
+    mock_batch.execute.side_effect = fake_execute
+    mock_service.new_batch_http_request.return_value = mock_batch
+    return mock_batch
+
+
 class TestEmailSearch:
     """Test cases for the email search module."""
-    
+
     def test_search_emails_basic(self, mock_gmail_service):
         """Test basic email search functionality."""
-        # Setup mock message list response with properly structured data
+        # Setup mock message list response
         mock_list = MagicMock()
         mock_list.execute.return_value = {
             "messages": [
@@ -33,95 +64,70 @@ class TestEmailSearch:
             ],
             "resultSizeEstimate": 3
         }
-        
-        # Set up service method chain for the initial search
         mock_gmail_service.users().messages().list = MagicMock(return_value=mock_list)
-        
-        # Mock the get message details calls with proper return values
-        msg1 = {
-            "id": "message-id-1", 
-            "threadId": "thread-id-1", 
-            "snippet": "Message 1",
-            "payload": {
-                "headers": [
+
+        # Set up batch mock responses for metadata
+        responses = {
+            "message-id-1": {
+                "id": "message-id-1",
+                "threadId": "thread-id-1",
+                "snippet": "Message 1",
+                "payload": {"headers": [
                     {"name": "Subject", "value": "Test Subject 1"},
                     {"name": "From", "value": "sender1@example.com"},
-                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"}
-                ]
-            }
-        }
-        
-        msg2 = {
-            "id": "message-id-2", 
-            "threadId": "thread-id-2", 
-            "snippet": "Message 2",
-            "payload": {
-                "headers": [
+                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"},
+                ]},
+            },
+            "message-id-2": {
+                "id": "message-id-2",
+                "threadId": "thread-id-2",
+                "snippet": "Message 2",
+                "payload": {"headers": [
                     {"name": "Subject", "value": "Test Subject 2"},
                     {"name": "From", "value": "sender2@example.com"},
-                    {"name": "Date", "value": "Tue, 02 Apr 2025 15:30:00 +0000"}
-                ]
-            }
-        }
-        
-        msg3 = {
-            "id": "message-id-3", 
-            "threadId": "thread-id-3", 
-            "snippet": "Message 3",
-            "payload": {
-                "headers": [
+                    {"name": "Date", "value": "Tue, 02 Apr 2025 15:30:00 +0000"},
+                ]},
+            },
+            "message-id-3": {
+                "id": "message-id-3",
+                "threadId": "thread-id-3",
+                "snippet": "Message 3",
+                "payload": {"headers": [
                     {"name": "Subject", "value": "Test Subject 3"},
                     {"name": "From", "value": "sender3@example.com"},
-                    {"name": "Date", "value": "Wed, 03 Apr 2025 09:15:00 +0000"}
-                ]
-            }
+                    {"name": "Date", "value": "Wed, 03 Apr 2025 09:15:00 +0000"},
+                ]},
+            },
         }
-        
-        # Setup the message.get method to return appropriate mocks based on message ID
-        def get_side_effect(userId, id, format, metadataHeaders=None):
-            if id == "message-id-1":
-                return MagicMock(execute=MagicMock(return_value=msg1))
-            elif id == "message-id-2":
-                return MagicMock(execute=MagicMock(return_value=msg2))
-            elif id == "message-id-3":
-                return MagicMock(execute=MagicMock(return_value=msg3))
-            else:
-                raise ValueError(f"Unexpected ID: {id}")
-                
-        mock_gmail_service.users().messages().get = MagicMock(side_effect=get_side_effect)
-        
+        _setup_batch_mock(mock_gmail_service, responses)
+
         # Patch datetime to return a fixed date for testing
         with patch('iobox.email_search.datetime') as mock_datetime:
-            # Set up the mock to return a specific date
             mock_date = MagicMock()
             mock_date.now.return_value = mock_date
             mock_date.__sub__.return_value = mock_date
             mock_date.strftime.return_value = '2025/03/23'
             mock_datetime.now.return_value = mock_date
             mock_datetime.timedelta = MagicMock(return_value=mock_date)
-        
-            # Call the search function
+
             results = search_emails(
                 service=mock_gmail_service,
                 query="from:example.com",
                 max_results=10
             )
-        
-            # Verify results
-            assert len(results) == 3
-            assert results[0]["message_id"] == "message-id-1"
-            assert results[1]["message_id"] == "message-id-2"
-            assert results[2]["message_id"] == "message-id-3"
-            
-            # Verify API call
-            mock_gmail_service.users().messages().list.assert_called_once()
-            # Verify we get the subject extracted from the headers
-            assert results[0]["subject"] == "Test Subject 1"
-            assert results[1]["subject"] == "Test Subject 2"
-            assert results[2]["subject"] == "Test Subject 3"
-            
-            # Verify that message.get was called for each message
-            assert mock_gmail_service.users().messages().get.call_count == 3
+
+        assert len(results) == 3
+        assert results[0]["message_id"] == "message-id-1"
+        assert results[1]["message_id"] == "message-id-2"
+        assert results[2]["message_id"] == "message-id-3"
+
+        mock_gmail_service.users().messages().list.assert_called_once()
+        assert results[0]["subject"] == "Test Subject 1"
+        assert results[1]["subject"] == "Test Subject 2"
+        assert results[2]["subject"] == "Test Subject 3"
+
+        # Verify batch was used (not individual gets)
+        mock_gmail_service.new_batch_http_request.assert_called_once()
     
     def test_search_emails_empty_results(self, mock_gmail_service):
         """Test email search with no results."""
@@ -560,3 +566,158 @@ class TestSearchIncludeSpamTrash:
 
         call_kwargs = mock_gmail_service.users().messages().list.call_args[1]
         assert call_kwargs.get("includeSpamTrash") is False
+
+
+class TestBatchGetMetadata:
+    """Tests for batch_get_metadata()."""
+
+    def _make_metadata_response(self, msg_id, subject="Sub", sender="a@b.com"):
+        return {
+            "id": msg_id,
+            "threadId": f"thread-{msg_id}",
+            "labelIds": ["INBOX"],
+            "snippet": f"snippet-{msg_id}",
+            "payload": {
+                "headers": [
+                    {"name": "Subject", "value": subject},
+                    {"name": "From", "value": sender},
+                    {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
+                ]
+            },
+        }
+
+    def test_batch_get_metadata_success(self, mock_gmail_service):
+        """All metadata is fetched and returned in input order."""
+        msg_ids = ["m1", "m2", "m3"]
+        responses = {mid: self._make_metadata_response(mid) for mid in msg_ids}
+
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]['callback']
+            for req_id, resp in responses.items():
+                callback(req_id, resp, None)
+
+        mock_batch.execute.side_effect = fake_execute
+
+        result = batch_get_metadata(mock_gmail_service, msg_ids)
+
+        assert len(result) == 3
+        assert result[0]['message_id'] == 'm1'
+        assert result[1]['message_id'] == 'm2'
+        assert result[2]['message_id'] == 'm3'
+        assert result[0]['subject'] == 'Sub'
+        assert 'error' not in result[0]
+
+    def test_batch_get_metadata_with_label_map(self, mock_gmail_service):
+        """Label IDs are resolved when label_map is provided."""
+        msg_ids = ["m1"]
+        responses = {"m1": self._make_metadata_response("m1")}
+        responses["m1"]["labelIds"] = ["INBOX", "Label_12345"]
+
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]['callback']
+            callback("m1", responses["m1"], None)
+
+        mock_batch.execute.side_effect = fake_execute
+
+        label_map = {"INBOX": "INBOX", "Label_12345": "Newsletter"}
+        result = batch_get_metadata(mock_gmail_service, msg_ids, label_map=label_map)
+
+        assert "Newsletter" in result[0]['labels']
+        assert "Label_12345" not in result[0]['labels']
+
+    def test_batch_get_metadata_partial_failure(self, mock_gmail_service):
+        """Failed fetches return dict with 'error' key."""
+        msg_ids = ["m1", "m2"]
+        responses = {"m1": self._make_metadata_response("m1")}
+
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]['callback']
+            callback("m1", responses["m1"], None)
+            callback("m2", None, Exception("fetch failed"))
+
+        mock_batch.execute.side_effect = fake_execute
+
+        result = batch_get_metadata(mock_gmail_service, msg_ids)
+
+        assert len(result) == 2
+        assert 'error' not in result[0]
+        assert result[1]['message_id'] == 'm2'
+        assert 'error' in result[1]
+
+
+class TestGetNewMessages:
+    """Tests for get_new_messages()."""
+
+    def test_get_new_messages_returns_ids(self, mock_gmail_service):
+        """Returns list of message IDs from messagesAdded records."""
+        history_response = {
+            "history": [
+                {"messagesAdded": [{"message": {"id": "msg-new-1"}}]},
+                {"messagesAdded": [{"message": {"id": "msg-new-2"}}]},
+            ]
+        }
+
+        mock_hist = MagicMock()
+        mock_hist.execute.return_value = history_response
+        mock_gmail_service.users().history().list.return_value = mock_hist
+
+        result = get_new_messages(mock_gmail_service, "history-123")
+
+        assert result == ["msg-new-1", "msg-new-2"]
+
+    def test_get_new_messages_paginated(self, mock_gmail_service):
+        """Follows nextPageToken to collect all new message IDs."""
+        page1 = {
+            "history": [{"messagesAdded": [{"message": {"id": "msg-1"}}]}],
+            "nextPageToken": "token-p2",
+        }
+        page2 = {
+            "history": [{"messagesAdded": [{"message": {"id": "msg-2"}}]}],
+        }
+
+        mock_h1 = MagicMock()
+        mock_h1.execute.return_value = page1
+        mock_h2 = MagicMock()
+        mock_h2.execute.return_value = page2
+
+        mock_gmail_service.users().history().list.side_effect = [mock_h1, mock_h2]
+
+        result = get_new_messages(mock_gmail_service, "hist-abc")
+
+        assert result == ["msg-1", "msg-2"]
+
+    def test_get_new_messages_empty(self, mock_gmail_service):
+        """Returns empty list when no new messages since historyId."""
+        mock_hist = MagicMock()
+        mock_hist.execute.return_value = {"history": []}
+        mock_gmail_service.users().history().list.return_value = mock_hist
+
+        result = get_new_messages(mock_gmail_service, "hist-old")
+
+        assert result == []
+
+    def test_get_new_messages_expired_returns_none(self, mock_gmail_service):
+        """Returns None when history is expired (404 error)."""
+        mock_gmail_service.users().history().list.side_effect = Exception(
+            "404 historyId not found: notFound"
+        )
+
+        result = get_new_messages(mock_gmail_service, "hist-expired")
+
+        assert result is None
+
+    def test_get_new_messages_reraises_non_404(self, mock_gmail_service):
+        """Non-404 exceptions are re-raised."""
+        mock_gmail_service.users().history().list.side_effect = Exception("500 internal error")
+
+        with pytest.raises(Exception, match="500 internal error"):
+            get_new_messages(mock_gmail_service, "hist-123")

@@ -45,6 +45,64 @@ def get_label_map(service) -> Dict[str, str]:
         return {}
 
 
+def _process_message_response(message: Dict[str, Any],
+                              preferred_content_type: str = 'text/plain',
+                              label_map: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """
+    Process a raw Gmail API message response dict into an email data dict.
+
+    Shared by get_email_content() and batch_get_emails() so that the same
+    extraction logic is used regardless of how the raw message was retrieved.
+
+    Args:
+        message: Raw Gmail API message resource dict
+        preferred_content_type: Preferred content type ('text/plain' or 'text/html')
+        label_map: Optional mapping of label ID to display name
+
+    Returns:
+        dict: Processed email data
+    """
+    email_id = message['id']
+    payload = message['payload']
+    headers = payload['headers']
+
+    raw_labels = message.get('labelIds', [])
+    resolved_labels = (
+        [label_map.get(lid, lid) for lid in raw_labels]
+        if label_map is not None
+        else raw_labels
+    )
+
+    email_data = {
+        'message_id': email_id,
+        'subject': next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject'),
+        'from': next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender'),
+        'date': next((h['value'] for h in headers if h['name'].lower() == 'date'), 'Unknown Date'),
+        'labels': resolved_labels,
+        'snippet': message.get('snippet', ''),
+        'thread_id': message.get('threadId', ''),
+    }
+
+    content, content_type = _extract_content_from_payload(payload, preferred_content_type)
+    email_data['body'] = content
+    email_data['content'] = content
+    email_data['content_type'] = content_type
+
+    if content_type == 'text/html':
+        email_data['html_content'] = content
+        email_data['plain_content'] = ''
+    else:
+        email_data['plain_content'] = content
+        email_data['html_content'] = ''
+
+    if 'parts' in payload:
+        email_data['attachments'] = _find_attachments(payload['parts'])
+    else:
+        email_data['attachments'] = []
+
+    return email_data
+
+
 def get_email_content(service, message_id: str = None, msg_id: str = None,
                       preferred_content_type: str = 'text/plain',
                       label_map: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
@@ -78,43 +136,7 @@ def get_email_content(service, message_id: str = None, msg_id: str = None,
             format='full'
         ).execute()
 
-        payload = message['payload']
-        headers = payload['headers']
-
-        raw_labels = message.get('labelIds', [])
-        resolved_labels = (
-            [label_map.get(lid, lid) for lid in raw_labels]
-            if label_map is not None
-            else raw_labels
-        )
-
-        email_data = {
-            'message_id': email_id,
-            'subject': next((header['value'] for header in headers if header['name'].lower() == 'subject'), 'No Subject'),
-            'from': next((header['value'] for header in headers if header['name'].lower() == 'from'), 'Unknown Sender'),
-            'date': next((header['value'] for header in headers if header['name'].lower() == 'date'), 'Unknown Date'),
-            'labels': resolved_labels,
-            'snippet': message.get('snippet', ''),
-            'thread_id': message.get('threadId', '')
-        }
-
-        content, content_type = _extract_content_from_payload(payload, preferred_content_type)
-        email_data['body'] = content
-        email_data['content'] = content
-        email_data['content_type'] = content_type
-
-        if content_type == 'text/html':
-            email_data['html_content'] = content
-            email_data['plain_content'] = ''
-        else:
-            email_data['plain_content'] = content
-            email_data['html_content'] = ''
-
-        if 'parts' in payload:
-            email_data['attachments'] = _find_attachments(payload['parts'])
-        else:
-            email_data['attachments'] = []
-
+        email_data = _process_message_response(message, preferred_content_type, label_map)
         logging.info(f"Successfully retrieved email content for {email_id}")
         return email_data
 
@@ -124,6 +146,57 @@ def get_email_content(service, message_id: str = None, msg_id: str = None,
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
         raise
+
+
+def batch_get_emails(service, message_ids: List[str], format: str = 'full',
+                     preferred_content_type: str = 'text/plain',
+                     label_map: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """
+    Fetch multiple emails in batched HTTP requests (chunks of 50).
+
+    Args:
+        service: Gmail API service
+        message_ids: List of message IDs to fetch
+        format: API format parameter ('full', 'metadata', etc.)
+        preferred_content_type: Content type preference for body extraction
+        label_map: Optional mapping of label ID to display name
+
+    Returns:
+        List of email data dicts in same order as input IDs.
+        Failed fetches are returned as dicts with 'error' key.
+    """
+    results: Dict[str, Any] = {}
+    errors: Dict[str, str] = {}
+
+    def callback(request_id, response, exception):
+        if exception:
+            errors[request_id] = str(exception)
+        else:
+            results[request_id] = response
+
+    for i in range(0, len(message_ids), 50):
+        chunk = message_ids[i:i + 50]
+        batch = service.new_batch_http_request(callback=callback)
+        for msg_id in chunk:
+            batch.add(
+                service.users().messages().get(userId='me', id=msg_id, format=format),
+                request_id=msg_id
+            )
+        batch.execute()
+
+    email_list = []
+    for msg_id in message_ids:
+        if msg_id in errors:
+            email_list.append({'message_id': msg_id, 'error': errors[msg_id]})
+        elif msg_id in results:
+            message = results[msg_id]
+            email_data = _process_message_response(message, preferred_content_type, label_map)
+            email_list.append(email_data)
+        else:
+            email_list.append({'message_id': msg_id, 'error': 'Not found in batch response'})
+
+    logging.info(f"Batch fetched {len(email_list)} emails ({len(errors)} errors)")
+    return email_list
 
 
 def get_thread_content(service, thread_id: str,
