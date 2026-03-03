@@ -103,6 +103,7 @@ def save_email(
     prefer_html: bool = True,
     download_attachments: bool = False,
     attachment_types: Optional[str] = None,
+    include_spam_trash: bool = False,
 ) -> str:
     """Save a Gmail message as a Markdown file.
 
@@ -112,6 +113,7 @@ def save_email(
         prefer_html: Use HTML content if available (default: True)
         download_attachments: Download email attachments (default: False)
         attachment_types: Filter attachments by extension, comma-separated (e.g. 'pdf,docx')
+        include_spam_trash: Include messages from SPAM and TRASH (default False)
 
     Returns:
         Absolute path to the saved file.
@@ -136,6 +138,7 @@ def save_thread(
     thread_id: str,
     output_dir: str = ".",
     prefer_html: bool = True,
+    include_spam_trash: bool = False,
 ) -> str:
     """Save an entire Gmail thread as a single Markdown file.
 
@@ -143,6 +146,7 @@ def save_thread(
         thread_id: Gmail thread ID
         output_dir: Directory to save the file (default: current dir)
         prefer_html: Use HTML content if available (default: True)
+        include_spam_trash: Include messages from SPAM and TRASH (default False)
 
     Returns:
         Absolute path to the saved file.
@@ -309,6 +313,44 @@ def forward_gmail(
     """
     service = get_gmail_service()
     return forward_email(service, message_id=message_id, to=to, additional_text=note)
+
+
+@mcp.tool()
+def batch_forward_gmail(
+    query: str,
+    to: str,
+    max_results: int = 10,
+    days: int = 7,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    note: Optional[str] = None,
+) -> dict:
+    """Forward multiple Gmail messages matching a query to a recipient.
+
+    Args:
+        query: Gmail search syntax to find messages
+        to: Recipient email address
+        max_results: Maximum messages to forward (default 10)
+        days: Days back to search (default 7)
+        start_date: Start date YYYY/MM/DD (overrides days)
+        end_date: End date YYYY/MM/DD
+        note: Optional text to prepend to each forwarded email
+
+    Returns:
+        Summary dict with forwarded_count.
+    """
+    service = get_gmail_service()
+    label_map = get_label_map(service)
+    results = search_emails(service, query, max_results, days, start_date, end_date, label_map=label_map)
+    if not results:
+        return {"forwarded_count": 0, "detail": "No emails found matching the query."}
+
+    forwarded = 0
+    for r in results:
+        forward_email(service, message_id=r["message_id"], to=to, additional_text=note)
+        forwarded += 1
+
+    return {"forwarded_count": forwarded}
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +566,34 @@ def untrash_gmail(message_id: str) -> dict:
     """
     service = get_gmail_service()
     return untrash_message(service, message_id)
+
+
+@mcp.tool()
+def batch_trash_gmail(
+    query: str,
+    max_results: int = 10,
+    days: int = 7,
+) -> dict:
+    """Move multiple Gmail messages matching a query to trash.
+
+    Args:
+        query: Gmail search syntax to find messages
+        max_results: Maximum messages to trash (default 10)
+        days: Days back to search (default 7)
+
+    Returns:
+        Summary dict with trashed_count.
+    """
+    service = get_gmail_service()
+    label_map = get_label_map(service)
+    results = search_emails(service, query, max_results, days, label_map=label_map)
+    if not results:
+        return {"trashed_count": 0, "detail": "No emails found matching the query."}
+
+    for r in results:
+        trash_message(service, r["message_id"])
+
+    return {"trashed_count": len(results)}
 
 
 # ---------------------------------------------------------------------------

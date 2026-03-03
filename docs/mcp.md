@@ -31,6 +31,7 @@ pip install "iobox[mcp]"
 |---|---|
 | `send_email` | Send an email (plain text or HTML, with optional attachments) |
 | `forward_gmail` | Forward a Gmail message to a recipient |
+| `batch_forward_gmail` | Forward multiple messages matching a query to a recipient |
 
 ### Drafts
 
@@ -54,6 +55,7 @@ pip install "iobox[mcp]"
 |---|---|
 | `trash_gmail` | Move a message to trash |
 | `untrash_gmail` | Restore a message from trash |
+| `batch_trash_gmail` | Move multiple messages matching a query to trash |
 
 ### Auth
 
@@ -94,6 +96,7 @@ save_email(
     prefer_html: bool = True,
     download_attachments: bool = False,
     attachment_types: str = None,  # comma-separated, e.g. "pdf,docx"
+    include_spam_trash: bool = False,
 ) -> str  # Returns path to saved file
 ```
 
@@ -104,6 +107,7 @@ save_thread(
     thread_id: str,
     output_dir: str = ".",
     prefer_html: bool = True,
+    include_spam_trash: bool = False,
 ) -> str  # Returns path to saved file
 ```
 
@@ -147,6 +151,20 @@ forward_gmail(
     to: str,
     note: str = None,
 ) -> dict
+```
+
+**`batch_forward_gmail`**
+
+```python
+batch_forward_gmail(
+    query: str,
+    to: str,
+    max_results: int = 10,
+    days: int = 7,
+    start_date: str = None,
+    end_date: str = None,
+    note: str = None,
+) -> dict  # {forwarded_count}
 ```
 
 **`create_gmail_draft`**
@@ -223,6 +241,16 @@ trash_gmail(message_id: str) -> dict
 
 ```python
 untrash_gmail(message_id: str) -> dict
+```
+
+**`batch_trash_gmail`**
+
+```python
+batch_trash_gmail(
+    query: str,
+    max_results: int = 10,
+    days: int = 7,
+) -> dict  # {trashed_count}
 ```
 
 **`check_auth`**

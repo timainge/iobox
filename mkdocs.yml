@@ -60,8 +60,6 @@ nav:
     - utils: api/utils.md
   - MCP Server: mcp.md
   - Integrations: integrations.md
-  - Roadmap: roadmap.md
-  - Changelog: changelog.md
 
 markdown_extensions:
   - admonition

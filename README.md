@@ -413,7 +413,7 @@ For detailed documentation on authentication and integration patterns, see the `
 
 ## What's Been Built
 
-All 9 roadmap phases are complete. See the [full roadmap](docs/roadmap.md) for details.
+All 9 roadmap phases are complete. See the [full roadmap](.dev/roadmap.md) for details.
 
 - [x] Critical bug fixes (pagination, label resolution)
 - [x] Gmail read enhancements (thread export, spam/trash, profile)

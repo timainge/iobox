@@ -13,10 +13,10 @@ sys.modules['mcp.server.fastmcp'] = mock_fastmcp_module
 
 from iobox.mcp_server import (  # noqa: E402
     search_gmail, get_email, save_email, save_thread, save_emails_by_query,
-    send_email, forward_gmail,
+    send_email, forward_gmail, batch_forward_gmail,
     create_gmail_draft, list_gmail_drafts, send_gmail_draft, delete_gmail_draft,
     modify_labels, batch_modify_gmail_labels,
-    trash_gmail, untrash_gmail,
+    trash_gmail, untrash_gmail, batch_trash_gmail,
     check_auth,
 )
 
@@ -247,6 +247,42 @@ class TestForwardGmail:
             assert result["id"] == "fwd-2"
 
 
+class TestBatchForwardGmail:
+    def test_batch_forward(self):
+        with patch(f"{MODULE}.get_gmail_service") as mock_svc, \
+             patch(f"{MODULE}.get_label_map", return_value={}), \
+             patch(f"{MODULE}.search_emails", return_value=[{"message_id": "m1"}, {"message_id": "m2"}]), \
+             patch(f"{MODULE}.forward_email", return_value={"id": "fwd-1"}) as mock_fwd:
+            mock_svc.return_value = MagicMock()
+            result = batch_forward_gmail("from:test@example.com", "bob@example.com", note="FYI")
+            assert result["forwarded_count"] == 2
+            assert mock_fwd.call_count == 2
+
+    def test_batch_forward_no_results(self):
+        with patch(f"{MODULE}.get_gmail_service") as mock_svc, \
+             patch(f"{MODULE}.get_label_map", return_value={}), \
+             patch(f"{MODULE}.search_emails", return_value=[]):
+            mock_svc.return_value = MagicMock()
+            result = batch_forward_gmail("from:nobody@example.com", "bob@example.com")
+            assert result["forwarded_count"] == 0
+
+    def test_batch_forward_with_dates(self):
+        with patch(f"{MODULE}.get_gmail_service") as mock_svc, \
+             patch(f"{MODULE}.get_label_map", return_value={}), \
+             patch(f"{MODULE}.search_emails", return_value=[{"message_id": "m1"}]) as mock_search, \
+             patch(f"{MODULE}.forward_email", return_value={"id": "fwd-1"}):
+            mock_svc.return_value = MagicMock()
+            result = batch_forward_gmail(
+                "subject:report", "bob@example.com",
+                start_date="2024/01/01", end_date="2024/01/31",
+            )
+            assert result["forwarded_count"] == 1
+            mock_search.assert_called_once_with(
+                mock_svc.return_value, "subject:report", 10, 7,
+                "2024/01/01", "2024/01/31", label_map={},
+            )
+
+
 # ---------------------------------------------------------------------------
 # Drafts
 # ---------------------------------------------------------------------------
@@ -368,6 +404,26 @@ class TestTrash:
             result = untrash_gmail("m1")
             assert result["id"] == "m1"
             mock_untrash.assert_called_once_with(mock_svc.return_value, "m1")
+
+
+class TestBatchTrashGmail:
+    def test_batch_trash(self):
+        with patch(f"{MODULE}.get_gmail_service") as mock_svc, \
+             patch(f"{MODULE}.get_label_map", return_value={}), \
+             patch(f"{MODULE}.search_emails", return_value=[{"message_id": "m1"}, {"message_id": "m2"}]), \
+             patch(f"{MODULE}.trash_message", return_value={"id": "m1"}) as mock_trash:
+            mock_svc.return_value = MagicMock()
+            result = batch_trash_gmail("from:spam@example.com", max_results=5, days=30)
+            assert result["trashed_count"] == 2
+            assert mock_trash.call_count == 2
+
+    def test_batch_trash_no_results(self):
+        with patch(f"{MODULE}.get_gmail_service") as mock_svc, \
+             patch(f"{MODULE}.get_label_map", return_value={}), \
+             patch(f"{MODULE}.search_emails", return_value=[]):
+            mock_svc.return_value = MagicMock()
+            result = batch_trash_gmail("from:nobody@example.com")
+            assert result["trashed_count"] == 0
 
 
 # ---------------------------------------------------------------------------
