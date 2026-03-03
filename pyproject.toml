@@ -8,23 +8,25 @@ version = "0.2.0"
 description = "Gmail to Markdown converter — extract, search and save emails as Markdown files"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "Tim", email = "tim@goodcollective.com.au"},
 ]
 keywords = ["gmail", "email", "markdown", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Communications :: Email",
-    "Topic :: Utilities",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Typing :: Typed",
 ]
 dependencies = [
     "google-api-python-client>=2.0",
@@ -53,9 +55,9 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/iobox"
-Repository = "https://github.com/yourusername/iobox"
-Documentation = "https://yourusername.github.io/iobox"
+Homepage = "https://github.com/timainge/iobox"
+Repository = "https://github.com/timainge/iobox"
+Issues = "https://github.com/timainge/iobox/issues"
 
 [project.scripts]
 iobox = "iobox.cli:app"
@@ -65,19 +67,31 @@ packages = ["src/iobox"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 addopts = "--cov=src --cov-report=term --cov-report=html"
 norecursedirs = [".* venv build dist"]
 log_cli = true
 log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "C4"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+]

@@ -32,26 +32,23 @@ Iobox is a Gmail to Markdown converter that extracts emails from Gmail based on 
 ### Testing
 ```bash
 # Run all tests with coverage
-python -m pytest
-
-# Run with detailed coverage report
-python -m pytest --cov=src --cov-report=html
+uv run pytest
 
 # Run specific test categories
-python -m pytest tests/unit
-python -m pytest tests/integration
+uv run pytest tests/unit
+uv run pytest tests/integration
 
 # Run specific test file
-python -m pytest tests/unit/test_auth.py
+uv run pytest tests/unit/test_auth.py
 ```
 
 ### Installation and Setup
 ```bash
-# Install in development mode
-pip install -e .
+# Install with uv (recommended)
+uv sync
 
-# Install dependencies
-pip install -r requirements.txt
+# Or install with pip
+pip install -e .
 
 # Run the CLI
 iobox --help
@@ -133,7 +130,7 @@ iobox version     # Show version
 - **Unit tests**: Mock Gmail API responses using `pytest-mock` (`tests/unit/`)
 - **Integration tests**: End-to-end workflow testing (`tests/integration/`)
 - **Live tests**: CLI integration tests against a real Gmail account (`tests/live/`)
-- **Coverage**: Configured via `pytest.ini` with HTML reports in `htmlcov/`
+- **Coverage**: Configured via `pyproject.toml` with HTML reports in `htmlcov/`
 - **Fixtures**: Centralized mock responses in `tests/fixtures/mock_responses.py`
 
 ### Live Tests
