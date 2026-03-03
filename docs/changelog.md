@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.1
+
+- **Bug fix**: Fixed `trash --untrash` output typo ("Restoreed" -> "Restored")
+- **Live integration tests**: Added 21-scenario CLI test suite against a real Gmail account (`tests/live/`)
+
 ## v0.2.0
 
 - **Label management**: Mark read/unread, star/unstar, archive, apply custom labels (`label` command)

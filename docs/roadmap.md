@@ -6,25 +6,26 @@ Each phase has a dedicated spec doc in `docs/specs/` with detailed requirements,
 
 ## Current State
 
-- **CLI commands**: `search`, `save`, `send`, `forward`, `auth-status`, `version`
-- **Gmail API coverage**: `messages.list`, `messages.get`, `messages.attachments.get`, `messages.send`
-- **OAuth scopes**: `gmail.readonly` + `gmail.send`
-- **Output**: Markdown + YAML frontmatter, optional attachment downloads
-- **Packaging**: `setup.py` (legacy), no CI/CD, no PyPI publishing
+- **CLI commands**: `search`, `save`, `send`, `forward`, `label`, `trash`, `draft-create`, `draft-list`, `draft-send`, `draft-delete`, `auth-status`, `version`
+- **Gmail API coverage**: `messages.list`, `messages.get`, `messages.send`, `messages.modify`, `messages.batchModify`, `messages.trash`, `messages.untrash`, `messages.attachments.get`, `drafts.*`, `history.list`, `users.getProfile`
+- **OAuth scopes**: `gmail.modify` + `gmail.compose`
+- **Output**: Markdown + YAML frontmatter, optional attachment downloads, thread export
+- **Packaging**: `pyproject.toml` with hatchling, MkDocs documentation site
+- **Testing**: 170 unit tests, live CLI integration suite (21 scenarios)
 
 ## Phase Overview
 
 | # | Phase | Spec | Status |
 |---|---|---|---|
-| 1 | [Critical Bug Fixes](#phase-1-critical-bug-fixes) | [specs/01-critical-fixes.md](specs/01-critical-fixes.md) | Not started |
-| 2 | [Gmail Read Enhancements](#phase-2-gmail-read-enhancements) | [specs/02-read-enhancements.md](specs/02-read-enhancements.md) | Not started |
-| 3 | [Gmail Write Operations](#phase-3-gmail-write-operations) | [specs/03-write-operations.md](specs/03-write-operations.md) | Not started |
-| 4 | [Enhanced Send and Drafts](#phase-4-enhanced-send-and-drafts) | [specs/04-send-and-drafts.md](specs/04-send-and-drafts.md) | Not started |
-| 5 | [Performance](#phase-5-performance) | [specs/05-performance.md](specs/05-performance.md) | Not started |
-| 6 | [Packaging and Distribution](#phase-6-packaging-and-distribution) | [specs/06-packaging.md](specs/06-packaging.md) | Not started |
-| 7 | [MCP Server](#phase-7-mcp-server) | [specs/07-mcp-server.md](specs/07-mcp-server.md) | Not started |
-| 8 | [CI/CD](#phase-8-cicd) | [specs/08-cicd.md](specs/08-cicd.md) | Not started |
-| 9 | [Documentation Site](#phase-9-documentation-site) | [specs/09-docs-site.md](specs/09-docs-site.md) | Not started |
+| 1 | [Critical Bug Fixes](#phase-1-critical-bug-fixes) | [specs/01-critical-fixes.md](specs/01-critical-fixes.md) | Complete |
+| 2 | [Gmail Read Enhancements](#phase-2-gmail-read-enhancements) | [specs/02-read-enhancements.md](specs/02-read-enhancements.md) | Complete |
+| 3 | [Gmail Write Operations](#phase-3-gmail-write-operations) | [specs/03-write-operations.md](specs/03-write-operations.md) | Complete |
+| 4 | [Enhanced Send and Drafts](#phase-4-enhanced-send-and-drafts) | [specs/04-send-and-drafts.md](specs/04-send-and-drafts.md) | Complete |
+| 5 | [Performance](#phase-5-performance) | [specs/05-performance.md](specs/05-performance.md) | Complete |
+| 6 | [Packaging and Distribution](#phase-6-packaging-and-distribution) | [specs/06-packaging.md](specs/06-packaging.md) | Complete |
+| 7 | [MCP Server](#phase-7-mcp-server) | [specs/07-mcp-server.md](specs/07-mcp-server.md) | Complete |
+| 8 | [CI/CD](#phase-8-cicd) | [specs/08-cicd.md](specs/08-cicd.md) | Complete |
+| 9 | [Documentation Site](#phase-9-documentation-site) | [specs/09-docs-site.md](specs/09-docs-site.md) | Complete |
 
 ---
 
@@ -107,13 +108,5 @@ User-facing documentation site with auto-generated API reference.
 
 | Phase | Scopes | Enables |
 |---|---|---|
-| Current | `readonly` + `send` | Search, save, send, forward |
-| Phase 3 | `modify` (replaces both) | + label management, trash, archive, star |
-| Phase 4 | `modify` + `compose` | + draft create/list/send |
-
-## Status Legend
-
-- Not started
-- In progress
-- Blocked
-- Complete
+| v0.1.0 | `readonly` + `send` | Search, save, send, forward |
+| v0.2.0 | `modify` + `compose` | + labels, trash, drafts, batch operations, sync |

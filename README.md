@@ -193,6 +193,56 @@ Options:
 - `-e, --end-date`: End date in YYYY/MM/DD format
 - `-n, --note`: Optional note to prepend to forwarded email
 
+### Draft Commands
+
+Create, list, send, and delete email drafts:
+
+```bash
+# Create a draft
+iobox draft-create --to recipient@example.com -s "Subject" -b "Draft body"
+
+# List drafts
+iobox draft-list --max 10
+
+# Send a draft
+iobox draft-send --draft-id DRAFT_ID
+
+# Delete a draft
+iobox draft-delete --draft-id DRAFT_ID
+```
+
+### Label Command
+
+Add or remove labels on one or more messages:
+
+```bash
+# Star a message
+iobox label --message-id MSG_ID --star
+
+# Mark as read
+iobox label --message-id MSG_ID --mark-read
+
+# Batch archive messages matching a query
+iobox label -q "from:notifications@example.com" --archive
+```
+
+Options: `--mark-read`, `--mark-unread`, `--star`, `--unstar`, `--archive`, `--add LABEL`, `--remove LABEL`
+
+### Trash Command
+
+Move messages to trash or restore them:
+
+```bash
+# Trash a message
+iobox trash --message-id MSG_ID
+
+# Restore from trash
+iobox trash --message-id MSG_ID --untrash
+
+# Batch trash with confirmation
+iobox trash -q "from:spam@example.com" -d 30
+```
+
 ### Example Search Queries and Date Filtering
 
 ```bash
@@ -285,26 +335,24 @@ iobox/
 ├── src/iobox/                  # Source code
 │   ├── __init__.py
 │   ├── auth.py                 # OAuth 2.0 authentication
-│   ├── cli.py                  # Typer CLI (search, save, send, forward)
+│   ├── cli.py                  # Typer CLI (search, save, send, forward, label, trash, drafts)
 │   ├── email_search.py         # Email search with date filtering
-│   ├── email_retrieval.py      # Full email content and attachment download
-│   ├── email_sender.py         # Compose, send, and forward emails
+│   ├── email_retrieval.py      # Full email content, labels, trash/untrash
+│   ├── email_sender.py         # Compose, send, forward, and draft management
 │   ├── markdown.py             # Markdown module re-exports
 │   ├── markdown_converter.py   # HTML-to-Markdown and YAML frontmatter
-│   ├── file_manager.py         # File save, deduplication, attachments
+│   ├── file_manager.py         # File save, deduplication, attachments, sync state
 │   └── utils.py                # Filename generation and text utilities
 ├── tests/                      # Test files
 │   ├── unit/                   # Unit tests for all modules
 │   ├── integration/            # End-to-end workflow tests
+│   ├── live/                   # Live CLI tests against a real Gmail account
 │   └── fixtures/               # Mock API responses
-├── docs/                       # Documentation
-│   ├── authentication.md       # OAuth setup guide (personal & Workspace)
-│   └── integrations.md         # Integration patterns (library, CLI, MCP, API)
+├── docs/                       # MkDocs documentation site
 ├── credentials.json            # OAuth credentials (not committed)
 ├── token.json                  # OAuth token (not committed)
 ├── .env                        # Environment variables (not committed)
-├── requirements.txt            # Python dependencies
-├── setup.py                    # Package configuration
+├── pyproject.toml              # Package configuration (hatchling)
 └── README.md                   # This file
 ```
 
@@ -351,35 +399,31 @@ The test suite includes:
 - Unit tests for all core modules (auth, cli, email_search, email_retrieval, email_sender, markdown, file_manager, utils)
 - Integration tests for end-to-end workflows
 - Comprehensive mocking of the Gmail API for consistent testing
+- Live CLI integration tests against a real Gmail account (21 scenarios)
+
+```bash
+# Run live tests (requires authenticated Gmail account)
+python tests/live/run_tests.py
+
+# Clean up test emails afterwards
+python tests/live/cleanup.py
+```
 
 For detailed documentation on authentication and integration patterns, see the `docs/` directory.
 
-## Next Steps
+## What's Been Built
 
-The following features and improvements are planned for future development, organized by priority:
+All 9 roadmap phases are complete. See the [full roadmap](docs/roadmap.md) for details.
 
-### High Priority
-- [x] **HTML to Markdown Conversion**: ✅ Implemented - Properly converts HTML emails to well-formatted Markdown using `html2text` library
-- [ ] **Rate Limiting & Error Handling**: Implement exponential backoff for API requests to handle Gmail API rate limiting more gracefully
-- [ ] **Pagination Support**: Add pagination handling in email search for processing large result sets efficiently
-
-### Medium Priority  
-- [ ] **Performance Optimization**: Implement asynchronous programming or multiprocessing for handling large volumes of emails
-- [ ] **Incremental Updates**: Create a system to track the last processed email for more efficient subsequent runs
-- [ ] **Enhanced Security**: Move from file-based credential storage to environment variables or secure vault integration
-- [ ] **Character Encoding**: Improve handling of emails in various languages and character encodings
-
-### Low Priority
-- [ ] **Automatic Categorization**: Integrate machine learning for automatic email categorization
-- [ ] **Summarization Integration**: Add integration with summarization APIs for automatic digest creation
-- [ ] **Web Interface**: Develop a web-based interface for easier configuration and use by non-technical users
-- [ ] **Scheduled Execution**: Implement scheduled runs to keep local archives up-to-date automatically
-
-### Status Legend
-- [ ] Not Started
-- [🔄] In Progress  
-- [✅] Completed
-- [❌] Blocked/Needs Research
+- [x] Critical bug fixes (pagination, label resolution)
+- [x] Gmail read enhancements (thread export, spam/trash, profile)
+- [x] Gmail write operations (label, trash/untrash, batch modify)
+- [x] Enhanced send and drafts (HTML, attachments, draft CRUD)
+- [x] Performance (HTTP batching, incremental sync)
+- [x] Packaging (`pyproject.toml`, hatchling, `py.typed`)
+- [x] MCP server (`pip install iobox[mcp]`)
+- [x] CI/CD (GitHub Actions, ruff, pytest matrix)
+- [x] Documentation site (MkDocs Material, auto API docs)
 
 ## License
 

@@ -10,7 +10,7 @@ Iobox is a Gmail to Markdown converter that extracts emails from Gmail based on 
 
 ### Core Modules
 
-- **`src/iobox/cli.py`**: Typer-based CLI with commands for search, save, send, forward, auth-status, and version
+- **`src/iobox/cli.py`**: Typer-based CLI with commands for search, save, send, forward, draft-create/list/send/delete, label, trash, auth-status, and version
 - **`src/iobox/auth.py`**: Gmail API OAuth 2.0 authentication handling with credential management
 - **`src/iobox/email_search.py`**: Email search using Gmail API with query parsing and date filtering
 - **`src/iobox/email_retrieval.py`**: Full email content retrieval and attachment download
@@ -100,6 +100,28 @@ iobox forward --message-id MESSAGE_ID --to recipient@example.com
 iobox forward -q "from:reports@example.com" --to team@example.com -d 7
 ```
 
+### Draft Commands
+```bash
+iobox draft-create --to recipient@example.com -s "Subject" -b "Body"
+iobox draft-list --max 10
+iobox draft-send --draft-id DRAFT_ID
+iobox draft-delete --draft-id DRAFT_ID
+```
+
+### Label Command
+```bash
+iobox label --message-id MSG_ID --star          # Star a message
+iobox label --message-id MSG_ID --mark-read     # Mark as read
+iobox label -q "from:x@y.com" --archive         # Batch archive
+```
+Options: `--mark-read`, `--mark-unread`, `--star`, `--unstar`, `--archive`, `--add`, `--remove`
+
+### Trash Command
+```bash
+iobox trash --message-id MSG_ID                 # Trash a message
+iobox trash --message-id MSG_ID --untrash       # Restore from trash
+```
+
 ### Utility Commands
 ```bash
 iobox auth-status  # Check authentication
@@ -108,10 +130,20 @@ iobox version     # Show version
 
 ## Testing Strategy
 
-- **Unit tests**: Mock Gmail API responses using `pytest-mock`
-- **Integration tests**: End-to-end workflow testing
+- **Unit tests**: Mock Gmail API responses using `pytest-mock` (`tests/unit/`)
+- **Integration tests**: End-to-end workflow testing (`tests/integration/`)
+- **Live tests**: CLI integration tests against a real Gmail account (`tests/live/`)
 - **Coverage**: Configured via `pytest.ini` with HTML reports in `htmlcov/`
 - **Fixtures**: Centralized mock responses in `tests/fixtures/mock_responses.py`
+
+### Live Tests
+```bash
+# Run all 21 live CLI scenarios (requires authenticated Gmail account)
+python tests/live/run_tests.py
+
+# Clean up test emails from inbox after a run
+python tests/live/cleanup.py
+```
 
 ## File Output Format
 
