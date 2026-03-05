@@ -99,24 +99,44 @@ class TestCliCommands:
             {"message_id": "message-id-1", "subject": "First email", "snippet": "First email snippet"},
             {"message_id": "message-id-2", "subject": "Second email", "snippet": "Second email snippet"}
         ]
-        
-        # Mock email data
-        mock_email_data = {
-            "message_id": "message-id-1",
-            "subject": "Test Subject",
-            "content": "Email body content",
-            "content_type": "text/plain",
-            "from": "sender@example.com",
-            "date": "Mon, 23 Mar 2025 10:00:00 +1100"
-        }
-        
+
+        # Mock email data returned by batch_get_emails
+        mock_batch_results = [
+            {
+                "message_id": "message-id-1",
+                "subject": "First email",
+                "content": "Email body content",
+                "content_type": "text/plain",
+                "from": "sender@example.com",
+                "date": "Mon, 23 Mar 2025 10:00:00 +1100",
+                "labels": [],
+                "attachments": [],
+                "body": "Email body content",
+                "snippet": "First email snippet",
+                "thread_id": "thread-1",
+            },
+            {
+                "message_id": "message-id-2",
+                "subject": "Second email",
+                "content": "Another body",
+                "content_type": "text/plain",
+                "from": "sender@example.com",
+                "date": "Mon, 24 Mar 2025 10:00:00 +1100",
+                "labels": [],
+                "attachments": [],
+                "body": "Another body",
+                "snippet": "Second email snippet",
+                "thread_id": "thread-2",
+            },
+        ]
+
         # Mock markdown content and file paths
         mock_markdown = "# Test Subject\n\nEmail body content"
         mock_filepath = "/path/to/output/email.md"
-        
+
         with patch("iobox.cli.get_gmail_service") as mock_service, \
              patch("iobox.cli.search_emails", return_value=mock_emails), \
-             patch("iobox.cli.get_email_content", return_value=mock_email_data), \
+             patch("iobox.cli.batch_get_emails", return_value=mock_batch_results), \
              patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown), \
              patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath), \
              patch("iobox.cli.create_output_directory", return_value="./output"), \
@@ -147,11 +167,19 @@ class TestCliCommands:
             "credentials_path": "/path/to/credentials.json",
             "token_path": "/path/to/token.json"
         }
-        
-        with patch("iobox.cli.check_auth_status", return_value=mock_status):
+        mock_profile = {
+            "emailAddress": "test@gmail.com",
+            "messagesTotal": 1000,
+            "threadsTotal": 500,
+        }
+
+        with patch("iobox.cli.check_auth_status", return_value=mock_status), \
+             patch("iobox.cli.get_gmail_service") as mock_service, \
+             patch("iobox.cli.get_gmail_profile", return_value=mock_profile):
+            mock_service.return_value = MagicMock()
             # Call the auth-status command
             result = runner.invoke(app, ["auth-status"])
-            
+
             assert result.exit_code == 0
             assert "Authentication Status" in result.stdout
             assert "Authenticated: True" in result.stdout

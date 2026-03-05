@@ -10,6 +10,7 @@ import typer
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
+from iobox import __version__
 from iobox.auth import get_gmail_service, check_auth_status, get_gmail_profile
 from iobox.email_search import search_emails, get_email_content, download_attachment, get_new_messages
 from iobox.email_retrieval import (
@@ -43,8 +44,6 @@ from iobox.email_sender import (
     delete_draft,
 )
 
-from iobox import __version__
-
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
 
@@ -67,7 +66,7 @@ def version():
 def auth_status():
     """Check the status of Gmail API authentication."""
     status = check_auth_status()
-    
+
     typer.echo("\nAuthentication Status")
     typer.echo("-------------------")
     typer.echo(f"Authenticated: {status['authenticated']}")
@@ -75,11 +74,11 @@ def auth_status():
     typer.echo(f"Credentials path: {status['credentials_path']}")
     typer.echo(f"Token file exists: {status['token_file_exists']}")
     typer.echo(f"Token path: {status['token_path']}")
-    
+
     if status["token_file_exists"] and "expired" in status:
         typer.echo(f"Token expired: {status['expired']}")
         typer.echo(f"Has refresh token: {status['has_refresh_token']}")
-    
+
     if not status["credentials_file_exists"]:
         typer.echo("\nTo set up Google Cloud OAuth 2.0 credentials:")
         typer.echo("1. Go to https://console.cloud.google.com/")
@@ -146,14 +145,14 @@ def search(
             label_map=label_map,
             include_spam_trash=include_spam_trash,
         )
-        
+
         if not results:
             typer.echo("No emails found matching the query.")
             return
-        
+
         # Display results
         typer.echo(f"\nFound {len(results)} emails:")
-        
+
         # In debug mode, show a sample of available fields from the first email
         if debug and results:
             typer.echo("\nAPI Response Debug Info (first result):")
@@ -167,7 +166,7 @@ def search(
                     value = f"List with {len(value)} items: {value[:5]}..."
                 typer.echo(f"  - {key}: {value}")
             typer.echo("")
-        
+
         for i, email in enumerate(results, 1):
             subject = email.get('subject', 'No subject')
             sender = email.get('from', 'Unknown sender')
@@ -207,7 +206,7 @@ def search(
                 typer.echo("")
             else:
                 typer.echo("   " + "-" * 40)
-        
+
     except Exception as e:
         typer.echo(f"Error: {str(e)}", err=True)
         sys.exit(1)
@@ -448,7 +447,7 @@ def save(
             typer.echo(f"  - {len(duplicates)} emails skipped (already processed)")
             if download_attachments:
                 typer.echo(f"  - {attachment_count} attachments downloaded")
-                
+
     except Exception as e:
         typer.echo(f"Error saving emails: {e}")
         raise typer.Exit(code=1)
@@ -874,7 +873,7 @@ def main(
 ):
     """
     Iobox - Gmail to Markdown Converter
-    
+
     Use commands to interact with Gmail and convert emails to Markdown.
     """
     pass
