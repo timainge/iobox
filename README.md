@@ -1,42 +1,24 @@
 # Iobox (In and Out Box)
 
-A Gmail to Markdown Converter tool that extracts emails from Gmail based on specific criteria and saves them as markdown files with YAML frontmatter for easy archiving, searching, and further processing.
+A Gmail toolkit for searching, saving, sending, and managing emails — available as a CLI, a Python library, and an MCP server for AI agents.
 
-## Background
+## What It Does
 
-Iobox was created to address the challenge of effectively managing and utilizing valuable information stored in email inboxes. Whether you're subscribed to industry newsletters, collecting research data, or tracking important communications, this tool provides a foundation for transforming your inbox into a processable knowledge resource.
+Iobox gives you full read/write access to Gmail through three interfaces:
 
-The tool serves as the first step in workflows where you need to:
-- Download newsletters or emails locally as structured markdown files
-- Process email content for summarization or analysis
-- Create searchable archives of important communications
-- Integrate email content into note-taking systems or knowledge bases
+- **CLI** (`iobox`) — Search, save as Markdown, send, forward, label, trash, and manage drafts from the terminal
+- **Python library** (`import iobox`) — Use the same capabilities programmatically in scripts and applications
+- **MCP server** (`pip install iobox[mcp]`) — Expose Gmail operations as tools for Claude Desktop, Cursor, VS Code, and other MCP-compatible AI hosts
 
-## Overview
+Core capabilities across all interfaces:
 
-Iobox allows you to:
-- Query your Gmail inbox for a specific date range
-- Extract relevant emails based on labels, senders, or subject lines
-- Save these emails as markdown files with metadata in YAML frontmatter
-- Create a searchable, portable archive of important communications
-
-The current implementation provides a solid foundation with OAuth 2.0 authentication, flexible search criteria, and robust file management capabilities.
-
-## Features
-
-- Gmail API integration with secure OAuth 2.0 authentication
-- Flexible search criteria using Gmail's query syntax
-- Email content extraction with both plain text and HTML support
-- **HTML to Markdown conversion**: Properly converts HTML emails to well-formatted Markdown
-  - Preserves formatting (bold, italic, headers)
-  - Converts links and images to Markdown syntax
-  - Handles tables, lists, and complex email structures
-  - Cleans up common email artifacts (tracking pixels, empty links)
-- Markdown conversion with consistent formatting
-- YAML frontmatter for preserving email metadata
-- Attachment download functionality with filtering options
-- Duplicate prevention mechanism
-- Command-line interface for easy use
+- **Search & read** — Query Gmail with full search syntax, date filtering, and spam/trash inclusion
+- **Save as Markdown** — Export emails and threads as Markdown files with YAML frontmatter, HTML-to-Markdown conversion, and attachment downloads
+- **Send & forward** — Compose plain text or HTML emails with attachments, forward single or batch messages
+- **Drafts** — Create, list, send, and delete drafts
+- **Labels & organize** — Star, archive, mark read/unread, add/remove labels on single or batch messages
+- **Trash** — Trash and restore single or batch messages
+- **Incremental sync** — Only fetch new emails since the last run via Gmail's history API
 
 ## Installation
 
