@@ -1,135 +1,110 @@
-# Iobox (In and Out Box)
+# Iobox
 
-A Gmail toolkit for searching, saving, sending, and managing emails — available as a CLI, a Python library, and an MCP server for AI agents.
+A Gmail to Markdown converter. Extract emails from Gmail and save them as structured markdown files with YAML frontmatter.
 
-## What It Does
+## Why
 
-Iobox gives you full read/write access to Gmail through three interfaces:
+Email inboxes are full of valuable content — newsletters, reports, project updates — but it's trapped in a format that's hard to search, process, or archive. Iobox pulls emails out of Gmail and turns them into clean markdown files you can version-control, feed into LLMs, or drop into your note-taking system.
 
-- **CLI** (`iobox`) — Search, save as Markdown, send, forward, label, trash, and manage drafts from the terminal
-- **Python library** (`import iobox`) — Use the same capabilities programmatically in scripts and applications
-- **MCP server** (`pip install iobox[mcp]`) — Expose Gmail operations as tools for Claude Desktop, Cursor, VS Code, and other MCP-compatible AI hosts
+## Features
 
-Core capabilities across all interfaces:
-
-- **Search & read** — Query Gmail with full search syntax, date filtering, and spam/trash inclusion
-- **Save as Markdown** — Export emails and threads as Markdown files with YAML frontmatter, HTML-to-Markdown conversion, and attachment downloads
-- **Send & forward** — Compose plain text or HTML emails with attachments, forward single or batch messages
-- **Drafts** — Create, list, send, and delete drafts
-- **Labels & organize** — Star, archive, mark read/unread, add/remove labels on single or batch messages
-- **Trash** — Trash and restore single or batch messages
-- **Incremental sync** — Only fetch new emails since the last run via Gmail's history API
+- **Gmail API integration** with OAuth 2.0 authentication
+- **Flexible search** using Gmail's native query syntax
+- **HTML to Markdown conversion** — preserves formatting, links, tables, and lists
+- **YAML frontmatter** with full email metadata (from, to, subject, date, labels, message ID)
+- **Attachment downloads** with optional type filtering
+- **Duplicate prevention** — won't re-download emails you already have
+- **Send, forward, and draft** emails from the CLI
+- **Label and trash management** — star, archive, mark read/unread, trash/restore
+- **Incremental sync** — only fetch new emails since last run
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.8+
-- Google Cloud project with Gmail API enabled
-- OAuth 2.0 credentials for the Gmail API
+- Python 3.10+
+- A Google Cloud project with the Gmail API enabled
+- OAuth 2.0 credentials (Desktop app type)
 
-### Setup
+### Install with uv
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/yourusername/iobox.git
-   cd iobox
-   ```
+```bash
+git clone https://github.com/timainge/iobox.git
+cd iobox
+uv sync
+```
 
-2. Create and activate a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-   ```
+### Install with pip
 
-3. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+git clone https://github.com/timainge/iobox.git
+cd iobox
+pip install -e .
+```
 
-4. Set up your Google Cloud project and obtain OAuth credentials:
-   - Go to the [Google Cloud Console](https://console.cloud.google.com/)
-   - Create a new project or select an existing one
-   - Enable the Gmail API for your project
-   - Create OAuth 2.0 credentials (Desktop app type)
-   - Download the credentials JSON file and save it as `credentials.json` in the project root
+### Set up Google OAuth credentials
 
-5. Configure your environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your specific settings
-   ```
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or select an existing one)
+3. Enable the **Gmail API**
+4. Go to **APIs & Services > Credentials**
+5. Click **Create Credentials > OAuth client ID** (Desktop app type)
+6. Download the JSON file and save it as `credentials.json` in the project root
+7. Optionally configure paths via `.env` (see `.env.example`)
+
+The first time you run a command, a browser window will open for OAuth consent. After that, credentials are cached in `token.json`.
 
 ## Usage
 
-### Command-Line Interface
-
-Iobox uses a command-based interface:
-
 ```bash
-# Display version information
-iobox --version
-
-# Get help on available commands
-iobox --help
-
-# Get help on a specific command
-iobox save --help
-```
-
-### Available Commands
-
-```bash
-# Search for emails
-iobox search -q "from:newsletter@example.com" -m 20 -v
+# Check authentication status
+iobox auth-status
 
 # Search for emails from the last 3 days
 iobox search -q "from:newsletter@example.com" -d 3
 
-# Save a specific email as Markdown
-iobox save --message-id MESSAGE_ID -o ./output_folder
+# Save a specific email by message ID
+iobox save --message-id MESSAGE_ID -o ./output
 
-# Save multiple emails matching a query from the last 14 days
-iobox save --query "label:important" --max 50 -d 14 -o ./important_emails
+# Batch save emails matching a query
+iobox save -q "label:important" --max 50 -d 14 -o ./emails
 
-# Check authentication status
-iobox auth-status
+# Save emails with attachments (only PDFs and spreadsheets)
+iobox save -q "has:attachment" --download-attachments --attachment-types pdf,xlsx -o ./reports
 
-# Display version information
+# Show version
 iobox version
 ```
 
-### Search Command Options
+### Search options
 
-- `-q, --query`: Gmail search query (required)
-- `-m, --max-results`: Maximum number of results to return (default: 10)
-- `-d, --days`: Number of days back to search (default: 7)
-- `-s, --start-date`: Start date in YYYY/MM/DD format (overrides days parameter if provided)
-- `-e, --end-date`: End date in YYYY/MM/DD format (requires start-date)
-- `-v, --verbose`: Show detailed information for each result
-- `--debug`: Show debug information about API responses
+| Flag | Description |
+|---|---|
+| `-q, --query` | Gmail search query (required) |
+| `-m, --max-results` | Max results to return (default: 10) |
+| `-d, --days` | Days back to search (default: 7) |
+| `-s, --start-date` | Start date in `YYYY/MM/DD` format |
+| `-e, --end-date` | End date in `YYYY/MM/DD` format |
+| `-v, --verbose` | Show detailed info per result |
+| `--debug` | Show raw API response fields |
 
-### Save Command Options
+### Save options
 
-The save command supports two modes:
-- **Single mode**: Save one specific email using `--message-id`
-- **Batch mode**: Save multiple emails matching a query using `--query`
+| Flag | Description |
+|---|---|
+| `-m, --message-id` | Save a single email by ID |
+| `-q, --query` | Save emails matching a search query |
+| `--max` | Max emails to save in batch mode (default: 10) |
+| `-d, --days` | Days back to search (default: 7) |
+| `-s, --start-date` | Start date in `YYYY/MM/DD` format |
+| `-e, --end-date` | End date in `YYYY/MM/DD` format |
+| `-o, --output-dir` | Output directory (default: `.`) |
+| `--html-preferred` | Prefer HTML content (default: true) |
+| `--download-attachments` | Download attachments |
+| `--attachment-types` | Filter by extension, e.g. `pdf,docx` |
+| `--sync` | Incremental sync — only fetch new emails |
 
-Options:
-- `-m, --message-id`: Gmail message ID to save (for single email mode)
-- `-q, --query`: Search query for emails to save (for batch mode)
-- `--max`: Maximum number of emails to save in batch mode (default: 10)
-- `-d, --days`: Number of days back to search (default: 7)
-- `-s, --start-date`: Start date in YYYY/MM/DD format (overrides days parameter if provided)
-- `-e, --end-date`: End date in YYYY/MM/DD format (requires start-date)
-- `-o, --output-dir`: Directory to save markdown files to (default: '.')
-- `--html-preferred`: Prefer HTML content if available (default: True)
-- `--download-attachments`: Download email attachments (default: False)
-- `--attachment-types`: Filter attachments by file extension (comma-separated, e.g., 'pdf,docx,xlsx')
-
-### Send Command
-
-Compose and send a new email:
+### Send command
 
 ```bash
 # Send with inline body
@@ -142,17 +117,7 @@ iobox send --to recipient@example.com --subject "Report" --body-file ./report.tx
 iobox send --to recipient@example.com --subject "Update" --body "Content" --cc team@example.com --bcc manager@example.com
 ```
 
-Options:
-- `-t, --to`: Recipient email address (required)
-- `-s, --subject`: Email subject line (required)
-- `-b, --body`: Email body text (inline)
-- `-f, --body-file`: Path to file containing email body
-- `--cc`: CC recipients (comma-separated)
-- `--bcc`: BCC recipients (comma-separated)
-
-### Forward Command
-
-Forward one or more emails to a recipient:
+### Forward command
 
 ```bash
 # Forward a single email
@@ -165,19 +130,7 @@ iobox forward --message-id MESSAGE_ID --to recipient@example.com --note "FYI - s
 iobox forward --query "from:reports@example.com" --to team@example.com --days 7
 ```
 
-Options:
-- `-m, --message-id`: ID of a specific email to forward
-- `-q, --query`: Search query for emails to forward (batch mode)
-- `-t, --to`: Recipient email address (required)
-- `--max`: Maximum number of emails to forward in batch mode (default: 10)
-- `-d, --days`: Number of days back to search (default: 7)
-- `-s, --start-date`: Start date in YYYY/MM/DD format
-- `-e, --end-date`: End date in YYYY/MM/DD format
-- `-n, --note`: Optional note to prepend to forwarded email
-
-### Draft Commands
-
-Create, list, send, and delete email drafts:
+### Draft commands
 
 ```bash
 # Create a draft
@@ -193,9 +146,7 @@ iobox draft-send --draft-id DRAFT_ID
 iobox draft-delete --draft-id DRAFT_ID
 ```
 
-### Label Command
-
-Add or remove labels on one or more messages:
+### Label command
 
 ```bash
 # Star a message
@@ -210,9 +161,7 @@ iobox label -q "from:notifications@example.com" --archive
 
 Options: `--mark-read`, `--mark-unread`, `--star`, `--unstar`, `--archive`, `--add LABEL`, `--remove LABEL`
 
-### Trash Command
-
-Move messages to trash or restore them:
+### Trash command
 
 ```bash
 # Trash a message
@@ -225,55 +174,9 @@ iobox trash --message-id MSG_ID --untrash
 iobox trash -q "from:spam@example.com" -d 30
 ```
 
-### Example Search Queries and Date Filtering
+## Output format
 
-```bash
-# Search for emails from the last 7 days (default)
-iobox search -q "from:newsletter@example.com"
-
-# Search for emails from the last 3 days
-iobox search -q "from:newsletter@example.com" -d 3
-
-# Search for emails within a specific date range (using long-form options)
-iobox search -q "from:reports@example.com" --start-date 2025/04/01 --end-date 2025/04/10
-
-# Search using shorthand date range options
-iobox search -q "label:important" -s 2025/03/15 -e 2025/03/31
-
-# Save emails matching a query from a specific date range
-iobox save -q "label:important" -s 2025/03/15 -e 2025/03/31 -o ./important_emails
-```
-
-**Important Note**: Date format must be YYYY/MM/DD with forward slashes and leading zeros for month and day.
-
-### Example Search Queries
-
-- `"from:newsletter@example.com"` - Emails from a specific sender
-- `"subject:newsletter"` - Emails with "newsletter" in the subject
-- `"label:important"` - Emails with the "important" label
-- `"has:attachment"` - Emails with attachments
-
-### Save Examples
-
-```bash
-# Save a specific email as Markdown
-iobox save --message-id MESSAGE_ID -o ./output_folder
-
-# Save multiple emails matching a query from the last 14 days
-iobox save --query "label:important" --max 50 -d 14 -o ./important_emails
-
-# Save emails with attachments and download the attachments too
-iobox save --query "has:attachment" --download-attachments -o ./emails_with_attachments
-
-# Save emails and download only PDF attachments
-iobox save --query "from:reports@example.com" --download-attachments --attachment-types pdf,xlsx -o ./reports
-```
-
-When attachments are downloaded, they are stored in an `attachments/{email_id}` directory structure within the output directory. Filenames are sanitised to ensure they are safe for all operating systems, and duplicate filenames are handled by appending a number to the filename.
-
-## Output Format
-
-Emails are saved as Markdown files with the following structure:
+Each email is saved as a markdown file with YAML frontmatter:
 
 ```markdown
 ---
@@ -283,7 +186,7 @@ labels:
   - INBOX
   - CATEGORY_UPDATES
 message_id: 123456789abcdef
-saved_date: 2025-08-24T21:30:00.123456
+saved_date: 2025-03-24T21:30:00.123456
 subject: Your Newsletter Subject
 thread_id: thread123456
 to: recipient@example.com
@@ -297,18 +200,17 @@ attachments:
 [Email content in Markdown format]
 ```
 
-### HTML Email Conversion
+Attachments are saved to `attachments/{email_id}/` within the output directory.
 
-When processing HTML emails (the default behavior with `--html-preferred`), iobox:
-- Converts HTML tags to proper Markdown syntax (headers, bold, italic, etc.)
-- Preserves links in Markdown format: `[link text](url)`
-- Converts images to Markdown image syntax: `![alt text](image_url)`
-- Converts HTML tables to Markdown tables
-- Handles lists (ordered and unordered) 
-- Cleans up common email artifacts like tracking pixels and empty links
-- Normalizes excessive whitespace and formatting
+## Configuration
 
-This ensures that HTML newsletters and formatted emails are readable and properly structured in Markdown format.
+Environment variables (set in `.env` or your shell):
+
+| Variable | Default | Description |
+|---|---|---|
+| `CREDENTIALS_DIR` | `.` | Directory containing credential files |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `credentials.json` | Path to OAuth credentials |
+| `GMAIL_TOKEN_FILE` | `token.json` | Path to cached token |
 
 ## Project Structure
 
@@ -330,7 +232,6 @@ iobox/
 │   ├── integration/            # End-to-end workflow tests
 │   ├── live/                   # Live CLI tests against a real Gmail account
 │   └── fixtures/               # Mock API responses
-├── docs/                       # MkDocs documentation site
 ├── credentials.json            # OAuth credentials (not committed)
 ├── token.json                  # OAuth token (not committed)
 ├── .env                        # Environment variables (not committed)
@@ -340,80 +241,17 @@ iobox/
 
 ## Development
 
-### Running Tests
-
-Tests are organized as unit tests and integration tests in the `tests` directory. To run the tests:
-
-1. Ensure your virtual environment is activated:
-   ```bash
-   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-   ```
-
-2. Run all tests with pytest:
-   ```bash
-   python -m pytest
-   ```
-
-3. Run tests with coverage reporting:
-   ```bash
-   python -m pytest --cov=src
-   ```
-
-4. Run specific test categories:
-   ```bash
-   # Run only unit tests
-   python -m pytest tests/unit
-
-   # Run only integration tests
-   python -m pytest tests/integration
-
-   # Run a specific test file
-   python -m pytest tests/unit/test_auth.py
-   ```
-
-5. View detailed coverage report:
-   ```bash
-   python -m pytest --cov=src --cov-report=html
-   # Then open htmlcov/index.html in your browser
-   ```
-
-The test suite includes:
-- Unit tests for all core modules (auth, cli, email_search, email_retrieval, email_sender, markdown, file_manager, utils)
-- Integration tests for end-to-end workflows
-- Comprehensive mocking of the Gmail API for consistent testing
-- Live CLI integration tests against a real Gmail account (21 scenarios)
-
 ```bash
-# Run live tests (requires authenticated Gmail account)
-python tests/live/run_tests.py
+# Install with dev dependencies
+uv sync
 
-# Clean up test emails afterwards
-python tests/live/cleanup.py
+# Run tests
+uv run pytest
+
+# Run tests with coverage
+uv run pytest --cov=src --cov-report=html
 ```
-
-For detailed documentation on authentication and integration patterns, see the `docs/` directory.
-
-## What's Been Built
-
-All 9 roadmap phases are complete. See the [full roadmap](.dev/roadmap.md) for details.
-
-- [x] Critical bug fixes (pagination, label resolution)
-- [x] Gmail read enhancements (thread export, spam/trash, profile)
-- [x] Gmail write operations (label, trash/untrash, batch modify)
-- [x] Enhanced send and drafts (HTML, attachments, draft CRUD)
-- [x] Performance (HTTP batching, incremental sync)
-- [x] Packaging (`pyproject.toml`, hatchling, `py.typed`)
-- [x] MCP server (`pip install iobox[mcp]`)
-- [x] CI/CD (GitHub Actions, ruff, pytest matrix)
-- [x] Documentation site (MkDocs Material, auto API docs)
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgements
-
-- Google Gmail API
-- Python
-- PyYAML
-- Google Auth libraries
+MIT — see [LICENSE](LICENSE) for details.

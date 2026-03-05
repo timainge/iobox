@@ -28,25 +28,26 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual Environment
+# Virtual environments
 venv/
+.venv/
 env/
 ENV/
 
-# IDE specific files
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# OS specific files
+# OS
 .DS_Store
 Thumbs.db
-usage.md
 
-# Coverage
-.coverage
+# Test / coverage
 htmlcov/
+.coverage
+.pytest_cache/
 
 # Fan-out scratchpad
 .fan-out-scratchpad
