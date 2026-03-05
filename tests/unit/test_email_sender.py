@@ -3,19 +3,20 @@ Unit tests for the email_sender module.
 """
 
 import base64
-import pytest
 from email import message_from_bytes
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from iobox.email_sender import (
-    compose_message,
     compose_forward_message,
-    send_message,
-    forward_email,
+    compose_message,
     create_draft,
+    delete_draft,
+    forward_email,
     list_drafts,
     send_draft,
-    delete_draft,
+    send_message,
 )
 
 
@@ -139,20 +140,18 @@ class TestSendMessage:
         message = {"raw": "dGVzdA=="}
         result = send_message(mock_service, message)
 
-        mock_service.users().messages().send.assert_called_once_with(
-            userId="me", body=message
-        )
+        mock_service.users().messages().send.assert_called_once_with(userId="me", body=message)
         assert result["id"] == "sent-msg-1"
 
     def test_send_http_error(self):
+
         from googleapiclient.errors import HttpError
-        from unittest.mock import PropertyMock
 
         mock_service = MagicMock()
         resp = MagicMock()
         resp.status = 403
-        mock_service.users().messages().send.return_value.execute.side_effect = (
-            HttpError(resp, b"forbidden")
+        mock_service.users().messages().send.return_value.execute.side_effect = HttpError(
+            resp, b"forbidden"
         )
 
         with pytest.raises(HttpError):
@@ -217,7 +216,7 @@ class TestComposeHtmlMessage:
             to="bob@example.com",
             subject="Hello HTML",
             body="<b>Hi there</b>",
-            content_type='html',
+            content_type="html",
         )
 
         assert "raw" in result
@@ -269,7 +268,7 @@ class TestComposeWithAttachment:
             to="bob@example.com",
             subject="HTML with Attachment",
             body="<p>See attached</p>",
-            content_type='html',
+            content_type="html",
             attachments=[str(attach_file)],
         )
 
@@ -299,7 +298,7 @@ class TestDraftFunctions:
         result = create_draft(mock_service, message)
 
         mock_service.users().drafts().create.assert_called_once_with(
-            userId='me', body={'message': message}
+            userId="me", body={"message": message}
         )
         assert result["id"] == "draft-1"
 
@@ -308,41 +307,45 @@ class TestDraftFunctions:
 
         # list returns draft stubs
         mock_service.users().drafts().list.return_value.execute.return_value = {
-            'drafts': [{'id': 'draft-1'}, {'id': 'draft-2'}]
+            "drafts": [{"id": "draft-1"}, {"id": "draft-2"}]
         }
 
         # get returns draft detail for each
         def mock_get_execute():
-            return MagicMock(execute=MagicMock(side_effect=[
-                {
-                    'message': {
-                        'snippet': 'First draft snippet',
-                        'payload': {
-                            'headers': [{'name': 'Subject', 'value': 'First Draft'}]
-                        }
-                    }
-                },
-                {
-                    'message': {
-                        'snippet': 'Second draft snippet',
-                        'payload': {
-                            'headers': [{'name': 'Subject', 'value': 'Second Draft'}]
-                        }
-                    }
-                },
-            ]))
+            return MagicMock(
+                execute=MagicMock(
+                    side_effect=[
+                        {
+                            "message": {
+                                "snippet": "First draft snippet",
+                                "payload": {
+                                    "headers": [{"name": "Subject", "value": "First Draft"}]
+                                },
+                            }
+                        },
+                        {
+                            "message": {
+                                "snippet": "Second draft snippet",
+                                "payload": {
+                                    "headers": [{"name": "Subject", "value": "Second Draft"}]
+                                },
+                            }
+                        },
+                    ]
+                )
+            )
 
         draft_get_results = [
             {
-                'message': {
-                    'snippet': 'First draft snippet',
-                    'payload': {'headers': [{'name': 'Subject', 'value': 'First Draft'}]}
+                "message": {
+                    "snippet": "First draft snippet",
+                    "payload": {"headers": [{"name": "Subject", "value": "First Draft"}]},
                 }
             },
             {
-                'message': {
-                    'snippet': 'Second draft snippet',
-                    'payload': {'headers': [{'name': 'Subject', 'value': 'Second Draft'}]}
+                "message": {
+                    "snippet": "Second draft snippet",
+                    "payload": {"headers": [{"name": "Subject", "value": "Second Draft"}]},
                 }
             },
         ]
@@ -351,11 +354,11 @@ class TestDraftFunctions:
         result = list_drafts(mock_service, max_results=10)
 
         assert len(result) == 2
-        assert result[0]['id'] == 'draft-1'
-        assert result[0]['subject'] == 'First Draft'
-        assert result[0]['snippet'] == 'First draft snippet'
-        assert result[1]['id'] == 'draft-2'
-        assert result[1]['subject'] == 'Second Draft'
+        assert result[0]["id"] == "draft-1"
+        assert result[0]["subject"] == "First Draft"
+        assert result[0]["snippet"] == "First draft snippet"
+        assert result[1]["id"] == "draft-2"
+        assert result[1]["subject"] == "Second Draft"
 
     def test_send_draft(self):
         mock_service = MagicMock()
@@ -365,7 +368,7 @@ class TestDraftFunctions:
         result = send_draft(mock_service, "draft-1")
 
         mock_service.users().drafts().send.assert_called_once_with(
-            userId='me', body={'id': 'draft-1'}
+            userId="me", body={"id": "draft-1"}
         )
         assert result["id"] == "sent-msg-1"
 
@@ -375,7 +378,5 @@ class TestDraftFunctions:
 
         result = delete_draft(mock_service, "draft-1")
 
-        mock_service.users().drafts().delete.assert_called_once_with(
-            userId='me', id='draft-1'
-        )
-        assert result == {'status': 'deleted', 'draft_id': 'draft-1'}
+        mock_service.users().drafts().delete.assert_called_once_with(userId="me", id="draft-1")
+        assert result == {"status": "deleted", "draft_id": "draft-1"}

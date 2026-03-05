@@ -9,39 +9,39 @@ Run with: python -m iobox.mcp_server
 """
 
 import os
-from mcp.server.fastmcp import FastMCP
-from typing import Optional
 
-from iobox.auth import get_gmail_service, check_auth_status, get_gmail_profile
-from iobox.email_search import search_emails
+from mcp.server.fastmcp import FastMCP
+
+from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service
 from iobox.email_retrieval import (
+    batch_get_emails,
+    batch_modify_labels,
     get_email_content,
     get_label_map,
     get_thread_content,
     modify_message_labels,
     resolve_label_name,
-    batch_modify_labels,
     trash_message,
     untrash_message,
-    batch_get_emails,
 )
-from iobox.markdown_converter import convert_email_to_markdown, convert_thread_to_markdown
-from iobox.file_manager import (
-    create_output_directory,
-    save_email_to_markdown,
-    check_for_duplicates,
-    download_email_attachments,
-    SyncState,
-)
+from iobox.email_search import search_emails
 from iobox.email_sender import (
-    send_message,
     compose_message,
-    forward_email,
     create_draft,
+    delete_draft,
+    forward_email,
     list_drafts,
     send_draft,
-    delete_draft,
+    send_message,
 )
+from iobox.file_manager import (
+    SyncState,
+    check_for_duplicates,
+    create_output_directory,
+    download_email_attachments,
+    save_email_to_markdown,
+)
+from iobox.markdown_converter import convert_email_to_markdown, convert_thread_to_markdown
 from iobox.utils import slugify_text
 
 mcp = FastMCP("iobox")
@@ -51,13 +51,14 @@ mcp = FastMCP("iobox")
 # Search & Read
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def search_gmail(
     query: str,
     max_results: int = 10,
     days: int = 7,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     include_spam_trash: bool = False,
 ) -> list[dict]:
     """Search Gmail for emails matching a query.
@@ -73,8 +74,14 @@ def search_gmail(
     service = get_gmail_service()
     label_map = get_label_map(service)
     return search_emails(
-        service, query, max_results, days, start_date, end_date,
-        label_map=label_map, include_spam_trash=include_spam_trash,
+        service,
+        query,
+        max_results,
+        days,
+        start_date,
+        end_date,
+        label_map=label_map,
+        include_spam_trash=include_spam_trash,
     )
 
 
@@ -89,12 +96,15 @@ def get_email(message_id: str, prefer_html: bool = True) -> dict:
     service = get_gmail_service()
     label_map = get_label_map(service)
     content_type = "text/html" if prefer_html else "text/plain"
-    return get_email_content(service, message_id, preferred_content_type=content_type, label_map=label_map)
+    return get_email_content(
+        service, message_id, preferred_content_type=content_type, label_map=label_map
+    )
 
 
 # ---------------------------------------------------------------------------
 # Save
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def save_email(
@@ -102,7 +112,7 @@ def save_email(
     output_dir: str = ".",
     prefer_html: bool = True,
     download_attachments: bool = False,
-    attachment_types: Optional[str] = None,
+    attachment_types: str | None = None,
     include_spam_trash: bool = False,
 ) -> str:
     """Save a Gmail message as a Markdown file.
@@ -121,14 +131,20 @@ def save_email(
     service = get_gmail_service()
     label_map = get_label_map(service)
     content_type = "text/html" if prefer_html else "text/plain"
-    email_data = get_email_content(service, message_id, preferred_content_type=content_type, label_map=label_map)
+    email_data = get_email_content(
+        service, message_id, preferred_content_type=content_type, label_map=label_map
+    )
     md = convert_email_to_markdown(email_data)
     out = create_output_directory(output_dir)
     filepath = save_email_to_markdown(email_data, md, out)
 
     if download_attachments and email_data.get("attachments"):
-        filters = [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
-        download_email_attachments(service=service, email_data=email_data, output_dir=out, attachment_filters=filters)
+        filters = (
+            [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
+        )
+        download_email_attachments(
+            service=service, email_data=email_data, output_dir=out, attachment_filters=filters
+        )
 
     return filepath
 
@@ -171,11 +187,11 @@ def save_emails_by_query(
     output_dir: str = ".",
     max_results: int = 10,
     days: int = 7,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     prefer_html: bool = True,
     download_attachments: bool = False,
-    attachment_types: Optional[str] = None,
+    attachment_types: str | None = None,
     include_spam_trash: bool = False,
     sync: bool = False,
 ) -> dict:
@@ -201,7 +217,9 @@ def save_emails_by_query(
     label_map = get_label_map(service)
     content_type = "text/html" if prefer_html else "text/plain"
     out = create_output_directory(output_dir)
-    att_filters = [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
+    att_filters = (
+        [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
+    )
 
     # Incremental sync
     sync_state = SyncState(out)
@@ -209,6 +227,7 @@ def save_emails_by_query(
 
     if sync:
         from iobox.email_search import get_new_messages
+
         state_exists = sync_state.load()
         if state_exists and sync_state.last_history_id:
             new_ids = get_new_messages(service, sync_state.last_history_id)
@@ -219,18 +238,34 @@ def save_emails_by_query(
         if not message_ids_to_fetch:
             profile = service.users().getProfile(userId="me").execute()
             sync_state.update(profile.get("historyId", sync_state.last_history_id), [])
-            return {"saved_count": 0, "skipped_count": 0, "attachment_count": 0, "detail": "No new emails since last sync."}
+            return {
+                "saved_count": 0,
+                "skipped_count": 0,
+                "attachment_count": 0,
+                "detail": "No new emails since last sync.",
+            }
         results_for_batch = [{"message_id": mid} for mid in message_ids_to_fetch]
     else:
         search_results = search_emails(
-            service, query, max_results, days, start_date, end_date,
-            label_map=label_map, include_spam_trash=include_spam_trash,
+            service,
+            query,
+            max_results,
+            days,
+            start_date,
+            end_date,
+            label_map=label_map,
+            include_spam_trash=include_spam_trash,
         )
         if not search_results:
             if sync:
                 profile = service.users().getProfile(userId="me").execute()
                 sync_state.update(profile.get("historyId", ""), [])
-            return {"saved_count": 0, "skipped_count": 0, "attachment_count": 0, "detail": "No emails found."}
+            return {
+                "saved_count": 0,
+                "skipped_count": 0,
+                "attachment_count": 0,
+                "detail": "No emails found.",
+            }
         results_for_batch = search_results
 
     all_ids = [r["message_id"] for r in results_for_batch]
@@ -241,7 +276,9 @@ def save_emails_by_query(
     attachment_count = 0
 
     if ids_to_process:
-        email_batch = batch_get_emails(service, ids_to_process, preferred_content_type=content_type, label_map=label_map)
+        email_batch = batch_get_emails(
+            service, ids_to_process, preferred_content_type=content_type, label_map=label_map
+        )
         for email_data in email_batch:
             if "error" in email_data:
                 continue
@@ -249,29 +286,39 @@ def save_emails_by_query(
             save_email_to_markdown(email_data, md, out)
             saved_count += 1
             if download_attachments and email_data.get("attachments"):
-                res = download_email_attachments(service=service, email_data=email_data, output_dir=out, attachment_filters=att_filters)
+                res = download_email_attachments(
+                    service=service,
+                    email_data=email_data,
+                    output_dir=out,
+                    attachment_filters=att_filters,
+                )
                 attachment_count += res["downloaded_count"]
 
     if sync:
         profile = service.users().getProfile(userId="me").execute()
         sync_state.update(profile.get("historyId", ""), ids_to_process)
 
-    return {"saved_count": saved_count, "skipped_count": len(duplicates), "attachment_count": attachment_count}
+    return {
+        "saved_count": saved_count,
+        "skipped_count": len(duplicates),
+        "attachment_count": attachment_count,
+    }
 
 
 # ---------------------------------------------------------------------------
 # Send & Forward
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def send_email(
     to: str,
     subject: str,
     body: str,
-    cc: Optional[str] = None,
-    bcc: Optional[str] = None,
+    cc: str | None = None,
+    bcc: str | None = None,
     html: bool = False,
-    attachments: Optional[list[str]] = None,
+    attachments: list[str] | None = None,
 ) -> dict:
     """Send an email via Gmail.
 
@@ -288,12 +335,18 @@ def send_email(
     content_type = "html" if html else "plain"
     if attachments:
         from pathlib import Path
+
         for fp in attachments:
             if not Path(fp).exists():
                 raise FileNotFoundError(f"Attachment not found: {fp}")
     message = compose_message(
-        to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-        content_type=content_type, attachments=attachments,
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+        bcc=bcc,
+        content_type=content_type,
+        attachments=attachments,
     )
     return send_message(service, message)
 
@@ -302,7 +355,7 @@ def send_email(
 def forward_gmail(
     message_id: str,
     to: str,
-    note: Optional[str] = None,
+    note: str | None = None,
 ) -> dict:
     """Forward a Gmail message to a recipient.
 
@@ -321,9 +374,9 @@ def batch_forward_gmail(
     to: str,
     max_results: int = 10,
     days: int = 7,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    note: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    note: str | None = None,
 ) -> dict:
     """Forward multiple Gmail messages matching a query to a recipient.
 
@@ -341,7 +394,9 @@ def batch_forward_gmail(
     """
     service = get_gmail_service()
     label_map = get_label_map(service)
-    results = search_emails(service, query, max_results, days, start_date, end_date, label_map=label_map)
+    results = search_emails(
+        service, query, max_results, days, start_date, end_date, label_map=label_map
+    )
     if not results:
         return {"forwarded_count": 0, "detail": "No emails found matching the query."}
 
@@ -357,15 +412,16 @@ def batch_forward_gmail(
 # Drafts
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def create_gmail_draft(
     to: str,
     subject: str,
     body: str,
-    cc: Optional[str] = None,
-    bcc: Optional[str] = None,
+    cc: str | None = None,
+    bcc: str | None = None,
     html: bool = False,
-    attachments: Optional[list[str]] = None,
+    attachments: list[str] | None = None,
 ) -> dict:
     """Create an email draft in Gmail.
 
@@ -382,12 +438,18 @@ def create_gmail_draft(
     content_type = "html" if html else "plain"
     if attachments:
         from pathlib import Path
+
         for fp in attachments:
             if not Path(fp).exists():
                 raise FileNotFoundError(f"Attachment not found: {fp}")
     message = compose_message(
-        to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-        content_type=content_type, attachments=attachments,
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+        bcc=bcc,
+        content_type=content_type,
+        attachments=attachments,
     )
     return create_draft(service, message)
 
@@ -429,6 +491,7 @@ def delete_gmail_draft(draft_id: str) -> dict:
 # Labels
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def modify_labels(
     message_id: str,
@@ -437,8 +500,8 @@ def modify_labels(
     star: bool = False,
     unstar: bool = False,
     archive: bool = False,
-    add_label: Optional[str] = None,
-    remove_label: Optional[str] = None,
+    add_label: str | None = None,
+    remove_label: str | None = None,
 ) -> dict:
     """Add or remove labels on a Gmail message.
 
@@ -488,8 +551,8 @@ def batch_modify_gmail_labels(
     star: bool = False,
     unstar: bool = False,
     archive: bool = False,
-    add_label: Optional[str] = None,
-    remove_label: Optional[str] = None,
+    add_label: str | None = None,
+    remove_label: str | None = None,
 ) -> dict:
     """Modify labels on multiple Gmail messages matching a query.
 
@@ -546,6 +609,7 @@ def batch_modify_gmail_labels(
 # Trash
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def trash_gmail(message_id: str) -> dict:
     """Move a Gmail message to trash.
@@ -599,6 +663,7 @@ def batch_trash_gmail(
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
+
 
 @mcp.tool()
 def check_auth() -> dict:

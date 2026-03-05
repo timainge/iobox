@@ -9,16 +9,14 @@ Usage:
     python tests/live/run_tests.py
 """
 
-import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -44,7 +42,9 @@ class Result:
     detail: str = ""
 
 
-def run(args: list[str], *, check_rc: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess:
+def run(
+    args: list[str], *, check_rc: bool = True, input_text: str | None = None
+) -> subprocess.CompletedProcess:
     """Run a CLI command and return CompletedProcess."""
     return subprocess.run(
         args,
@@ -87,7 +87,8 @@ def get_self_email() -> str:
             return line.split(":", 1)[1].strip()
 
     # Fallback: use the library directly to get the profile
-    from iobox.auth import get_gmail_service, get_gmail_profile
+    from iobox.auth import get_gmail_profile, get_gmail_service
+
     service = get_gmail_service()
     profile = get_gmail_profile(service)
     email = profile.get("emailAddress")
@@ -110,6 +111,7 @@ def get_first_message_id(query: str = "in:inbox", days: int = 30, max_results: i
 # ---------------------------------------------------------------------------
 # Test scenarios
 # ---------------------------------------------------------------------------
+
 
 def test_auth_status() -> Result:
     """1. auth-status — verify authenticated and shows profile."""
@@ -230,7 +232,18 @@ def test_save_attachments(tmp: str) -> Result:
     """9. save — with --download-attachments."""
     name = "save-attachments"
     out = os.path.join(tmp, "save-attach")
-    proc = iobox("save", "-q", "has:attachment", "--max", "1", "-d", "90", "--download-attachments", "-o", out)
+    proc = iobox(
+        "save",
+        "-q",
+        "has:attachment",
+        "--max",
+        "1",
+        "-d",
+        "90",
+        "--download-attachments",
+        "-o",
+        out,
+    )
     try:
         assert_rc(proc)
         # Pass regardless of whether attachments were found — the command itself should succeed
@@ -278,9 +291,19 @@ def test_save_sync(tmp: str) -> Result:
         assert_rc(proc2)
         combined = proc2.stdout
         # Either "Skipping already processed" or "No new emails" indicates sync is working
-        has_skip = "Skipping already processed" in combined or "No new emails" in combined or "0 emails saved" in combined
+        has_skip = (
+            "Skipping already processed" in combined
+            or "No new emails" in combined
+            or "0 emails saved" in combined
+        )
         if not has_skip:
-            return Result(name, False, proc2.stdout, proc2.stderr, "Second sync run did not show skip/no-op behavior")
+            return Result(
+                name,
+                False,
+                proc2.stdout,
+                proc2.stderr,
+                "Second sync run did not show skip/no-op behavior",
+            )
         return Result(name, True, proc2.stdout, proc2.stderr)
     except AssertionError as e:
         return Result(name, False, proc1.stdout, proc1.stderr, str(e))
@@ -290,7 +313,15 @@ def test_send_plain(email: str) -> Result:
     """12. send — plain text email to self."""
     name = "send-plain"
     subject = f"{TAG} Plain text test"
-    proc = iobox("send", "--to", email, "-s", subject, "-b", "This is a plain text test email from iobox live tests.")
+    proc = iobox(
+        "send",
+        "--to",
+        email,
+        "-s",
+        subject,
+        "-b",
+        "This is a plain text test email from iobox live tests.",
+    )
     try:
         assert_rc(proc)
         assert_contains(proc.stdout, "Email sent successfully")
@@ -319,7 +350,9 @@ def test_send_attachment(email: str, tmp: str) -> Result:
     att_path = os.path.join(tmp, "test-attachment.txt")
     Path(att_path).write_text("This is a test attachment from iobox live tests.")
     subject = f"{TAG} Attachment test"
-    proc = iobox("send", "--to", email, "-s", subject, "-b", "See attached file.", "--attach", att_path)
+    proc = iobox(
+        "send", "--to", email, "-s", subject, "-b", "See attached file.", "--attach", att_path
+    )
     try:
         assert_rc(proc)
         assert_contains(proc.stdout, "Email sent successfully")
@@ -372,8 +405,16 @@ def test_draft_list(expected_subject_fragment: str) -> Result:
         has_tag = expected_subject_fragment in proc.stdout
         has_drafts = "draft(s):" in proc.stdout
         if not (has_tag or has_drafts):
-            raise AssertionError(f"Expected drafts list or tag {expected_subject_fragment!r} in output")
-        return Result(name, True, proc.stdout, proc.stderr, "" if has_tag else "tag not found in listed drafts (may be paginated)")
+            raise AssertionError(
+                f"Expected drafts list or tag {expected_subject_fragment!r} in output"
+            )
+        return Result(
+            name,
+            True,
+            proc.stdout,
+            proc.stderr,
+            "" if has_tag else "tag not found in listed drafts (may be paginated)",
+        )
     except AssertionError as e:
         return Result(name, False, proc.stdout, proc.stderr, str(e))
 
@@ -434,7 +475,7 @@ def test_trash_and_untrash(email: str) -> Result:
 
         # Find the test email we just sent
         msg_id = None
-        for attempt in range(3):
+        for _attempt in range(3):
             proc_search = iobox("search", "-q", f"subject:{TAG} Trash test", "-m", "1", "-d", "1")
             if proc_search.returncode == 0:
                 for line in proc_search.stdout.splitlines():
@@ -447,8 +488,13 @@ def test_trash_and_untrash(email: str) -> Result:
             time.sleep(5)
 
         if not msg_id:
-            return Result(name, False, proc_search.stdout, proc_search.stderr,
-                          "Could not find test email to trash after sending + waiting")
+            return Result(
+                name,
+                False,
+                proc_search.stdout,
+                proc_search.stderr,
+                "Could not find test email to trash after sending + waiting",
+            )
 
         proc1 = iobox("trash", "--message-id", msg_id)
         assert_rc(proc1)
@@ -466,6 +512,7 @@ def test_trash_and_untrash(email: str) -> Result:
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
+
 
 def main():
     print(f"{BOLD}iobox Live Integration Tests{RESET}")
@@ -581,8 +628,8 @@ def main():
     except Exception as e:
         print(f"\n{YELLOW}Warning: Could not clean up {tmp}: {e}{RESET}")
 
-    print(f"\nTo clean up test emails from inbox, run:")
-    print(f"  python tests/live/cleanup.py")
+    print("\nTo clean up test emails from inbox, run:")
+    print("  python tests/live/cleanup.py")
 
     sys.exit(1 if failed else 0)
 

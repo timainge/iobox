@@ -5,27 +5,25 @@ Verifies that the canonical imports work and that functions
 behave identically whether imported from email_retrieval or email_search.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
 import base64
+from unittest.mock import MagicMock
+
+import pytest
 
 import iobox.email_retrieval as er
 from iobox.email_retrieval import (
+    batch_get_emails,
+    batch_modify_labels,
+    download_attachment,
     get_email_content,
     get_label_map,
-    download_attachment,
     get_thread_content,
     modify_message_labels,
     resolve_label_name,
-    batch_modify_labels,
     trash_message,
     untrash_message,
-    batch_get_emails,
-    _find_attachments,
-    _extract_content_from_payload,
-    _extract_content_from_parts,
 )
-from tests.fixtures.mock_responses import MOCK_PLAIN_TEXT_MESSAGE, MOCK_ATTACHMENT_MESSAGE
+from tests.fixtures.mock_responses import MOCK_ATTACHMENT_MESSAGE, MOCK_PLAIN_TEXT_MESSAGE
 
 # Mock labels.list response used across label-related tests
 MOCK_LABELS_RESPONSE = {
@@ -76,8 +74,8 @@ class TestEmailRetrieval:
 
     def test_backward_compat_import_from_email_search(self):
         """Ensure importing from email_search still works."""
-        from iobox.email_search import get_email_content as es_get
         from iobox.email_search import download_attachment as es_dl
+        from iobox.email_search import get_email_content as es_get
         from iobox.email_search import get_label_map as es_glm
 
         assert es_get is get_email_content
@@ -102,7 +100,7 @@ class TestGetLabelMap:
         assert label_map["Label_12345"] == "Newsletter"
         assert label_map["Label_67890"] == "Work"
         assert label_map["CATEGORY_PERSONAL"] == "CATEGORY_PERSONAL"
-        mock_gmail_service.users().labels().list.assert_called_once_with(userId='me')
+        mock_gmail_service.users().labels().list.assert_called_once_with(userId="me")
 
     def test_get_label_map_error_fallback(self, mock_gmail_service, mocker):
         """If labels.list raises, get_label_map returns an empty dict."""
@@ -146,13 +144,10 @@ class TestLabelResolution:
                     {"name": "From", "value": "sender@example.com"},
                     {"name": "To", "value": "recipient@example.com"},
                     {"name": "Subject", "value": "Test Subject"},
-                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"}
+                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"},
                 ],
-                "body": {
-                    "data": "SGVsbG8gd29ybGQ=",
-                    "size": 11
-                }
-            }
+                "body": {"data": "SGVsbG8gd29ybGQ=", "size": 11},
+            },
         }
 
         mock_get = MagicMock()
@@ -161,9 +156,7 @@ class TestLabelResolution:
 
         label_map = {"INBOX": "INBOX", "Label_12345": "Newsletter"}
         email_data = get_email_content(
-            service=mock_gmail_service,
-            message_id="message-id-1",
-            label_map=label_map
+            service=mock_gmail_service, message_id="message-id-1", label_map=label_map
         )
 
         assert "INBOX" in email_data["labels"]
@@ -183,13 +176,10 @@ class TestLabelResolution:
                     {"name": "From", "value": "sender@example.com"},
                     {"name": "To", "value": "recipient@example.com"},
                     {"name": "Subject", "value": "Test Subject"},
-                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"}
+                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"},
                 ],
-                "body": {
-                    "data": "SGVsbG8gd29ybGQ=",
-                    "size": 11
-                }
-            }
+                "body": {"data": "SGVsbG8gd29ybGQ=", "size": 11},
+            },
         }
 
         mock_get = MagicMock()
@@ -198,7 +188,7 @@ class TestLabelResolution:
 
         email_data = get_email_content(
             service=mock_gmail_service,
-            message_id="message-id-1"
+            message_id="message-id-1",
             # no label_map
         )
 
@@ -210,6 +200,7 @@ class TestLabelResolution:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_message(msg_id, subject, sender, date, internal_date, body_b64):
     """Build a minimal Gmail API message dict."""
@@ -294,7 +285,7 @@ class TestModifyMessageLabels:
         modify_message_labels(mock_gmail_service, "msg-1", add_labels=["STARRED"])
 
         mock_gmail_service.users().messages().modify.assert_called_once_with(
-            userId='me', id='msg-1', body={'addLabelIds': ['STARRED']}
+            userId="me", id="msg-1", body={"addLabelIds": ["STARRED"]}
         )
 
     def test_modify_message_labels_remove(self, mock_gmail_service):
@@ -306,7 +297,7 @@ class TestModifyMessageLabels:
         modify_message_labels(mock_gmail_service, "msg-1", remove_labels=["UNREAD"])
 
         mock_gmail_service.users().messages().modify.assert_called_once_with(
-            userId='me', id='msg-1', body={'removeLabelIds': ['UNREAD']}
+            userId="me", id="msg-1", body={"removeLabelIds": ["UNREAD"]}
         )
 
     def test_modify_message_labels_both(self, mock_gmail_service):
@@ -315,12 +306,13 @@ class TestModifyMessageLabels:
         mock_modify.execute.return_value = {"id": "msg-1"}
         mock_gmail_service.users().messages().modify.return_value = mock_modify
 
-        modify_message_labels(mock_gmail_service, "msg-1",
-                              add_labels=["STARRED"], remove_labels=["UNREAD"])
+        modify_message_labels(
+            mock_gmail_service, "msg-1", add_labels=["STARRED"], remove_labels=["UNREAD"]
+        )
 
-        call_body = mock_gmail_service.users().messages().modify.call_args[1]['body']
-        assert call_body['addLabelIds'] == ['STARRED']
-        assert call_body['removeLabelIds'] == ['UNREAD']
+        call_body = mock_gmail_service.users().messages().modify.call_args[1]["body"]
+        assert call_body["addLabelIds"] == ["STARRED"]
+        assert call_body["removeLabelIds"] == ["UNREAD"]
 
 
 class TestResolveLabelName:
@@ -328,14 +320,14 @@ class TestResolveLabelName:
 
     def test_resolve_label_name_system(self, mock_gmail_service):
         """System labels are returned as-is (uppercased)."""
-        for name in ('inbox', 'INBOX', 'UNREAD', 'STARRED', 'TRASH'):
+        for name in ("inbox", "INBOX", "UNREAD", "STARRED", "TRASH"):
             result = resolve_label_name(mock_gmail_service, name)
             assert result == name.upper()
 
     def test_resolve_label_name_category(self, mock_gmail_service):
         """CATEGORY_* labels are returned uppercased."""
-        result = resolve_label_name(mock_gmail_service, 'category_personal')
-        assert result == 'CATEGORY_PERSONAL'
+        result = resolve_label_name(mock_gmail_service, "category_personal")
+        assert result == "CATEGORY_PERSONAL"
 
     def test_resolve_label_name_custom(self, mock_gmail_service, mocker):
         """Custom label names are resolved via the label map."""
@@ -395,7 +387,7 @@ class TestTrashUntrash:
 
         result = trash_message(mock_gmail_service, "msg-1")
 
-        mock_gmail_service.users().messages().trash.assert_called_once_with(userId='me', id='msg-1')
+        mock_gmail_service.users().messages().trash.assert_called_once_with(userId="me", id="msg-1")
         assert result["id"] == "msg-1"
 
     def test_untrash_message(self, mock_gmail_service):
@@ -406,7 +398,9 @@ class TestTrashUntrash:
 
         result = untrash_message(mock_gmail_service, "msg-1")
 
-        mock_gmail_service.users().messages().untrash.assert_called_once_with(userId='me', id='msg-1')
+        mock_gmail_service.users().messages().untrash.assert_called_once_with(
+            userId="me", id="msg-1"
+        )
         assert result["id"] == "msg-1"
 
 
@@ -443,7 +437,7 @@ class TestBatchGetEmails:
         mock_gmail_service.new_batch_http_request.return_value = mock_batch
 
         def fake_execute():
-            callback = mock_gmail_service.new_batch_http_request.call_args[1]['callback']
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]["callback"]
             for req_id, resp in responses.items():
                 callback(req_id, resp, None)
 
@@ -452,12 +446,12 @@ class TestBatchGetEmails:
         result = batch_get_emails(mock_gmail_service, msg_ids)
 
         assert len(result) == 3
-        assert result[0]['message_id'] == 'msg1'
-        assert result[1]['message_id'] == 'msg2'
-        assert result[2]['message_id'] == 'msg3'
+        assert result[0]["message_id"] == "msg1"
+        assert result[1]["message_id"] == "msg2"
+        assert result[2]["message_id"] == "msg3"
         # No error keys
         for item in result:
-            assert 'error' not in item
+            assert "error" not in item
 
     def test_batch_get_emails_partial_failure(self, mock_gmail_service):
         """Failed messages appear with 'error' key; successful ones are processed normally."""
@@ -468,13 +462,16 @@ class TestBatchGetEmails:
             "msg4": _make_full_message("msg4"),
         }
         # msg2 and msg5 will fail
-        error_ids = {"msg2": Exception("API error for msg2"), "msg5": Exception("API error for msg5")}
+        error_ids = {
+            "msg2": Exception("API error for msg2"),
+            "msg5": Exception("API error for msg5"),
+        }
 
         mock_batch = MagicMock()
         mock_gmail_service.new_batch_http_request.return_value = mock_batch
 
         def fake_execute():
-            callback = mock_gmail_service.new_batch_http_request.call_args[1]['callback']
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]["callback"]
             for req_id, resp in responses.items():
                 callback(req_id, resp, None)
             for req_id, exc in error_ids.items():
@@ -486,20 +483,20 @@ class TestBatchGetEmails:
 
         assert len(result) == 5
         # Check order
-        assert result[0]['message_id'] == 'msg1'
-        assert 'error' not in result[0]
+        assert result[0]["message_id"] == "msg1"
+        assert "error" not in result[0]
 
-        assert result[1]['message_id'] == 'msg2'
-        assert 'error' in result[1]
+        assert result[1]["message_id"] == "msg2"
+        assert "error" in result[1]
 
-        assert result[2]['message_id'] == 'msg3'
-        assert 'error' not in result[2]
+        assert result[2]["message_id"] == "msg3"
+        assert "error" not in result[2]
 
-        assert result[3]['message_id'] == 'msg4'
-        assert 'error' not in result[3]
+        assert result[3]["message_id"] == "msg4"
+        assert "error" not in result[3]
 
-        assert result[4]['message_id'] == 'msg5'
-        assert 'error' in result[4]
+        assert result[4]["message_id"] == "msg5"
+        assert "error" in result[4]
 
     def test_batch_get_emails_chunks_of_50(self, mock_gmail_service):
         """More than 50 message IDs triggers multiple batch executions."""
@@ -511,10 +508,9 @@ class TestBatchGetEmails:
 
         def make_mock_batch(*args, **kwargs):
             mock_batch = MagicMock()
-            callback = kwargs.get('callback')
+            callback = kwargs.get("callback")
             # Track which IDs are added to this batch
             ids_in_batch = []
-            original_add = mock_batch.add
 
             def track_add(request, request_id=None):
                 ids_in_batch.append(request_id)
@@ -537,4 +533,4 @@ class TestBatchGetEmails:
         # Should have created 2 batches (50 + 25)
         assert mock_gmail_service.new_batch_http_request.call_count == 2
         assert len(result) == 75
-        assert all('error' not in item for item in result)
+        assert all("error" not in item for item in result)

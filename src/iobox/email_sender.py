@@ -8,25 +8,29 @@ via the Gmail API.
 import base64
 import logging
 import mimetypes
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
 from email import encoders
-from typing import Dict, Any, Optional, List
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import Any
 
 from googleapiclient.errors import HttpError
 
 from iobox.email_retrieval import get_email_content
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def compose_message(to: str, subject: str, body: str,
-                    from_addr: Optional[str] = None,
-                    cc: Optional[str] = None,
-                    bcc: Optional[str] = None,
-                    content_type: str = 'plain',
-                    attachments: Optional[List[str]] = None) -> Dict[str, str]:
+def compose_message(
+    to: str,
+    subject: str,
+    body: str,
+    from_addr: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
+    content_type: str = "plain",
+    attachments: list[str] | None = None,
+) -> dict[str, str]:
     """
     Compose an RFC 2822 email message encoded for the Gmail API.
 
@@ -46,55 +50,59 @@ def compose_message(to: str, subject: str, body: str,
     text_part = MIMEText(body, content_type)
 
     if attachments:
-        if content_type == 'html':
+        if content_type == "html":
             # nested multipart: mixed outer, alternative inner
-            outer = MIMEMultipart('mixed')
-            inner = MIMEMultipart('alternative')
-            inner.attach(MIMEText(body, 'plain'))
-            inner.attach(MIMEText(body, 'html'))
+            outer = MIMEMultipart("mixed")
+            inner = MIMEMultipart("alternative")
+            inner.attach(MIMEText(body, "plain"))
+            inner.attach(MIMEText(body, "html"))
             outer.attach(inner)
         else:
-            outer = MIMEMultipart('mixed')
+            outer = MIMEMultipart("mixed")
             outer.attach(text_part)
 
         for file_path in attachments:
             mime_type, _ = mimetypes.guess_type(file_path)
             if mime_type is None:
-                mime_type = 'application/octet-stream'
-            main_type, sub_type = mime_type.split('/', 1)
+                mime_type = "application/octet-stream"
+            main_type, sub_type = mime_type.split("/", 1)
 
-            with open(file_path, 'rb') as f:
+            with open(file_path, "rb") as f:
                 file_data = f.read()
 
             part = MIMEBase(main_type, sub_type)
             part.set_payload(file_data)
             encoders.encode_base64(part)
             import os
+
             filename = os.path.basename(file_path)
-            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+            part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
             outer.attach(part)
 
         message = outer
     else:
         message = text_part
 
-    message['to'] = to
-    message['subject'] = subject
+    message["to"] = to
+    message["subject"] = subject
 
     if from_addr:
-        message['from'] = from_addr
+        message["from"] = from_addr
     if cc:
-        message['cc'] = cc
+        message["cc"] = cc
     if bcc:
-        message['bcc'] = bcc
+        message["bcc"] = bcc
 
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
-    return {'raw': raw}
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+    return {"raw": raw}
 
 
-def compose_forward_message(original_email: Dict[str, Any], to: str,
-                            from_addr: Optional[str] = None,
-                            additional_text: Optional[str] = None) -> Dict[str, str]:
+def compose_forward_message(
+    original_email: dict[str, Any],
+    to: str,
+    from_addr: str | None = None,
+    additional_text: str | None = None,
+) -> dict[str, str]:
     """
     Compose a forwarded email message.
 
@@ -109,10 +117,10 @@ def compose_forward_message(original_email: Dict[str, Any], to: str,
     Returns:
         dict: Message body with 'raw' base64url-encoded RFC 2822 payload
     """
-    orig_from = original_email.get('from', 'Unknown')
-    orig_date = original_email.get('date', 'Unknown')
-    orig_subject = original_email.get('subject', 'No Subject')
-    orig_body = original_email.get('body', '') or original_email.get('content', '')
+    orig_from = original_email.get("from", "Unknown")
+    orig_date = original_email.get("date", "Unknown")
+    orig_subject = original_email.get("subject", "No Subject")
+    orig_body = original_email.get("body", "") or original_email.get("content", "")
 
     parts = []
     if additional_text:
@@ -132,7 +140,7 @@ def compose_forward_message(original_email: Dict[str, Any], to: str,
     return compose_message(to=to, subject=subject, body=body, from_addr=from_addr)
 
 
-def send_message(service, message: Dict[str, str]) -> Dict[str, Any]:
+def send_message(service, message: dict[str, str]) -> dict[str, Any]:
     """
     Send an email message via the Gmail API.
 
@@ -144,10 +152,7 @@ def send_message(service, message: Dict[str, str]) -> Dict[str, Any]:
         dict: Gmail API send response containing the message id and other metadata
     """
     try:
-        result = service.users().messages().send(
-            userId='me',
-            body=message
-        ).execute()
+        result = service.users().messages().send(userId="me", body=message).execute()
         logging.info(f"Message sent successfully. Message Id: {result.get('id', '')}")
         return result
     except HttpError as error:
@@ -155,9 +160,13 @@ def send_message(service, message: Dict[str, str]) -> Dict[str, Any]:
         raise
 
 
-def forward_email(service, message_id: str, to: str,
-                  from_addr: Optional[str] = None,
-                  additional_text: Optional[str] = None) -> Dict[str, Any]:
+def forward_email(
+    service,
+    message_id: str,
+    to: str,
+    from_addr: str | None = None,
+    additional_text: str | None = None,
+) -> dict[str, Any]:
     """
     Convenience function: retrieve an email and forward it.
 
@@ -181,7 +190,7 @@ def forward_email(service, message_id: str, to: str,
     return send_message(service, message)
 
 
-def create_draft(service, message: Dict[str, str]) -> Dict[str, Any]:
+def create_draft(service, message: dict[str, str]) -> dict[str, Any]:
     """
     Create a Gmail draft.
 
@@ -192,13 +201,11 @@ def create_draft(service, message: Dict[str, str]) -> Dict[str, Any]:
     Returns:
         dict: The draft resource dict from the Gmail API
     """
-    draft = service.users().drafts().create(
-        userId='me', body={'message': message}
-    ).execute()
+    draft = service.users().drafts().create(userId="me", body={"message": message}).execute()
     return draft
 
 
-def list_drafts(service, max_results: int = 10) -> List[Dict[str, Any]]:
+def list_drafts(service, max_results: int = 10) -> list[dict[str, Any]]:
     """
     List Gmail drafts.
 
@@ -209,26 +216,26 @@ def list_drafts(service, max_results: int = 10) -> List[Dict[str, Any]]:
     Returns:
         list: List of dicts with id, subject, and snippet for each draft
     """
-    result = service.users().drafts().list(
-        userId='me', maxResults=max_results
-    ).execute()
-    drafts = result.get('drafts', [])
+    result = service.users().drafts().list(userId="me", maxResults=max_results).execute()
+    drafts = result.get("drafts", [])
     draft_list = []
     for d in drafts:
-        draft_data = service.users().drafts().get(
-            userId='me', id=d['id'], format='metadata'
-        ).execute()
-        msg = draft_data.get('message', {})
-        headers = {h['name']: h['value'] for h in msg.get('payload', {}).get('headers', [])}
-        draft_list.append({
-            'id': d['id'],
-            'subject': headers.get('Subject', '(no subject)'),
-            'snippet': msg.get('snippet', ''),
-        })
+        draft_data = (
+            service.users().drafts().get(userId="me", id=d["id"], format="metadata").execute()
+        )
+        msg = draft_data.get("message", {})
+        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+        draft_list.append(
+            {
+                "id": d["id"],
+                "subject": headers.get("Subject", "(no subject)"),
+                "snippet": msg.get("snippet", ""),
+            }
+        )
     return draft_list
 
 
-def get_draft(service, draft_id: str) -> Dict[str, Any]:
+def get_draft(service, draft_id: str) -> dict[str, Any]:
     """
     Get a specific draft by ID.
 
@@ -239,12 +246,10 @@ def get_draft(service, draft_id: str) -> Dict[str, Any]:
     Returns:
         dict: The full draft resource dict from the Gmail API
     """
-    return service.users().drafts().get(
-        userId='me', id=draft_id, format='full'
-    ).execute()
+    return service.users().drafts().get(userId="me", id=draft_id, format="full").execute()
 
 
-def send_draft(service, draft_id: str) -> Dict[str, Any]:
+def send_draft(service, draft_id: str) -> dict[str, Any]:
     """
     Send an existing draft.
 
@@ -255,12 +260,10 @@ def send_draft(service, draft_id: str) -> Dict[str, Any]:
     Returns:
         dict: Gmail API send response
     """
-    return service.users().drafts().send(
-        userId='me', body={'id': draft_id}
-    ).execute()
+    return service.users().drafts().send(userId="me", body={"id": draft_id}).execute()
 
 
-def delete_draft(service, draft_id: str) -> Dict[str, Any]:
+def delete_draft(service, draft_id: str) -> dict[str, Any]:
     """
     Permanently delete a draft.
 
@@ -271,7 +274,5 @@ def delete_draft(service, draft_id: str) -> Dict[str, Any]:
     Returns:
         dict: Status dict with 'status' and 'draft_id' keys
     """
-    service.users().drafts().delete(
-        userId='me', id=draft_id
-    ).execute()
-    return {'status': 'deleted', 'draft_id': draft_id}
+    service.users().drafts().delete(userId="me", id=draft_id).execute()
+    return {"status": "deleted", "draft_id": draft_id}

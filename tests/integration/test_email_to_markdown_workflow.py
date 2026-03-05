@@ -6,13 +6,11 @@ combining multiple modules to verify the full workflow.
 """
 
 import os
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from iobox.auth import get_gmail_service
-from iobox.email_search import search_emails, get_email_content
-from iobox.markdown import convert_email_to_markdown
+from iobox.email_search import get_email_content, search_emails
 from iobox.file_manager import save_email_to_markdown
+from iobox.markdown import convert_email_to_markdown
 from tests.fixtures.mock_responses import MOCK_PLAIN_TEXT_MESSAGE
 
 
@@ -21,6 +19,7 @@ def _make_batch_mock(service_mock, metadata_responses):
 
     metadata_responses: dict mapping message_id -> raw API response dict
     """
+
     def fake_new_batch(callback):
         batch = MagicMock()
         added = []
@@ -54,29 +53,30 @@ class TestEmailToMarkdownWorkflow:
         # Mock search results (messages.list)
         mock_list = MagicMock()
         mock_list.execute.return_value = {
-            "messages": [
-                {"id": "message-id-1", "threadId": "thread-id-1"}
-            ],
-            "resultSizeEstimate": 1
+            "messages": [{"id": "message-id-1", "threadId": "thread-id-1"}],
+            "resultSizeEstimate": 1,
         }
         mock_service.users().messages().list = MagicMock(return_value=mock_list)
 
         # Mock batch metadata fetch
-        _make_batch_mock(mock_service, {
-            "message-id-1": {
-                "id": "message-id-1",
-                "threadId": "thread-id-1",
-                "snippet": "Test snippet",
-                "labelIds": ["INBOX"],
-                "payload": {
-                    "headers": [
-                        {"name": "Subject", "value": "Test Email Subject"},
-                        {"name": "From", "value": "sender@example.com"},
-                        {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
-                    ]
+        _make_batch_mock(
+            mock_service,
+            {
+                "message-id-1": {
+                    "id": "message-id-1",
+                    "threadId": "thread-id-1",
+                    "snippet": "Test snippet",
+                    "labelIds": ["INBOX"],
+                    "payload": {
+                        "headers": [
+                            {"name": "Subject", "value": "Test Email Subject"},
+                            {"name": "From", "value": "sender@example.com"},
+                            {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
+                        ]
+                    },
                 }
-            }
-        })
+            },
+        )
 
         # Mock email content retrieval (for get_email_content)
         mock_get = MagicMock()
@@ -88,22 +88,20 @@ class TestEmailToMarkdownWorkflow:
 
         mock_open = mocker.mock_open()
 
-        with patch("builtins.open", mock_open), \
-             patch("iobox.markdown.create_markdown_filename", return_value=mock_filename), \
-             patch("iobox.file_manager.create_markdown_filename", return_value=mock_filename):
-
+        with (
+            patch("builtins.open", mock_open),
+            patch("iobox.markdown.create_markdown_filename", return_value=mock_filename),
+            patch("iobox.file_manager.create_markdown_filename", return_value=mock_filename),
+        ):
             search_results = search_emails(
-                service=mock_service,
-                query="from:example.com",
-                max_results=1
+                service=mock_service, query="from:example.com", max_results=1
             )
 
             assert len(search_results) == 1
             assert search_results[0]["message_id"] == "message-id-1"
 
             email_data = get_email_content(
-                service=mock_service,
-                message_id=search_results[0]["message_id"]
+                service=mock_service, message_id=search_results[0]["message_id"]
             )
 
             assert email_data["message_id"] == "message-id-1"
@@ -115,13 +113,12 @@ class TestEmailToMarkdownWorkflow:
             assert "subject: Test Email Subject" in markdown_content
 
             output_path = save_email_to_markdown(
-                email_data=email_data,
-                markdown_content=markdown_content,
-                output_dir=str(output_dir)
+                email_data=email_data, markdown_content=markdown_content, output_dir=str(output_dir)
             )
 
-            assert output_path == mock_full_path or output_path.endswith(mock_filename), \
-                   f"Expected path ending with {mock_filename}, got {output_path}"
+            assert output_path == mock_full_path or output_path.endswith(mock_filename), (
+                f"Expected path ending with {mock_filename}, got {output_path}"
+            )
 
             mock_open.assert_called_once()
             mock_open().write.assert_called_once_with(markdown_content)
@@ -138,41 +135,44 @@ class TestEmailToMarkdownWorkflow:
         mock_list.execute.return_value = {
             "messages": [
                 {"id": "message-id-1", "threadId": "thread-id-1"},
-                {"id": "message-id-2", "threadId": "thread-id-2"}
+                {"id": "message-id-2", "threadId": "thread-id-2"},
             ],
-            "resultSizeEstimate": 2
+            "resultSizeEstimate": 2,
         }
         mock_service.users().messages().list = MagicMock(return_value=mock_list)
 
         # Mock batch metadata fetch
-        _make_batch_mock(mock_service, {
-            "message-id-1": {
-                "id": "message-id-1",
-                "threadId": "thread-id-1",
-                "snippet": "Snippet 1",
-                "labelIds": ["INBOX"],
-                "payload": {
-                    "headers": [
-                        {"name": "Subject", "value": "Test Email Subject"},
-                        {"name": "From", "value": "sender@example.com"},
-                        {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
-                    ]
-                }
+        _make_batch_mock(
+            mock_service,
+            {
+                "message-id-1": {
+                    "id": "message-id-1",
+                    "threadId": "thread-id-1",
+                    "snippet": "Snippet 1",
+                    "labelIds": ["INBOX"],
+                    "payload": {
+                        "headers": [
+                            {"name": "Subject", "value": "Test Email Subject"},
+                            {"name": "From", "value": "sender@example.com"},
+                            {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
+                        ]
+                    },
+                },
+                "message-id-2": {
+                    "id": "message-id-2",
+                    "threadId": "thread-id-2",
+                    "snippet": "Snippet 2",
+                    "labelIds": ["INBOX"],
+                    "payload": {
+                        "headers": [
+                            {"name": "Subject", "value": "Test Email Subject"},
+                            {"name": "From", "value": "sender@example.com"},
+                            {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
+                        ]
+                    },
+                },
             },
-            "message-id-2": {
-                "id": "message-id-2",
-                "threadId": "thread-id-2",
-                "snippet": "Snippet 2",
-                "labelIds": ["INBOX"],
-                "payload": {
-                    "headers": [
-                        {"name": "Subject", "value": "Test Email Subject"},
-                        {"name": "From", "value": "sender@example.com"},
-                        {"name": "Date", "value": "Mon, 01 Jan 2024 00:00:00 +0000"},
-                    ]
-                }
-            }
-        })
+        )
 
         # Mock email content retrieval
         message1 = dict(MOCK_PLAIN_TEXT_MESSAGE)
@@ -193,18 +193,18 @@ class TestEmailToMarkdownWorkflow:
         mock_service.users().messages().get.side_effect = get_message_by_id
 
         filename_calls = 0
+
         def get_filename():
             nonlocal filename_calls
             filename_calls += 1
             return f"test-email-{filename_calls}.md"
 
-        with patch("builtins.open", mocker.mock_open()) as mock_file, \
-             patch("iobox.markdown.create_markdown_filename", side_effect=get_filename):
-
+        with (
+            patch("builtins.open", mocker.mock_open()) as mock_file,
+            patch("iobox.markdown.create_markdown_filename", side_effect=get_filename),
+        ):
             search_results = search_emails(
-                service=mock_service,
-                query="from:example.com",
-                max_results=2
+                service=mock_service, query="from:example.com", max_results=2
             )
 
             assert len(search_results) == 2
@@ -212,8 +212,7 @@ class TestEmailToMarkdownWorkflow:
             converted_files = []
             for result in search_results:
                 email_data = get_email_content(
-                    service=mock_service,
-                    message_id=result["message_id"]
+                    service=mock_service, message_id=result["message_id"]
                 )
 
                 markdown_content = convert_email_to_markdown(email_data)
@@ -221,7 +220,7 @@ class TestEmailToMarkdownWorkflow:
                 output_path = save_email_to_markdown(
                     email_data=email_data,
                     markdown_content=markdown_content,
-                    output_dir=str(output_dir)
+                    output_dir=str(output_dir),
                 )
 
                 converted_files.append(output_path)

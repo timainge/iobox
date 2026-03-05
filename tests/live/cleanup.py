@@ -13,7 +13,6 @@ import sys
 
 from iobox.auth import get_gmail_service
 
-
 TAG_PATTERN = "iobox-test-"
 QUERY = f"subject:{TAG_PATTERN}"
 
@@ -82,7 +81,12 @@ def cleanup_drafts(service) -> int:
             draft_id = draft["id"]
             try:
                 # Fetch draft details to check subject
-                detail = service.users().drafts().get(userId="me", id=draft_id, format="metadata").execute()
+                detail = (
+                    service.users()
+                    .drafts()
+                    .get(userId="me", id=draft_id, format="metadata")
+                    .execute()
+                )
                 headers = detail.get("message", {}).get("payload", {}).get("headers", [])
                 subject = next((h["value"] for h in headers if h["name"].lower() == "subject"), "")
 

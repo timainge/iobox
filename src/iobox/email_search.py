@@ -5,24 +5,24 @@ This module handles searching for emails based on query criteria and date range.
 Retrieval functions are re-exported from email_retrieval for backward compatibility.
 """
 
-from datetime import datetime, timedelta
-from googleapiclient.errors import HttpError
 import logging
-from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
+from typing import Any
+
+from googleapiclient.errors import HttpError
 
 # Re-export public retrieval functions for backward compatibility
-from iobox.email_retrieval import (
-    get_email_content,
-    download_attachment,
-    get_label_map,
-)
+from iobox.email_retrieval import download_attachment as download_attachment  # noqa: F401
+from iobox.email_retrieval import get_email_content as get_email_content  # noqa: F401
+from iobox.email_retrieval import get_label_map as get_label_map  # noqa: F401
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def batch_get_metadata(service, message_ids: List[str],
-                       label_map: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+def batch_get_metadata(
+    service, message_ids: list[str], label_map: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
     """
     Fetch metadata for multiple messages using BatchHttpRequest.
 
@@ -35,8 +35,8 @@ def batch_get_metadata(service, message_ids: List[str],
         List of metadata dicts (message_id, subject, from, date, snippet, labels)
         in the same order as input IDs. Failed fetches include an 'error' key.
     """
-    results: Dict[str, Any] = {}
-    errors: Dict[str, str] = {}
+    results: dict[str, Any] = {}
+    errors: dict[str, str] = {}
 
     def callback(request_id, response, exception):
         if exception:
@@ -45,48 +45,54 @@ def batch_get_metadata(service, message_ids: List[str],
             results[request_id] = response
 
     for i in range(0, len(message_ids), 50):
-        chunk = message_ids[i:i + 50]
+        chunk = message_ids[i : i + 50]
         batch = service.new_batch_http_request(callback=callback)
         for msg_id in chunk:
             batch.add(
-                service.users().messages().get(
-                    userId='me', id=msg_id, format='metadata',
-                    metadataHeaders=['From', 'To', 'Subject', 'Date']
+                service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=msg_id,
+                    format="metadata",
+                    metadataHeaders=["From", "To", "Subject", "Date"],
                 ),
-                request_id=msg_id
+                request_id=msg_id,
             )
         batch.execute()
 
     metadata_list = []
     for msg_id in message_ids:
         if msg_id in errors:
-            metadata_list.append({'message_id': msg_id, 'error': errors[msg_id]})
+            metadata_list.append({"message_id": msg_id, "error": errors[msg_id]})
         elif msg_id in results:
             msg = results[msg_id]
-            headers = {h['name']: h['value'] for h in msg.get('payload', {}).get('headers', [])}
-            raw_labels = msg.get('labelIds', [])
+            headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            raw_labels = msg.get("labelIds", [])
             resolved_labels = (
                 [label_map.get(lid, lid) for lid in raw_labels]
                 if label_map is not None
                 else raw_labels
             )
-            metadata_list.append({
-                'message_id': msg_id,
-                'thread_id': msg.get('threadId', ''),
-                'subject': headers.get('Subject', 'No Subject'),
-                'from': headers.get('From', 'Unknown'),
-                'date': headers.get('Date', ''),
-                'snippet': msg.get('snippet', ''),
-                'labels': resolved_labels,
-            })
+            metadata_list.append(
+                {
+                    "message_id": msg_id,
+                    "thread_id": msg.get("threadId", ""),
+                    "subject": headers.get("Subject", "No Subject"),
+                    "from": headers.get("From", "Unknown"),
+                    "date": headers.get("Date", ""),
+                    "snippet": msg.get("snippet", ""),
+                    "labels": resolved_labels,
+                }
+            )
         else:
-            metadata_list.append({'message_id': msg_id, 'error': 'Not found in batch response'})
+            metadata_list.append({"message_id": msg_id, "error": "Not found in batch response"})
 
     logging.info(f"Batch fetched metadata for {len(metadata_list)} messages ({len(errors)} errors)")
     return metadata_list
 
 
-def get_new_messages(service, history_id: str) -> Optional[List[str]]:
+def get_new_messages(service, history_id: str) -> list[str] | None:
     """
     Get message IDs added since the given historyId.
 
@@ -102,33 +108,41 @@ def get_new_messages(service, history_id: str) -> Optional[List[str]]:
         message_ids = []
         page_token = None
         while True:
-            kwargs: Dict[str, Any] = {
-                'userId': 'me',
-                'startHistoryId': history_id,
-                'historyTypes': ['messageAdded'],
+            kwargs: dict[str, Any] = {
+                "userId": "me",
+                "startHistoryId": history_id,
+                "historyTypes": ["messageAdded"],
             }
             if page_token:
-                kwargs['pageToken'] = page_token
+                kwargs["pageToken"] = page_token
             result = service.users().history().list(**kwargs).execute()
-            for record in result.get('history', []):
-                for msg in record.get('messagesAdded', []):
-                    message_ids.append(msg['message']['id'])
-            page_token = result.get('nextPageToken')
+            for record in result.get("history", []):
+                for msg in record.get("messagesAdded", []):
+                    message_ids.append(msg["message"]["id"])
+            page_token = result.get("nextPageToken")
             if not page_token:
                 break
         logging.info(f"Found {len(message_ids)} new messages since historyId {history_id}")
         return message_ids
     except Exception as e:
-        if '404' in str(e) or 'notFound' in str(e):
-            logging.warning(f"History expired for historyId {history_id}, falling back to full sync")
+        if "404" in str(e) or "notFound" in str(e):
+            logging.warning(
+                f"History expired for historyId {history_id}, falling back to full sync"
+            )
             return None
         raise
 
 
-def search_emails(service, query: str, max_results: int = 100, days_back: int = 7,
-                 start_date: Optional[str] = None, end_date: Optional[str] = None,
-                 label_map: Optional[Dict[str, str]] = None,
-                 include_spam_trash: bool = False) -> List[Dict[str, Any]]:
+def search_emails(
+    service,
+    query: str,
+    max_results: int = 100,
+    days_back: int = 7,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    label_map: dict[str, str] | None = None,
+    include_spam_trash: bool = False,
+) -> list[dict[str, Any]]:
     """
     Search for emails based on the given query and date range.
 
@@ -158,48 +172,60 @@ def search_emails(service, query: str, max_results: int = 100, days_back: int = 
 
             full_query = f"{query} {date_query}"
         else:
-            date_query = f"after:{(datetime.now() - timedelta(days=days_back)).strftime('%Y/%m/%d')}"
+            date_query = (
+                f"after:{(datetime.now() - timedelta(days=days_back)).strftime('%Y/%m/%d')}"
+            )
             full_query = f"{query} {date_query}"
 
         logging.info(f"Searching for emails with query: {full_query}")
 
         # First page
-        result = service.users().messages().list(
-            userId='me',
-            q=full_query,
-            maxResults=max_results,
-            includeSpamTrash=include_spam_trash
-        ).execute()
+        result = (
+            service.users()
+            .messages()
+            .list(
+                userId="me",
+                q=full_query,
+                maxResults=max_results,
+                includeSpamTrash=include_spam_trash,
+            )
+            .execute()
+        )
 
-        messages = result.get('messages', [])
-        page_token = result.get('nextPageToken')
+        messages = result.get("messages", [])
+        page_token = result.get("nextPageToken")
         page_num = 1
 
         # Paginate while more results exist and we haven't reached max_results
         while page_token and len(messages) < max_results:
             page_num += 1
             logging.info(f"Fetching page {page_num}...")
-            result = service.users().messages().list(
-                userId='me',
-                q=full_query,
-                maxResults=max_results - len(messages),
-                pageToken=page_token,
-                includeSpamTrash=include_spam_trash
-            ).execute()
-            batch = result.get('messages', [])
+            result = (
+                service.users()
+                .messages()
+                .list(
+                    userId="me",
+                    q=full_query,
+                    maxResults=max_results - len(messages),
+                    pageToken=page_token,
+                    includeSpamTrash=include_spam_trash,
+                )
+                .execute()
+            )
+            batch = result.get("messages", [])
             messages.extend(batch)
-            page_token = result.get('nextPageToken')
+            page_token = result.get("nextPageToken")
 
         # Truncate to exactly max_results
         messages = messages[:max_results]
 
         if not messages:
-            logging.info(f"Found 0 matching emails")
+            logging.info("Found 0 matching emails")
             return []
 
         logging.info(f"Found {len(messages)} matching emails")
 
-        message_ids = [m['id'] for m in messages]
+        message_ids = [m["id"] for m in messages]
         email_list = batch_get_metadata(service, message_ids, label_map=label_map)
 
         return email_list
@@ -223,7 +249,7 @@ def validate_date_format(date_str: str) -> bool:
         bool: True if valid format, False otherwise
     """
     try:
-        parts = date_str.split('/')
+        parts = date_str.split("/")
         if len(parts) != 3:
             return False
 
@@ -231,7 +257,7 @@ def validate_date_format(date_str: str) -> bool:
         if len(year) != 4 or len(month) != 2 or len(day) != 2:
             return False
 
-        datetime.strptime(date_str, '%Y/%m/%d')
+        datetime.strptime(date_str, "%Y/%m/%d")
         return True
     except ValueError:
         logging.warning(f"Invalid date format: {date_str}. Expected YYYY/MM/DD")

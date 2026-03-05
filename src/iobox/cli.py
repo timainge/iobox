@@ -6,43 +6,45 @@ This module provides a user-friendly CLI for interacting with iobox functionalit
 
 import os
 import sys
-import typer
-from typing import Optional, List, Dict, Any
 from pathlib import Path
 
+import typer
+
 from iobox import __version__
-from iobox.auth import get_gmail_service, check_auth_status, get_gmail_profile
-from iobox.email_search import search_emails, get_email_content, download_attachment, get_new_messages
+from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service
 from iobox.email_retrieval import (
+    batch_get_emails,
+    batch_modify_labels,
     get_label_map,
     get_thread_content,
     modify_message_labels,
     resolve_label_name,
-    batch_modify_labels,
     trash_message,
     untrash_message,
-    batch_get_emails,
 )
-from iobox.markdown import convert_email_to_markdown
-from iobox.markdown_converter import convert_thread_to_markdown
-from iobox.file_manager import (
-    create_output_directory,
-    save_email_to_markdown,
-    save_attachment,
-    check_for_duplicates,
-    SyncState,
-    download_email_attachments,
+from iobox.email_search import (
+    get_email_content,
+    get_new_messages,
+    search_emails,
 )
 from iobox.email_sender import (
     compose_message,
-    compose_forward_message,
-    send_message,
-    forward_email,
     create_draft,
+    delete_draft,
+    forward_email,
     list_drafts,
     send_draft,
-    delete_draft,
+    send_message,
 )
+from iobox.file_manager import (
+    SyncState,
+    check_for_duplicates,
+    create_output_directory,
+    download_email_attachments,
+    save_email_to_markdown,
+)
+from iobox.markdown import convert_email_to_markdown
+from iobox.markdown_converter import convert_thread_to_markdown
 
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
@@ -55,6 +57,7 @@ version_callback = typer.Option(
     help="Show version and exit",
     callback=lambda value: typer.echo(f"iobox version {__version__}") or exit(0) if value else None,
 )
+
 
 @app.command()
 def version():
@@ -86,7 +89,9 @@ def auth_status():
         typer.echo("3. Navigate to APIs & Services > Credentials")
         typer.echo("4. Click 'Create Credentials' > 'OAuth client ID'")
         typer.echo("5. Choose 'Desktop app' as application type")
-        typer.echo("6. Download the JSON file and save it as 'credentials.json' in the project root")
+        typer.echo(
+            "6. Download the JSON file and save it as 'credentials.json' in the project root"
+        )
 
     try:
         service = get_gmail_service()
@@ -102,17 +107,16 @@ def auth_status():
 
 @app.command()
 def search(
-    query: str = typer.Option(
-        ..., "--query", "-q", help="Search query using Gmail search syntax"
-    ),
+    query: str = typer.Option(..., "--query", "-q", help="Search query using Gmail search syntax"),
     max_results: int = typer.Option(
         10, "--max-results", "-m", help="Maximum number of results to return"
     ),
-    days: int = typer.Option(
-        7, "--days", "-d", help="Number of days back to search"
-    ),
+    days: int = typer.Option(7, "--days", "-d", help="Number of days back to search"),
     start_date: str = typer.Option(
-        None, "--start-date", "-s", help="Start date in YYYY/MM/DD format (overrides days parameter if provided)"
+        None,
+        "--start-date",
+        "-s",
+        help="Start date in YYYY/MM/DD format (overrides days parameter if provided)",
     ),
     end_date: str = typer.Option(
         None, "--end-date", "-e", help="End date in YYYY/MM/DD format (requires start-date)"
@@ -120,9 +124,7 @@ def search(
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Show detailed information for each result"
     ),
-    debug: bool = typer.Option(
-        False, "--debug", help="Show debug information about API responses"
-    ),
+    debug: bool = typer.Option(False, "--debug", help="Show debug information about API responses"),
     include_spam_trash: bool = typer.Option(
         False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
     ),
@@ -168,32 +170,32 @@ def search(
             typer.echo("")
 
         for i, email in enumerate(results, 1):
-            subject = email.get('subject', 'No subject')
-            sender = email.get('from', 'Unknown sender')
-            date = email.get('date', 'Unknown date')
+            subject = email.get("subject", "No subject")
+            sender = email.get("from", "Unknown sender")
+            date = email.get("date", "Unknown date")
 
             # Format the date more nicely if possible
             try:
                 from dateutil import parser
-                from datetime import datetime
 
                 date_obj = parser.parse(date)
                 date_str = date_obj.strftime("%d/%m/%Y %H:%M")
-            except:
+            except Exception:
                 date_str = date
 
-            labels = email.get('labels', [])
-            label_str = ', '.join(labels) if labels else "No labels"
+            labels = email.get("labels", [])
+            label_str = ", ".join(labels) if labels else "No labels"
 
             typer.echo(f"{i}. {subject}")
             typer.echo(f"   ID: {email.get('message_id', 'No ID')}")
 
-            snippet = email.get('snippet', '')
+            snippet = email.get("snippet", "")
             if snippet:
                 import html
+
                 try:
                     snippet = html.unescape(snippet)
-                except:
+                except Exception:
                     pass
                 snippet = snippet[:70] + "..." if len(snippet) > 70 else snippet
                 typer.echo(f"   Preview: {snippet}")
@@ -226,11 +228,12 @@ def save(
     max_results: int = typer.Option(
         10, "--max", help="Maximum number of emails to save in batch mode"
     ),
-    days: int = typer.Option(
-        7, "--days", "-d", help="Number of days back to search for emails"
-    ),
+    days: int = typer.Option(7, "--days", "-d", help="Number of days back to search for emails"),
     start_date: str = typer.Option(
-        None, "--start-date", "-s", help="Start date in YYYY/MM/DD format (overrides days parameter if provided)"
+        None,
+        "--start-date",
+        "-s",
+        help="Start date in YYYY/MM/DD format (overrides days parameter if provided)",
     ),
     end_date: str = typer.Option(
         None, "--end-date", "-e", help="End date in YYYY/MM/DD format (requires start-date)"
@@ -245,7 +248,9 @@ def save(
         False, "--download-attachments", help="Download email attachments"
     ),
     attachment_types: str = typer.Option(
-        None, "--attachment-types", help="Filter attachments by file extension (comma-separated, e.g., 'pdf,docx,xlsx')"
+        None,
+        "--attachment-types",
+        help="Filter attachments by file extension (comma-separated, e.g., 'pdf,docx,xlsx')",
     ),
     include_spam_trash: bool = typer.Option(
         False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
@@ -279,7 +284,7 @@ def save(
         # Parse attachment types if provided
         attachment_filters = []
         if attachment_types:
-            attachment_filters = [ext.strip().lower() for ext in attachment_types.split(',')]
+            attachment_filters = [ext.strip().lower() for ext in attachment_types.split(",")]
 
         # Thread mode
         if thread_id is not None:
@@ -289,12 +294,13 @@ def save(
                 preferred_content_type="text/html" if html_preferred else "text/plain",
             )
             markdown_content = convert_thread_to_markdown(messages)
-            subject = messages[0].get('subject', 'thread') if messages else 'thread'
+            subject = messages[0].get("subject", "thread") if messages else "thread"
             from iobox.utils import slugify_text
+
             subject_slug = slugify_text(subject)
             filename = f"{subject_slug}_{thread_id}.md"
             filepath = os.path.join(output_dir, filename)
-            with open(filepath, 'w', encoding='utf-8') as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write(markdown_content)
             typer.echo(f"Successfully saved thread to {filepath}")
             return
@@ -314,35 +320,36 @@ def save(
 
             # Save to file
             filepath = save_email_to_markdown(
-                email_data=email_data,
-                markdown_content=markdown_content,
-                output_dir=output_dir
+                email_data=email_data, markdown_content=markdown_content, output_dir=output_dir
             )
 
             typer.echo(f"Successfully saved email to {filepath}")
 
             # Download attachments if requested
-            if download_attachments and email_data.get('attachments'):
+            if download_attachments and email_data.get("attachments"):
                 att_result = download_email_attachments(
                     service=service,
                     email_data=email_data,
                     output_dir=output_dir,
-                    attachment_filters=attachment_filters
+                    attachment_filters=attachment_filters,
                 )
                 typer.echo(f"  Downloaded {att_result['downloaded_count']} attachment(s)")
-                for err in att_result['errors']:
+                for err in att_result["errors"]:
                     typer.echo(f"  Warning: {err}")
 
         # Batch mode
         else:
             # Incremental sync: try to use history if --sync is set
             sync_state = SyncState(output_dir)
-            message_ids_to_fetch: Optional[List[str]] = None
+            message_ids_to_fetch: list[str] | None = None
 
             if sync:
                 state_exists = sync_state.load()
                 if state_exists and sync_state.last_history_id:
-                    typer.echo(f"Incremental sync: checking for new emails since historyId {sync_state.last_history_id}...")
+                    hid = sync_state.last_history_id
+                    typer.echo(
+                        f"Incremental sync: checking for new emails since historyId {hid}..."
+                    )
                     new_ids = get_new_messages(service, sync_state.last_history_id)
                     if new_ids is not None:
                         typer.echo(f"Found {len(new_ids)} new message(s) since last sync.")
@@ -355,10 +362,10 @@ def save(
                 if not message_ids_to_fetch:
                     typer.echo("No new emails since last sync.")
                     # Still update the history ID
-                    profile = service.users().getProfile(userId='me').execute()
-                    sync_state.update(profile.get('historyId', sync_state.last_history_id), [])
+                    profile = service.users().getProfile(userId="me").execute()
+                    sync_state.update(profile.get("historyId", sync_state.last_history_id), [])
                     return
-                results_for_batch = [{'message_id': mid} for mid in message_ids_to_fetch]
+                results_for_batch = [{"message_id": mid} for mid in message_ids_to_fetch]
             else:
                 # Full search
                 typer.echo(f"Searching for emails matching: {query}")
@@ -375,8 +382,8 @@ def save(
                 if not search_results:
                     typer.echo("No emails found matching the query.")
                     if sync:
-                        profile = service.users().getProfile(userId='me').execute()
-                        sync_state.update(profile.get('historyId', ''), [])
+                        profile = service.users().getProfile(userId="me").execute()
+                        sync_state.update(profile.get("historyId", ""), [])
                     return
                 results_for_batch = search_results
 
@@ -384,7 +391,7 @@ def save(
             typer.echo(f"\nFound {total_emails} emails to process.")
 
             # Check for already processed emails
-            all_message_ids = [r['message_id'] for r in results_for_batch]
+            all_message_ids = [r["message_id"] for r in results_for_batch]
             duplicates = check_for_duplicates(all_message_ids, output_dir)
             ids_to_process = [mid for mid in all_message_ids if mid not in duplicates]
 
@@ -405,11 +412,16 @@ def save(
                 )
 
                 for idx, email_data in enumerate(email_batch, 1):
-                    if 'error' in email_data:
-                        typer.echo(f"  Skipping email {email_data['message_id']}: {email_data['error']}")
+                    if "error" in email_data:
+                        typer.echo(
+                            f"  Skipping email {email_data['message_id']}: {email_data['error']}"
+                        )
                         continue
 
-                    typer.echo(f"Processing email {idx}/{len(ids_to_process)}: {email_data.get('subject', 'No Subject')}")
+                    subj = email_data.get("subject", "No Subject")
+                    typer.echo(
+                        f"Processing email {idx}/{len(ids_to_process)}: {subj}"
+                    )
 
                     # Convert to markdown
                     markdown_content = convert_email_to_markdown(email_data)
@@ -418,27 +430,27 @@ def save(
                     save_email_to_markdown(
                         email_data=email_data,
                         markdown_content=markdown_content,
-                        output_dir=output_dir
+                        output_dir=output_dir,
                     )
 
                     saved_count += 1
 
                     # Download attachments if requested
-                    if download_attachments and email_data.get('attachments'):
+                    if download_attachments and email_data.get("attachments"):
                         result_dict = download_email_attachments(
                             service=service,
                             email_data=email_data,
                             output_dir=output_dir,
-                            attachment_filters=attachment_filters
+                            attachment_filters=attachment_filters,
                         )
-                        attachment_count += result_dict['downloaded_count']
-                        for err in result_dict['errors']:
+                        attachment_count += result_dict["downloaded_count"]
+                        for err in result_dict["errors"]:
                             typer.echo(f"  Warning: {err}")
 
             # Update sync state after successful save
             if sync:
-                profile = service.users().getProfile(userId='me').execute()
-                sync_state.update(profile.get('historyId', ''), ids_to_process)
+                profile = service.users().getProfile(userId="me").execute()
+                sync_state.update(profile.get("historyId", ""), ids_to_process)
                 typer.echo(f"Sync state updated (historyId: {profile.get('historyId', 'unknown')})")
 
             # Summary message
@@ -450,7 +462,7 @@ def save(
 
     except Exception as e:
         typer.echo(f"Error saving emails: {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()
@@ -461,21 +473,15 @@ def forward(
     query: str = typer.Option(
         None, "--query", "-q", help="Search query for emails to forward (batch mode)"
     ),
-    to: str = typer.Option(
-        ..., "--to", "-t", help="Recipient email address"
-    ),
+    to: str = typer.Option(..., "--to", "-t", help="Recipient email address"),
     max_results: int = typer.Option(
         10, "--max", help="Maximum number of emails to forward in batch mode"
     ),
-    days: int = typer.Option(
-        7, "--days", "-d", help="Number of days back to search"
-    ),
+    days: int = typer.Option(7, "--days", "-d", help="Number of days back to search"),
     start_date: str = typer.Option(
         None, "--start-date", "-s", help="Start date in YYYY/MM/DD format"
     ),
-    end_date: str = typer.Option(
-        None, "--end-date", "-e", help="End date in YYYY/MM/DD format"
-    ),
+    end_date: str = typer.Option(None, "--end-date", "-e", help="End date in YYYY/MM/DD format"),
     note: str = typer.Option(
         None, "--note", "-n", help="Optional note to prepend to forwarded email"
     ),
@@ -514,7 +520,7 @@ def forward(
             typer.echo(f"Found {len(results)} emails to forward.")
             forwarded = 0
             for email_summary in results:
-                mid = email_summary['message_id']
+                mid = email_summary["message_id"]
                 typer.echo(f"Forwarding: {email_summary.get('subject', 'No Subject')}")
                 forward_email(service, message_id=mid, to=to, additional_text=note)
                 forwarded += 1
@@ -523,33 +529,21 @@ def forward(
 
     except Exception as e:
         typer.echo(f"Error forwarding emails: {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()
 def send(
-    to: str = typer.Option(
-        ..., "--to", "-t", help="Recipient email address"
-    ),
-    subject: str = typer.Option(
-        ..., "--subject", "-s", help="Email subject line"
-    ),
-    body: str = typer.Option(
-        None, "--body", "-b", help="Email body text (inline)"
-    ),
+    to: str = typer.Option(..., "--to", "-t", help="Recipient email address"),
+    subject: str = typer.Option(..., "--subject", "-s", help="Email subject line"),
+    body: str = typer.Option(None, "--body", "-b", help="Email body text (inline)"),
     body_file: str = typer.Option(
         None, "--body-file", "-f", help="Path to file containing email body"
     ),
-    cc: str = typer.Option(
-        None, "--cc", help="CC recipients (comma-separated)"
-    ),
-    bcc: str = typer.Option(
-        None, "--bcc", help="BCC recipients (comma-separated)"
-    ),
-    html: bool = typer.Option(
-        False, "--html", help="Send body as HTML content"
-    ),
-    attach: Optional[List[str]] = typer.Option(
+    cc: str = typer.Option(None, "--cc", help="CC recipients (comma-separated)"),
+    bcc: str = typer.Option(None, "--bcc", help="BCC recipients (comma-separated)"),
+    html: bool = typer.Option(False, "--html", help="Send body as HTML content"),
+    attach: list[str] | None = typer.Option(
         None, "--attach", help="File path to attach (can be specified multiple times)"
     ),
 ):
@@ -563,18 +557,18 @@ def send(
             typer.echo("Error: You must specify either --body (-b) or --body-file (-f)")
             raise typer.Exit(code=1)
 
-        content_type = 'plain'
+        content_type = "plain"
         if body_file is not None:
             file_path = Path(body_file)
             if not file_path.exists():
                 typer.echo(f"Error: File not found: {body_file}")
                 raise typer.Exit(code=1)
-            body = file_path.read_text(encoding='utf-8')
-            if file_path.suffix.lower() == '.html':
-                content_type = 'html'
+            body = file_path.read_text(encoding="utf-8")
+            if file_path.suffix.lower() == ".html":
+                content_type = "html"
 
         if html:
-            content_type = 'html'
+            content_type = "html"
 
         if attach:
             for file_path in attach:
@@ -584,8 +578,13 @@ def send(
 
         service = get_gmail_service()
         message = compose_message(
-            to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-            content_type=content_type, attachments=attach or None
+            to=to,
+            subject=subject,
+            body=body,
+            cc=cc,
+            bcc=bcc,
+            content_type=content_type,
+            attachments=attach or None,
         )
         result = send_message(service, message)
 
@@ -593,33 +592,21 @@ def send(
 
     except Exception as e:
         typer.echo(f"Error sending email: {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command(name="draft-create")
 def draft_create(
-    to: str = typer.Option(
-        ..., "--to", "-t", help="Recipient email address"
-    ),
-    subject: str = typer.Option(
-        ..., "--subject", "-s", help="Email subject line"
-    ),
-    body: str = typer.Option(
-        None, "--body", "-b", help="Email body text (inline)"
-    ),
+    to: str = typer.Option(..., "--to", "-t", help="Recipient email address"),
+    subject: str = typer.Option(..., "--subject", "-s", help="Email subject line"),
+    body: str = typer.Option(None, "--body", "-b", help="Email body text (inline)"),
     body_file: str = typer.Option(
         None, "--body-file", "-f", help="Path to file containing email body"
     ),
-    cc: str = typer.Option(
-        None, "--cc", help="CC recipients (comma-separated)"
-    ),
-    bcc: str = typer.Option(
-        None, "--bcc", help="BCC recipients (comma-separated)"
-    ),
-    html: bool = typer.Option(
-        False, "--html", help="Use HTML content type"
-    ),
-    attach: Optional[List[str]] = typer.Option(
+    cc: str = typer.Option(None, "--cc", help="CC recipients (comma-separated)"),
+    bcc: str = typer.Option(None, "--bcc", help="BCC recipients (comma-separated)"),
+    html: bool = typer.Option(False, "--html", help="Use HTML content type"),
+    attach: list[str] | None = typer.Option(
         None, "--attach", help="File path to attach (can be specified multiple times)"
     ),
 ):
@@ -629,18 +616,18 @@ def draft_create(
             typer.echo("Error: You must specify either --body (-b) or --body-file (-f)")
             raise typer.Exit(code=1)
 
-        content_type = 'plain'
+        content_type = "plain"
         if body_file is not None:
             file_path = Path(body_file)
             if not file_path.exists():
                 typer.echo(f"Error: File not found: {body_file}")
                 raise typer.Exit(code=1)
-            body = file_path.read_text(encoding='utf-8')
-            if file_path.suffix.lower() == '.html':
-                content_type = 'html'
+            body = file_path.read_text(encoding="utf-8")
+            if file_path.suffix.lower() == ".html":
+                content_type = "html"
 
         if html:
-            content_type = 'html'
+            content_type = "html"
 
         if attach:
             for file_path in attach:
@@ -650,8 +637,13 @@ def draft_create(
 
         service = get_gmail_service()
         message = compose_message(
-            to=to, subject=subject, body=body, cc=cc, bcc=bcc,
-            content_type=content_type, attachments=attach or None
+            to=to,
+            subject=subject,
+            body=body,
+            cc=cc,
+            bcc=bcc,
+            content_type=content_type,
+            attachments=attach or None,
         )
         result = create_draft(service, message)
 
@@ -659,14 +651,12 @@ def draft_create(
 
     except Exception as e:
         typer.echo(f"Error creating draft: {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command(name="draft-list")
 def draft_list(
-    max_results: int = typer.Option(
-        10, "--max", "-m", help="Maximum number of drafts to list"
-    ),
+    max_results: int = typer.Option(10, "--max", "-m", help="Maximum number of drafts to list"),
 ):
     """List Gmail drafts."""
     try:
@@ -681,19 +671,17 @@ def draft_list(
         for draft in drafts:
             typer.echo(f"\nID: {draft['id']}")
             typer.echo(f"  Subject: {draft['subject']}")
-            if draft['snippet']:
+            if draft["snippet"]:
                 typer.echo(f"  Preview: {draft['snippet'][:70]}")
 
     except Exception as e:
         typer.echo(f"Error listing drafts: {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command(name="draft-send")
 def draft_send(
-    draft_id: str = typer.Option(
-        ..., "--draft-id", help="ID of the draft to send"
-    ),
+    draft_id: str = typer.Option(..., "--draft-id", help="ID of the draft to send"),
 ):
     """Send an existing draft."""
     try:
@@ -703,14 +691,12 @@ def draft_send(
 
     except Exception as e:
         typer.echo(f"Error sending draft: {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command(name="draft-delete")
 def draft_delete(
-    draft_id: str = typer.Option(
-        ..., "--draft-id", help="ID of the draft to delete"
-    ),
+    draft_id: str = typer.Option(..., "--draft-id", help="ID of the draft to delete"),
 ):
     """Permanently delete a draft."""
     try:
@@ -720,23 +706,17 @@ def draft_delete(
 
     except Exception as e:
         typer.echo(f"Error deleting draft: {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()
 def label(
-    message_id: str = typer.Option(
-        None, "--message-id", help="Message ID for single message mode"
-    ),
-    query: str = typer.Option(
-        None, "-q", "--query", help="Search query for batch mode"
-    ),
+    message_id: str = typer.Option(None, "--message-id", help="Message ID for single message mode"),
+    query: str = typer.Option(None, "-q", "--query", help="Search query for batch mode"),
     max_results: int = typer.Option(
         10, "-m", "--max-results", help="Maximum number of messages in batch mode"
     ),
-    days: int = typer.Option(
-        7, "-d", "--days", help="Number of days back to search"
-    ),
+    days: int = typer.Option(7, "-d", "--days", help="Number of days back to search"),
     mark_read: bool = typer.Option(False, "--mark-read", help="Mark as read"),
     mark_unread: bool = typer.Option(False, "--mark-unread", help="Mark as unread"),
     star: bool = typer.Option(False, "--star", help="Star message"),
@@ -757,19 +737,19 @@ def label(
 
         service = get_gmail_service()
 
-        add_labels: List[str] = []
-        remove_labels: List[str] = []
+        add_labels: list[str] = []
+        remove_labels: list[str] = []
 
         if mark_read:
-            remove_labels.append('UNREAD')
+            remove_labels.append("UNREAD")
         if mark_unread:
-            add_labels.append('UNREAD')
+            add_labels.append("UNREAD")
         if star:
-            add_labels.append('STARRED')
+            add_labels.append("STARRED")
         if unstar:
-            remove_labels.append('STARRED')
+            remove_labels.append("STARRED")
         if archive:
-            remove_labels.append('INBOX')
+            remove_labels.append("INBOX")
         if add:
             add_labels.append(resolve_label_name(service, add))
         if remove:
@@ -785,31 +765,27 @@ def label(
                 typer.echo("No emails found matching the query.")
                 return
 
-            msg_ids = [r['message_id'] for r in results]
+            msg_ids = [r["message_id"] for r in results]
             if len(msg_ids) >= 2:
                 batch_modify_labels(service, msg_ids, add_labels or None, remove_labels or None)
             else:
-                modify_message_labels(service, msg_ids[0], add_labels or None, remove_labels or None)
+                modify_message_labels(
+                    service, msg_ids[0], add_labels or None, remove_labels or None
+                )
 
             typer.echo(f"Labels updated for {len(msg_ids)} message(s)")
 
     except Exception as e:
         typer.echo(f"Error updating labels: {e}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()
 def trash(
-    message_id: str = typer.Option(
-        None, "--message-id", help="Message ID for single message mode"
-    ),
-    query: str = typer.Option(
-        None, "-q", "--query", help="Search query for batch mode"
-    ),
+    message_id: str = typer.Option(None, "--message-id", help="Message ID for single message mode"),
+    query: str = typer.Option(None, "-q", "--query", help="Search query for batch mode"),
     untrash: bool = typer.Option(False, "--untrash", help="Restore from trash instead of trashing"),
-    days: int = typer.Option(
-        7, "-d", "--days", help="Number of days back to search"
-    ),
+    days: int = typer.Option(7, "-d", "--days", help="Number of days back to search"),
     max_results: int = typer.Option(
         10, "-m", "--max-results", help="Maximum number of messages in batch mode"
     ),
@@ -842,15 +818,13 @@ def trash(
                 typer.echo("No emails found matching the query.")
                 return
 
-            confirmed = typer.confirm(
-                f"Are you sure you want to {verb} {len(results)} message(s)?"
-            )
+            confirmed = typer.confirm(f"Are you sure you want to {verb} {len(results)} message(s)?")
             if not confirmed:
                 typer.echo("Aborted.")
                 raise typer.Exit()
 
             for r in results:
-                mid = r['message_id']
+                mid = r["message_id"]
                 if untrash:
                     untrash_message(service, mid)
                 else:
@@ -862,8 +836,7 @@ def trash(
         raise
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
-
+        raise typer.Exit(code=1) from e
 
 
 @app.callback()
@@ -881,6 +854,7 @@ def main(
 
 def run():
     app()
+
 
 if __name__ == "__main__":
     run()

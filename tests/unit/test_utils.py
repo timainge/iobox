@@ -2,11 +2,12 @@
 Unit tests for the utils module.
 """
 
-import pytest
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from iobox.utils import slugify_text, create_markdown_filename
+import pytest
+
+from iobox.utils import create_markdown_filename, slugify_text
 
 
 class TestSlugifyText:
@@ -46,7 +47,7 @@ class TestCreateMarkdownFilename:
         email_data = {
             "subject": "Test Email Subject",
             "from": "sender@example.com",
-            "date": "Mon, 23 Mar 2025 10:00:00 +1100"
+            "date": "Mon, 23 Mar 2025 10:00:00 +1100",
         }
 
         with patch("iobox.utils.datetime") as mock_dt:
@@ -68,10 +69,7 @@ class TestCreateMarkdownFilename:
         assert filename == "abc123.md"
 
     def test_missing_id_uses_subject_hash(self):
-        email_data = {
-            "subject": "Test Subject",
-            "date": "Mon, 23 Mar 2025 10:00:00 +1100"
-        }
+        email_data = {"subject": "Test Subject", "date": "Mon, 23 Mar 2025 10:00:00 +1100"}
         with patch("iobox.utils.datetime") as mock_dt:
             mock_dt.strptime.return_value = datetime(2025, 3, 23, 10, 0, 0)
             mock_dt.now.return_value = datetime(2025, 3, 23, 10, 0, 0)
@@ -84,11 +82,7 @@ class TestCreateMarkdownFilename:
             create_markdown_filename({})
 
     def test_date_parsing_fallback(self):
-        email_data = {
-            "message_id": "msg1",
-            "subject": "Test",
-            "date": "not-a-date"
-        }
+        email_data = {"message_id": "msg1", "subject": "Test", "date": "not-a-date"}
         with patch("iobox.utils.datetime") as mock_dt:
             mock_dt.strptime.side_effect = ValueError("bad date")
             mock_now = MagicMock()

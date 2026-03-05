@@ -5,12 +5,11 @@ This module tests the functionality of the CLI module which provides
 the user-facing command-line interface for the iobox application.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from typer.testing import CliRunner
 
 from iobox.cli import app
-
 
 # Create a CLI runner for testing Typer apps
 runner = CliRunner()
@@ -18,30 +17,40 @@ runner = CliRunner()
 
 class TestCliCommands:
     """Test cases for the CLI commands."""
-    
+
     def test_version_command(self):
         """Test the version command."""
         with patch("iobox.cli.__version__", "0.1.0"):
             result = runner.invoke(app, ["version"])
             assert result.exit_code == 0
             assert "0.1.0" in result.stdout
-    
+
     def test_search_command(self):
         """Test the search command."""
         # Mock the email search functionality
         mock_emails = [
-            {"message_id": "message-id-1", "subject": "Test", "from": "a@b.com", "date": "", "snippet": "First email snippet", "labels": []}
+            {
+                "message_id": "message-id-1",
+                "subject": "Test",
+                "from": "a@b.com",
+                "date": "",
+                "snippet": "First email snippet",
+                "labels": [],
+            }
         ]
-        
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.search_emails", return_value=mock_emails), \
-             patch("iobox.cli.get_label_map", return_value={}):
 
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.search_emails", return_value=mock_emails),
+            patch("iobox.cli.get_label_map", return_value={}),
+        ):
             # Mock the Gmail service
             mock_service.return_value = MagicMock()
 
             # Call the search command
-            result = runner.invoke(app, ["search", "--query", "from:example.com", "--max-results", "5"])
+            result = runner.invoke(
+                app, ["search", "--query", "from:example.com", "--max-results", "5"]
+            )
 
             assert result.exit_code == 0
             assert "message-id-1" in result.stdout
@@ -49,19 +58,20 @@ class TestCliCommands:
 
     def test_search_command_no_results(self):
         """Test the search command with no results."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.search_emails", return_value=[]), \
-             patch("iobox.cli.get_label_map", return_value={}):
-
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.search_emails", return_value=[]),
+            patch("iobox.cli.get_label_map", return_value={}),
+        ):
             # Mock the Gmail service
             mock_service.return_value = MagicMock()
-            
+
             # Call the search command
             result = runner.invoke(app, ["search", "--query", "from:nonexistent"])
-            
+
             assert result.exit_code == 0
             assert "No emails found" in result.stdout
-    
+
     def test_convert_command(self):
         """Test the convert command."""
         # Mock email data and file path
@@ -71,33 +81,44 @@ class TestCliCommands:
             "content": "Email body content",
             "content_type": "text/plain",
             "from": "sender@example.com",
-            "date": "Mon, 23 Mar 2025 10:00:00 +1100"
+            "date": "Mon, 23 Mar 2025 10:00:00 +1100",
         }
         mock_markdown = "# Test Subject\n\nEmail body content"
         mock_filepath = "/path/to/output/email.md"
-        
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.get_email_content", return_value=mock_email_data), \
-             patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown), \
-             patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath), \
-             patch("iobox.cli.create_output_directory", return_value="./output"), \
-             patch("iobox.cli.get_label_map", return_value={}):
 
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.get_email_content", return_value=mock_email_data),
+            patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown),
+            patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath),
+            patch("iobox.cli.create_output_directory", return_value="./output"),
+            patch("iobox.cli.get_label_map", return_value={}),
+        ):
             # Mock the Gmail service
             mock_service.return_value = MagicMock()
 
             # Call the convert command
-            result = runner.invoke(app, ["save", "--message-id", "message-id-1", "--output-dir", "./output"])
-            
+            result = runner.invoke(
+                app, ["save", "--message-id", "message-id-1", "--output-dir", "./output"]
+            )
+
             assert result.exit_code == 0
             assert "Successfully saved email" in result.stdout
-    
+
     def test_batch_convert_command(self):
         """Test the batch-convert command."""
         # Mock search results (search_emails returns 'message_id' key)
         mock_emails = [
-            {"message_id": "message-id-1", "subject": "First email", "snippet": "First email snippet"},
-            {"message_id": "message-id-2", "subject": "Second email", "snippet": "Second email snippet"}
+            {
+                "message_id": "message-id-1",
+                "subject": "First email",
+                "snippet": "First email snippet",
+            },
+            {
+                "message_id": "message-id-2",
+                "subject": "Second email",
+                "snippet": "Second email snippet",
+            },
         ]
 
         # Mock email data returned by batch_get_emails
@@ -134,29 +155,28 @@ class TestCliCommands:
         mock_markdown = "# Test Subject\n\nEmail body content"
         mock_filepath = "/path/to/output/email.md"
 
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.search_emails", return_value=mock_emails), \
-             patch("iobox.cli.batch_get_emails", return_value=mock_batch_results), \
-             patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown), \
-             patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath), \
-             patch("iobox.cli.create_output_directory", return_value="./output"), \
-             patch("iobox.cli.check_for_duplicates", return_value=[]), \
-             patch("iobox.cli.get_label_map", return_value={}):
-
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.search_emails", return_value=mock_emails),
+            patch("iobox.cli.batch_get_emails", return_value=mock_batch_results),
+            patch("iobox.cli.convert_email_to_markdown", return_value=mock_markdown),
+            patch("iobox.cli.save_email_to_markdown", return_value=mock_filepath),
+            patch("iobox.cli.create_output_directory", return_value="./output"),
+            patch("iobox.cli.check_for_duplicates", return_value=[]),
+            patch("iobox.cli.get_label_map", return_value={}),
+        ):
             # Mock the Gmail service
             mock_service.return_value = MagicMock()
 
             # Call the batch-convert command
-            result = runner.invoke(app, [
-                "save",
-                "--query", "from:example.com",
-                "--max", "5",
-                "--output-dir", "./output"
-            ])
+            result = runner.invoke(
+                app,
+                ["save", "--query", "from:example.com", "--max", "5", "--output-dir", "./output"],
+            )
 
             assert result.exit_code == 0
             assert "Searching for emails matching" in result.stdout
-    
+
     def test_auth_status_command(self):
         """Test the auth-status command."""
         # Mock authentication status
@@ -165,7 +185,7 @@ class TestCliCommands:
             "credentials_file_exists": True,
             "token_file_exists": True,
             "credentials_path": "/path/to/credentials.json",
-            "token_path": "/path/to/token.json"
+            "token_path": "/path/to/token.json",
         }
         mock_profile = {
             "emailAddress": "test@gmail.com",
@@ -173,9 +193,11 @@ class TestCliCommands:
             "threadsTotal": 500,
         }
 
-        with patch("iobox.cli.check_auth_status", return_value=mock_status), \
-             patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.get_gmail_profile", return_value=mock_profile):
+        with (
+            patch("iobox.cli.check_auth_status", return_value=mock_status),
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.get_gmail_profile", return_value=mock_profile),
+        ):
             mock_service.return_value = MagicMock()
             # Call the auth-status command
             result = runner.invoke(app, ["auth-status"])
@@ -188,15 +210,22 @@ class TestCliCommands:
 
     def test_forward_single_email(self):
         """Test forwarding a single email by message ID."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.forward_email", return_value={"id": "fwd-1"}):
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.forward_email", return_value={"id": "fwd-1"}),
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "forward",
-                "--message-id", "msg-123",
-                "--to", "bob@example.com",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "forward",
+                    "--message-id",
+                    "msg-123",
+                    "--to",
+                    "bob@example.com",
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Successfully forwarded" in result.stdout
@@ -208,16 +237,23 @@ class TestCliCommands:
             {"message_id": "m2", "subject": "Second"},
         ]
 
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.search_emails", return_value=mock_emails), \
-             patch("iobox.cli.forward_email", return_value={"id": "fwd-x"}):
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.search_emails", return_value=mock_emails),
+            patch("iobox.cli.forward_email", return_value={"id": "fwd-x"}),
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "forward",
-                "--query", "from:test@example.com",
-                "--to", "bob@example.com",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "forward",
+                    "--query",
+                    "from:test@example.com",
+                    "--to",
+                    "bob@example.com",
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Forwarded 2 emails" in result.stdout
@@ -227,32 +263,49 @@ class TestCliCommands:
         with patch("iobox.cli.get_gmail_service") as mock_service:
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "forward",
-                "--to", "bob@example.com",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "forward",
+                    "--to",
+                    "bob@example.com",
+                ],
+            )
 
             assert result.exit_code == 1
 
     def test_send_with_body(self):
         """Test sending an email with inline body."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
-             patch("iobox.cli.send_message", return_value={"id": "sent-1"}) as mock_send:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose,
+            patch("iobox.cli.send_message", return_value={"id": "sent-1"}),
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "send",
-                "--to", "bob@example.com",
-                "--subject", "Hello",
-                "--body", "Hi there",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "bob@example.com",
+                    "--subject",
+                    "Hello",
+                    "--body",
+                    "Hi there",
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Email sent successfully" in result.stdout
             mock_compose.assert_called_once_with(
-                to="bob@example.com", subject="Hello", body="Hi there",
-                cc=None, bcc=None, content_type='plain', attachments=None
+                to="bob@example.com",
+                subject="Hello",
+                body="Hi there",
+                cc=None,
+                bcc=None,
+                content_type="plain",
+                attachments=None,
             )
 
     def test_send_with_body_file(self, tmp_path):
@@ -260,45 +313,71 @@ class TestCliCommands:
         body_file = tmp_path / "body.txt"
         body_file.write_text("File body content")
 
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
-             patch("iobox.cli.send_message", return_value={"id": "sent-2"}):
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose,
+            patch("iobox.cli.send_message", return_value={"id": "sent-2"}),
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "send",
-                "--to", "bob@example.com",
-                "--subject", "Hello",
-                "--body-file", str(body_file),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "bob@example.com",
+                    "--subject",
+                    "Hello",
+                    "--body-file",
+                    str(body_file),
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Email sent successfully" in result.stdout
             mock_compose.assert_called_once_with(
-                to="bob@example.com", subject="Hello", body="File body content",
-                cc=None, bcc=None, content_type='plain', attachments=None
+                to="bob@example.com",
+                subject="Hello",
+                body="File body content",
+                cc=None,
+                bcc=None,
+                content_type="plain",
+                attachments=None,
             )
 
     def test_send_html_flag(self):
         """Test send with --html flag sets content_type to html."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
-             patch("iobox.cli.send_message", return_value={"id": "sent-3"}):
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose,
+            patch("iobox.cli.send_message", return_value={"id": "sent-3"}),
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "send",
-                "--to", "bob@example.com",
-                "--subject", "Hello HTML",
-                "--body", "<b>Hi</b>",
-                "--html",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "bob@example.com",
+                    "--subject",
+                    "Hello HTML",
+                    "--body",
+                    "<b>Hi</b>",
+                    "--html",
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Email sent successfully" in result.stdout
             mock_compose.assert_called_once_with(
-                to="bob@example.com", subject="Hello HTML", body="<b>Hi</b>",
-                cc=None, bcc=None, content_type='html', attachments=None
+                to="bob@example.com",
+                subject="Hello HTML",
+                body="<b>Hi</b>",
+                cc=None,
+                bcc=None,
+                content_type="html",
+                attachments=None,
             )
 
     def test_send_no_body(self):
@@ -306,11 +385,16 @@ class TestCliCommands:
         with patch("iobox.cli.get_gmail_service") as mock_service:
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "send",
-                "--to", "bob@example.com",
-                "--subject", "Hello",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "bob@example.com",
+                    "--subject",
+                    "Hello",
+                ],
+            )
 
             assert result.exit_code == 1
 
@@ -337,9 +421,11 @@ class TestNewCliFeatures:
             "threadsTotal": 13902,
         }
 
-        with patch("iobox.cli.check_auth_status", return_value=mock_status), \
-             patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_gmail_profile", return_value=mock_profile):
+        with (
+            patch("iobox.cli.check_auth_status", return_value=mock_status),
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_gmail_profile", return_value=mock_profile),
+        ):
             mock_svc.return_value = MagicMock()
             result = runner.invoke(app, ["auth-status"])
 
@@ -359,8 +445,10 @@ class TestNewCliFeatures:
             "token_path": "/p/token.json",
         }
 
-        with patch("iobox.cli.check_auth_status", return_value=mock_status), \
-             patch("iobox.cli.get_gmail_service", side_effect=Exception("Auth failed")):
+        with (
+            patch("iobox.cli.check_auth_status", return_value=mock_status),
+            patch("iobox.cli.get_gmail_service", side_effect=Exception("Auth failed")),
+        ):
             result = runner.invoke(app, ["auth-status"])
 
         assert result.exit_code == 0
@@ -390,15 +478,17 @@ class TestNewCliFeatures:
         ]
         mock_md = "---\nthread_id: thread-abc\n---\n\n## From: a@example.com — Mon\n\nHello"
 
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_label_map", return_value={}), \
-             patch("iobox.cli.get_thread_content", return_value=mock_messages), \
-             patch("iobox.cli.convert_thread_to_markdown", return_value=mock_md), \
-             patch("iobox.cli.create_output_directory", return_value=str(tmp_path)):
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_label_map", return_value={}),
+            patch("iobox.cli.get_thread_content", return_value=mock_messages),
+            patch("iobox.cli.convert_thread_to_markdown", return_value=mock_md),
+            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
+        ):
             mock_svc.return_value = MagicMock()
-            result = runner.invoke(app, [
-                "save", "--thread-id", "thread-abc", "--output-dir", str(tmp_path)
-            ])
+            result = runner.invoke(
+                app, ["save", "--thread-id", "thread-abc", "--output-dir", str(tmp_path)]
+            )
 
         assert result.exit_code == 0
         assert "Successfully saved thread" in result.stdout
@@ -410,17 +500,23 @@ class TestNewCliFeatures:
     def test_search_include_spam_trash(self):
         """search --include-spam-trash passes flag to search_emails."""
         mock_emails = [
-            {"message_id": "m1", "subject": "Spam Email", "from": "x@y.com",
-             "date": "", "snippet": "spam", "labels": []}
+            {
+                "message_id": "m1",
+                "subject": "Spam Email",
+                "from": "x@y.com",
+                "date": "",
+                "snippet": "spam",
+                "labels": [],
+            }
         ]
 
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_label_map", return_value={}), \
-             patch("iobox.cli.search_emails", return_value=mock_emails) as mock_search:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_label_map", return_value={}),
+            patch("iobox.cli.search_emails", return_value=mock_emails) as mock_search,
+        ):
             mock_svc.return_value = MagicMock()
-            result = runner.invoke(app, [
-                "search", "--query", "in:spam", "--include-spam-trash"
-            ])
+            result = runner.invoke(app, ["search", "--query", "in:spam", "--include-spam-trash"])
 
         assert result.exit_code == 0
         call_kwargs = mock_search.call_args[1]
@@ -432,27 +528,25 @@ class TestNewCliFeatures:
 
     def test_label_mark_read(self):
         """label --mark-read removes UNREAD label."""
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.modify_message_labels") as mock_modify:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.modify_message_labels") as mock_modify,
+        ):
             mock_svc.return_value = MagicMock()
-            result = runner.invoke(app, [
-                "label", "--message-id", "msg-1", "--mark-read"
-            ])
+            result = runner.invoke(app, ["label", "--message-id", "msg-1", "--mark-read"])
 
         assert result.exit_code == 0
-        mock_modify.assert_called_once_with(
-            mock_svc.return_value, "msg-1", None, ["UNREAD"]
-        )
+        mock_modify.assert_called_once_with(mock_svc.return_value, "msg-1", None, ["UNREAD"])
 
     def test_label_add_custom(self):
         """label --add 'Newsletter' resolves name and adds label ID."""
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.resolve_label_name", return_value="Label_12345") as mock_resolve, \
-             patch("iobox.cli.modify_message_labels") as mock_modify:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.resolve_label_name", return_value="Label_12345") as mock_resolve,
+            patch("iobox.cli.modify_message_labels") as mock_modify,
+        ):
             mock_svc.return_value = MagicMock()
-            result = runner.invoke(app, [
-                "label", "--message-id", "msg-1", "--add", "Newsletter"
-            ])
+            result = runner.invoke(app, ["label", "--message-id", "msg-1", "--add", "Newsletter"])
 
         assert result.exit_code == 0
         mock_resolve.assert_called_once_with(mock_svc.return_value, "Newsletter")
@@ -474,8 +568,10 @@ class TestNewCliFeatures:
 
     def test_trash_single(self):
         """trash --message-id trashes the message without confirmation."""
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.trash_message") as mock_trash:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.trash_message") as mock_trash,
+        ):
             mock_svc.return_value = MagicMock()
             result = runner.invoke(app, ["trash", "--message-id", "msg-1"])
 
@@ -490,10 +586,12 @@ class TestNewCliFeatures:
             {"message_id": "m2", "subject": "Another Old"},
         ]
 
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_label_map", return_value={}), \
-             patch("iobox.cli.search_emails", return_value=mock_emails), \
-             patch("iobox.cli.trash_message") as mock_trash:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_label_map", return_value={}),
+            patch("iobox.cli.search_emails", return_value=mock_emails),
+            patch("iobox.cli.trash_message") as mock_trash,
+        ):
             mock_svc.return_value = MagicMock()
             # Provide "y" as input to confirm
             result = runner.invoke(app, ["trash", "--query", "older_than:1y"], input="y\n")
@@ -505,10 +603,12 @@ class TestNewCliFeatures:
         """trash --query with 'n' input aborts without trashing."""
         mock_emails = [{"message_id": "m1", "subject": "Old"}]
 
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_label_map", return_value={}), \
-             patch("iobox.cli.search_emails", return_value=mock_emails), \
-             patch("iobox.cli.trash_message") as mock_trash:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_label_map", return_value={}),
+            patch("iobox.cli.search_emails", return_value=mock_emails),
+            patch("iobox.cli.trash_message") as mock_trash,
+        ):
             mock_svc.return_value = MagicMock()
             result = runner.invoke(app, ["trash", "--query", "older_than:1y"], input="n\n")
 
@@ -542,17 +642,18 @@ class TestSyncFlag:
         mock_email = self._mock_email_data("m1")
         mock_profile = {"historyId": "hist-100"}
 
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_label_map", return_value={}), \
-             patch("iobox.cli.SyncState") as MockSyncState, \
-             patch("iobox.cli.get_new_messages") as mock_gnm, \
-             patch("iobox.cli.search_emails", return_value=[{"message_id": "m1"}]), \
-             patch("iobox.cli.batch_get_emails", return_value=[mock_email]), \
-             patch("iobox.cli.convert_email_to_markdown", return_value="# md"), \
-             patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m1.md")), \
-             patch("iobox.cli.create_output_directory", return_value=str(tmp_path)), \
-             patch("iobox.cli.check_for_duplicates", return_value=[]):
-
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_label_map", return_value={}),
+            patch("iobox.cli.SyncState") as MockSyncState,
+            patch("iobox.cli.get_new_messages") as mock_gnm,
+            patch("iobox.cli.search_emails", return_value=[{"message_id": "m1"}]),
+            patch("iobox.cli.batch_get_emails", return_value=[mock_email]),
+            patch("iobox.cli.convert_email_to_markdown", return_value="# md"),
+            patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m1.md")),
+            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
+            patch("iobox.cli.check_for_duplicates", return_value=[]),
+        ):
             mock_svc_instance = MagicMock()
             mock_svc.return_value = mock_svc_instance
             mock_svc_instance.users().getProfile.return_value = MagicMock(
@@ -565,10 +666,17 @@ class TestSyncFlag:
             mock_state.last_history_id = None
             MockSyncState.return_value = mock_state
 
-            result = runner.invoke(app, [
-                "save", "--query", "from:test@example.com",
-                "--output-dir", str(tmp_path), "--sync"
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "save",
+                    "--query",
+                    "from:test@example.com",
+                    "--output-dir",
+                    str(tmp_path),
+                    "--sync",
+                ],
+            )
 
         assert result.exit_code == 0
         # Should NOT call get_new_messages on first run (no history)
@@ -581,17 +689,18 @@ class TestSyncFlag:
         mock_email = self._mock_email_data("m-new")
         mock_profile = {"historyId": "hist-200"}
 
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_label_map", return_value={}), \
-             patch("iobox.cli.SyncState") as MockSyncState, \
-             patch("iobox.cli.get_new_messages", return_value=["m-new"]) as mock_gnm, \
-             patch("iobox.cli.search_emails") as mock_search, \
-             patch("iobox.cli.batch_get_emails", return_value=[mock_email]), \
-             patch("iobox.cli.convert_email_to_markdown", return_value="# md"), \
-             patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-new.md")), \
-             patch("iobox.cli.create_output_directory", return_value=str(tmp_path)), \
-             patch("iobox.cli.check_for_duplicates", return_value=[]):
-
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_label_map", return_value={}),
+            patch("iobox.cli.SyncState") as MockSyncState,
+            patch("iobox.cli.get_new_messages", return_value=["m-new"]) as mock_gnm,
+            patch("iobox.cli.search_emails") as mock_search,
+            patch("iobox.cli.batch_get_emails", return_value=[mock_email]),
+            patch("iobox.cli.convert_email_to_markdown", return_value="# md"),
+            patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-new.md")),
+            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
+            patch("iobox.cli.check_for_duplicates", return_value=[]),
+        ):
             mock_svc_instance = MagicMock()
             mock_svc.return_value = mock_svc_instance
             mock_svc_instance.users().getProfile.return_value = MagicMock(
@@ -603,10 +712,17 @@ class TestSyncFlag:
             mock_state.last_history_id = "hist-100"
             MockSyncState.return_value = mock_state
 
-            result = runner.invoke(app, [
-                "save", "--query", "from:test@example.com",
-                "--output-dir", str(tmp_path), "--sync"
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "save",
+                    "--query",
+                    "from:test@example.com",
+                    "--output-dir",
+                    str(tmp_path),
+                    "--sync",
+                ],
+            )
 
         assert result.exit_code == 0
         # Incremental: get_new_messages should be called with the saved history ID
@@ -621,17 +737,20 @@ class TestSyncFlag:
         mock_email = self._mock_email_data("m-full")
         mock_profile = {"historyId": "hist-300"}
 
-        with patch("iobox.cli.get_gmail_service") as mock_svc, \
-             patch("iobox.cli.get_label_map", return_value={}), \
-             patch("iobox.cli.SyncState") as MockSyncState, \
-             patch("iobox.cli.get_new_messages", return_value=None), \
-             patch("iobox.cli.search_emails", return_value=[{"message_id": "m-full"}]) as mock_search, \
-             patch("iobox.cli.batch_get_emails", return_value=[mock_email]), \
-             patch("iobox.cli.convert_email_to_markdown", return_value="# md"), \
-             patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-full.md")), \
-             patch("iobox.cli.create_output_directory", return_value=str(tmp_path)), \
-             patch("iobox.cli.check_for_duplicates", return_value=[]):
-
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.get_label_map", return_value={}),
+            patch("iobox.cli.SyncState") as MockSyncState,
+            patch("iobox.cli.get_new_messages", return_value=None),
+            patch(
+                "iobox.cli.search_emails", return_value=[{"message_id": "m-full"}]
+            ) as mock_search,
+            patch("iobox.cli.batch_get_emails", return_value=[mock_email]),
+            patch("iobox.cli.convert_email_to_markdown", return_value="# md"),
+            patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-full.md")),
+            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
+            patch("iobox.cli.check_for_duplicates", return_value=[]),
+        ):
             mock_svc_instance = MagicMock()
             mock_svc.return_value = mock_svc_instance
             mock_svc_instance.users().getProfile.return_value = MagicMock(
@@ -643,10 +762,17 @@ class TestSyncFlag:
             mock_state.last_history_id = "hist-old"
             MockSyncState.return_value = mock_state
 
-            result = runner.invoke(app, [
-                "save", "--query", "from:test@example.com",
-                "--output-dir", str(tmp_path), "--sync"
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "save",
+                    "--query",
+                    "from:test@example.com",
+                    "--output-dir",
+                    str(tmp_path),
+                    "--sync",
+                ],
+            )
 
         assert result.exit_code == 0
         # Falls back to full search
@@ -659,17 +785,25 @@ class TestDraftCommands:
 
     def test_draft_create_command(self):
         """Test draft-create command creates a draft."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}) as mock_compose, \
-             patch("iobox.cli.create_draft", return_value={"id": "draft-1"}) as mock_create:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}),
+            patch("iobox.cli.create_draft", return_value={"id": "draft-1"}) as mock_create,
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "draft-create",
-                "--to", "bob@example.com",
-                "--subject", "Draft Subject",
-                "--body", "Draft body",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "draft-create",
+                    "--to",
+                    "bob@example.com",
+                    "--subject",
+                    "Draft Subject",
+                    "--body",
+                    "Draft body",
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Draft created successfully" in result.stdout
@@ -683,8 +817,10 @@ class TestDraftCommands:
             {"id": "draft-2", "subject": "Second Draft", "snippet": "Second snippet"},
         ]
 
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.list_drafts", return_value=mock_drafts):
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.list_drafts", return_value=mock_drafts),
+        ):
             mock_service.return_value = MagicMock()
 
             result = runner.invoke(app, ["draft-list"])
@@ -696,8 +832,10 @@ class TestDraftCommands:
 
     def test_draft_list_empty(self):
         """Test draft-list when no drafts exist."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.list_drafts", return_value=[]):
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.list_drafts", return_value=[]),
+        ):
             mock_service.return_value = MagicMock()
 
             result = runner.invoke(app, ["draft-list"])
@@ -707,14 +845,20 @@ class TestDraftCommands:
 
     def test_draft_send_command(self):
         """Test draft-send command sends a draft."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.send_draft", return_value={"id": "sent-from-draft"}) as mock_send:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch("iobox.cli.send_draft", return_value={"id": "sent-from-draft"}) as mock_send,
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "draft-send",
-                "--draft-id", "draft-1",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "draft-send",
+                    "--draft-id",
+                    "draft-1",
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Draft sent successfully" in result.stdout
@@ -722,14 +866,22 @@ class TestDraftCommands:
 
     def test_draft_delete_command(self):
         """Test draft-delete command deletes a draft."""
-        with patch("iobox.cli.get_gmail_service") as mock_service, \
-             patch("iobox.cli.delete_draft", return_value={"status": "deleted", "draft_id": "draft-1"}) as mock_delete:
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_service,
+            patch(
+                "iobox.cli.delete_draft", return_value={"status": "deleted", "draft_id": "draft-1"}
+            ) as mock_delete,
+        ):
             mock_service.return_value = MagicMock()
 
-            result = runner.invoke(app, [
-                "draft-delete",
-                "--draft-id", "draft-1",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "draft-delete",
+                    "--draft-id",
+                    "draft-1",
+                ],
+            )
 
             assert result.exit_code == 0
             assert "Draft deleted successfully" in result.stdout
