@@ -21,7 +21,7 @@ approved: true
 
 - [x] Implement `OutlookProvider` organization operations in `src/iobox/providers/outlook.py`: `mark_read()`, `set_star()`, `archive()`, `trash()`, `untrash()`, `add_tag()`, `remove_tag()`, `list_tags()`, using Graph's `$batch` with 20-request chunks for multi-message ops [id: outlook-org] [depends: outlook-read] 
 
-- [ ] Add query translation layer — `_build_gmail_query()` in `GmailProvider` (all `EmailQuery` fields → Gmail `q=` syntax), `_build_outlook_filter()` and `_build_outlook_search()` in `OutlookProvider` (`$filter` vs `$search` based on `text` presence, `raw_query` passthrough for both) [id: query-translation] [depends: gmail-provider, outlook-read]
+- [x] Add query translation layer — `_build_gmail_query()` in `GmailProvider` (all `EmailQuery` fields → Gmail `q=` syntax), `_build_outlook_filter()` and `_build_outlook_search()` in `OutlookProvider` (`$filter` vs `$search` based on `text` presence, `raw_query` passthrough for both) [id: query-translation] [depends: gmail-provider, outlook-read]
 
 - [ ] Implement `OutlookProvider` incremental sync in `src/iobox/providers/outlook.py` (`get_sync_state()`, `get_new_messages()` with delta query and 410-Gone fallback) and extend `SyncState` in `src/iobox/file_manager.py` to store both `last_history_id` (Gmail) and `delta_links: dict[str, str]` (Outlook) with `provider` field [id: outlook-sync] [depends: outlook-read]
 
