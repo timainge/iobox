@@ -29,7 +29,7 @@ approved: true
 
 - [x] Add unit tests for `GmailProvider` in `tests/unit/test_gmail_provider.py` — one test per abstract method verifying correct delegation to existing module functions, plus `_build_gmail_query()` and `_to_email_data()` field-by-field coverage [id: test-gmail-provider] [depends: gmail-provider, query-translation]
 
-- [ ] Add unit tests for `OutlookProvider` in `tests/unit/test_outlook_provider.py` — all abstract methods with mocked python-o365 objects, and unit tests for `outlook_auth.py` in `tests/unit/test_outlook_auth.py` (browser/device-code flows, missing client ID error, status check) [id: test-outlook-provider] [depends: outlook-org, outlook-write, outlook-sync, outlook-fixtures]
+- [x] Add unit tests for `OutlookProvider` in `tests/unit/test_outlook_provider.py` — all abstract methods with mocked python-o365 objects, and unit tests for `outlook_auth.py` in `tests/unit/test_outlook_auth.py` (browser/device-code flows, missing client ID error, status check) [id: test-outlook-provider] [depends: outlook-org, outlook-write, outlook-sync, outlook-fixtures]
 
 - [ ] Add shared ABC contract tests in `tests/unit/test_provider_contract.py` (both providers implement all methods, return correct types, `EmailData` has required keys) and query translation tests in `tests/unit/test_query_translation.py` (all `EmailQuery` fields individually and combined, `$search` vs `$filter` path selection, `raw_query` passthrough) [id: test-contracts] [depends: test-gmail-provider, test-outlook-provider]
 
