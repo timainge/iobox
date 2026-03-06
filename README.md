@@ -17,6 +17,8 @@ Email inboxes are full of valuable content — newsletters, reports, project upd
 - **Send, forward, and draft** emails from the CLI
 - **Label and trash management** — star, archive, mark read/unread, trash/restore
 - **Incremental sync** — only fetch new emails since last run
+- **Access modes** — readonly, standard, and dangerous modes to control what the CLI can do
+- **Multi-account support** — use `--account` to manage multiple Gmail accounts with separate tokens
 
 ## Installation
 
@@ -52,7 +54,7 @@ pip install -e .
 6. Download the JSON file and save it as `credentials.json` in the project root
 7. Optionally configure paths via `.env` (see `.env.example`)
 
-The first time you run a command, a browser window will open for OAuth consent. After that, credentials are cached in `token.json`.
+The first time you run a command, a browser window will open for OAuth consent. After that, credentials are cached in `tokens/default/` (or `token.json` for legacy setups).
 
 ## Usage
 
@@ -174,6 +176,53 @@ iobox trash --message-id MSG_ID --untrash
 iobox trash -q "from:spam@example.com" -d 30
 ```
 
+### Access modes
+
+Iobox supports three access modes that control which commands are available and which Gmail API scopes are requested:
+
+```bash
+# Readonly mode — search, save, auth-status, version, draft-list only
+iobox --mode readonly search -q "test"
+
+# Standard mode (default) — adds draft management and label operations
+iobox --mode standard label --message-id MSG_ID --mark-read
+
+# Dangerous mode — adds send, forward, and trash
+iobox --mode dangerous send --to recipient@example.com --subject "Hi" --body "Hello"
+```
+
+Set via `--mode` flag or `IOBOX_MODE` environment variable.
+
+### Multi-account support
+
+Use `--account` to manage multiple Gmail accounts. Each account gets its own token directory:
+
+```bash
+# Default account
+iobox search -q "test"
+
+# Work account (separate OAuth token)
+iobox --account work search -q "test"
+
+# Personal account
+iobox --account personal --mode readonly search -q "test"
+```
+
+Set via `--account` flag or `IOBOX_ACCOUNT` environment variable.
+
+Tokens are stored per account and per scope tier:
+```
+$CREDENTIALS_DIR/
+  tokens/
+    default/
+      token_readonly.json
+      token_standard.json
+    work/
+      token_standard.json
+```
+
+Switching between modes never destroys an existing token — a broader token (standard) is automatically accepted when running in readonly mode.
+
 ## Output format
 
 Each email is saved as a markdown file with YAML frontmatter:
@@ -210,7 +259,9 @@ Environment variables (set in `.env` or your shell):
 |---|---|---|
 | `CREDENTIALS_DIR` | `.` | Directory containing credential files |
 | `GOOGLE_APPLICATION_CREDENTIALS` | `credentials.json` | Path to OAuth credentials |
-| `GMAIL_TOKEN_FILE` | `token.json` | Path to cached token |
+| `GMAIL_TOKEN_FILE` | `token.json` | Path to cached token (overrides multi-profile storage when set) |
+| `IOBOX_MODE` | `standard` | Access mode: `readonly`, `standard`, or `dangerous` |
+| `IOBOX_ACCOUNT` | `default` | Account profile name for multi-account token storage |
 
 ## Project Structure
 
@@ -218,8 +269,10 @@ Environment variables (set in `.env` or your shell):
 iobox/
 ├── src/iobox/                  # Source code
 │   ├── __init__.py
-│   ├── auth.py                 # OAuth 2.0 authentication
+│   ├── accounts.py             # Multi-account profile management
+│   ├── auth.py                 # OAuth 2.0 with multi-profile token storage
 │   ├── cli.py                  # Typer CLI (search, save, send, forward, label, trash, drafts)
+│   ├── modes.py                # Access mode definitions and command gating
 │   ├── email_search.py         # Email search with date filtering
 │   ├── email_retrieval.py      # Full email content, labels, trash/untrash
 │   ├── email_sender.py         # Compose, send, forward, and draft management

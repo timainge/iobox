@@ -219,6 +219,8 @@ class TestCliCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "forward",
                     "--message-id",
                     "msg-123",
@@ -247,6 +249,8 @@ class TestCliCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "forward",
                     "--query",
                     "from:test@example.com",
@@ -266,6 +270,8 @@ class TestCliCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "forward",
                     "--to",
                     "bob@example.com",
@@ -286,6 +292,8 @@ class TestCliCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "send",
                     "--to",
                     "bob@example.com",
@@ -323,6 +331,8 @@ class TestCliCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "send",
                     "--to",
                     "bob@example.com",
@@ -357,6 +367,8 @@ class TestCliCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "send",
                     "--to",
                     "bob@example.com",
@@ -388,6 +400,8 @@ class TestCliCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "send",
                     "--to",
                     "bob@example.com",
@@ -573,7 +587,7 @@ class TestNewCliFeatures:
             patch("iobox.cli.trash_message") as mock_trash,
         ):
             mock_svc.return_value = MagicMock()
-            result = runner.invoke(app, ["trash", "--message-id", "msg-1"])
+            result = runner.invoke(app, ["--mode", "dangerous", "trash", "--message-id", "msg-1"])
 
         assert result.exit_code == 0
         mock_trash.assert_called_once_with(mock_svc.return_value, "msg-1")
@@ -594,7 +608,9 @@ class TestNewCliFeatures:
         ):
             mock_svc.return_value = MagicMock()
             # Provide "y" as input to confirm
-            result = runner.invoke(app, ["trash", "--query", "older_than:1y"], input="y\n")
+            result = runner.invoke(
+                app, ["--mode", "dangerous", "trash", "--query", "older_than:1y"], input="y\n"
+            )
 
         assert result.exit_code == 0
         assert mock_trash.call_count == 2
@@ -610,7 +626,9 @@ class TestNewCliFeatures:
             patch("iobox.cli.trash_message") as mock_trash,
         ):
             mock_svc.return_value = MagicMock()
-            result = runner.invoke(app, ["trash", "--query", "older_than:1y"], input="n\n")
+            result = runner.invoke(
+                app, ["--mode", "dangerous", "trash", "--query", "older_than:1y"], input="n\n"
+            )
 
         assert result.exit_code == 0
         mock_trash.assert_not_called()
@@ -886,3 +904,220 @@ class TestDraftCommands:
             assert result.exit_code == 0
             assert "Draft deleted successfully" in result.stdout
             mock_delete.assert_called_once_with(mock_service.return_value, "draft-1")
+
+
+class TestModeGating:
+    """Tests for --mode command gating."""
+
+    def test_default_mode_is_standard(self):
+        """Default mode allows draft-create but blocks send."""
+        # draft-create is in standard, should work (we just test it doesn't get blocked)
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}),
+            patch("iobox.cli.create_draft", return_value={"id": "d1"}),
+        ):
+            mock_svc.return_value = MagicMock()
+            result = runner.invoke(
+                app,
+                ["draft-create", "--to", "a@b.com", "--subject", "x", "--body", "y"],
+            )
+        assert result.exit_code == 0
+
+    def test_readonly_blocks_send(self):
+        """send is blocked in readonly mode."""
+        result = runner.invoke(
+            app,
+            ["--mode", "readonly", "send", "--to", "a@b.com", "--subject", "x", "--body", "y"],
+        )
+        assert result.exit_code == 1
+        assert "not allowed in 'readonly' mode" in result.stderr
+
+    def test_readonly_blocks_label(self):
+        """label is blocked in readonly mode."""
+        result = runner.invoke(
+            app,
+            ["--mode", "readonly", "label", "--message-id", "m1", "--mark-read"],
+        )
+        assert result.exit_code == 1
+        assert "not allowed in 'readonly' mode" in result.stderr
+
+    def test_readonly_blocks_trash(self):
+        """trash is blocked in readonly mode."""
+        result = runner.invoke(
+            app,
+            ["--mode", "readonly", "trash", "--message-id", "m1"],
+        )
+        assert result.exit_code == 1
+        assert "not allowed in 'readonly' mode" in result.stderr
+
+    def test_readonly_allows_search(self):
+        """search is allowed in readonly mode."""
+        mock_emails = [
+            {
+                "message_id": "m1",
+                "subject": "Test",
+                "from": "a@b.com",
+                "date": "",
+                "snippet": "snip",
+                "labels": [],
+            }
+        ]
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.search_emails", return_value=mock_emails),
+            patch("iobox.cli.get_label_map", return_value={}),
+        ):
+            mock_svc.return_value = MagicMock()
+            result = runner.invoke(app, ["--mode", "readonly", "search", "--query", "test"])
+        assert result.exit_code == 0
+
+    def test_readonly_allows_version(self):
+        """version is allowed in readonly mode."""
+        result = runner.invoke(app, ["--mode", "readonly", "version"])
+        assert result.exit_code == 0
+
+    def test_standard_blocks_trash(self):
+        """trash is blocked in standard mode."""
+        result = runner.invoke(
+            app,
+            ["--mode", "standard", "trash", "--message-id", "m1"],
+        )
+        assert result.exit_code == 1
+        assert "not allowed in 'standard' mode" in result.stderr
+
+    def test_standard_blocks_send(self):
+        """send is blocked in standard mode."""
+        result = runner.invoke(
+            app,
+            ["--mode", "standard", "send", "--to", "a@b.com", "--subject", "x", "--body", "y"],
+        )
+        assert result.exit_code == 1
+        assert "not allowed in 'standard' mode" in result.stderr
+
+    def test_standard_blocks_forward(self):
+        """forward is blocked in standard mode."""
+        result = runner.invoke(
+            app,
+            ["--mode", "standard", "forward", "--message-id", "m1", "--to", "a@b.com"],
+        )
+        assert result.exit_code == 1
+        assert "not allowed in 'standard' mode" in result.stderr
+
+    def test_dangerous_allows_send(self):
+        """send is allowed in dangerous mode."""
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.compose_message", return_value={"raw": "dGVzdA=="}),
+            patch("iobox.cli.send_message", return_value={"id": "sent-1"}),
+        ):
+            mock_svc.return_value = MagicMock()
+            result = runner.invoke(
+                app,
+                [
+                    "--mode",
+                    "dangerous",
+                    "send",
+                    "--to",
+                    "a@b.com",
+                    "--subject",
+                    "x",
+                    "--body",
+                    "y",
+                ],
+            )
+        assert result.exit_code == 0
+        assert "Email sent successfully" in result.stdout
+
+    def test_dangerous_allows_trash(self):
+        """trash is allowed in dangerous mode."""
+        with (
+            patch("iobox.cli.get_gmail_service") as mock_svc,
+            patch("iobox.cli.trash_message"),
+        ):
+            mock_svc.return_value = MagicMock()
+            result = runner.invoke(
+                app,
+                ["--mode", "dangerous", "trash", "--message-id", "m1"],
+            )
+        assert result.exit_code == 0
+        assert "Trashed" in result.stdout
+
+    def test_invalid_mode(self):
+        """Invalid mode value exits with error."""
+        result = runner.invoke(app, ["--mode", "invalid", "version"])
+        assert result.exit_code == 1
+        assert "Invalid mode" in result.stderr
+
+    def test_auth_status_shows_mode(self):
+        """auth-status displays the current access mode."""
+        mock_status = {
+            "authenticated": True,
+            "credentials_file_exists": True,
+            "token_file_exists": True,
+            "credentials_path": "/p/credentials.json",
+            "token_path": "/p/token.json",
+        }
+        with (
+            patch("iobox.cli.check_auth_status", return_value=mock_status),
+            patch("iobox.cli.get_gmail_service", side_effect=Exception("skip")),
+        ):
+            result = runner.invoke(app, ["--mode", "readonly", "auth-status"])
+        assert result.exit_code == 0
+        assert "Access mode: readonly" in result.stdout
+
+
+class TestAccountFlag:
+    """Tests for --account CLI flag."""
+
+    def test_account_flag_passed(self):
+        """--account flag is stored in context and shown in auth-status."""
+        mock_status = {
+            "authenticated": True,
+            "credentials_file_exists": True,
+            "token_file_exists": True,
+            "credentials_path": "/p/credentials.json",
+            "token_path": "/p/token.json",
+        }
+        with (
+            patch("iobox.cli.check_auth_status", return_value=mock_status),
+            patch("iobox.cli.get_gmail_service", side_effect=Exception("skip")),
+        ):
+            result = runner.invoke(app, ["--account", "work", "auth-status"])
+        assert result.exit_code == 0
+        assert "Account: work" in result.stdout
+
+    def test_default_account(self):
+        """Without --account flag, defaults to 'default'."""
+        mock_status = {
+            "authenticated": True,
+            "credentials_file_exists": True,
+            "token_file_exists": True,
+            "credentials_path": "/p/credentials.json",
+            "token_path": "/p/token.json",
+        }
+        with (
+            patch("iobox.cli.check_auth_status", return_value=mock_status),
+            patch("iobox.cli.get_gmail_service", side_effect=Exception("skip")),
+        ):
+            result = runner.invoke(app, ["auth-status"])
+        assert result.exit_code == 0
+        assert "Account: default" in result.stdout
+
+    def test_account_with_envvar(self, monkeypatch):
+        """IOBOX_ACCOUNT env var is used when --account is not passed."""
+        monkeypatch.setenv("IOBOX_ACCOUNT", "personal")
+        mock_status = {
+            "authenticated": True,
+            "credentials_file_exists": True,
+            "token_file_exists": True,
+            "credentials_path": "/p/credentials.json",
+            "token_path": "/p/token.json",
+        }
+        with (
+            patch("iobox.cli.check_auth_status", return_value=mock_status),
+            patch("iobox.cli.get_gmail_service", side_effect=Exception("skip")),
+        ):
+            result = runner.invoke(app, ["auth-status"])
+        assert result.exit_code == 0
+        assert "Account: personal" in result.stdout

@@ -88,6 +88,32 @@ def mock_env_variables(monkeypatch):
 
 
 @pytest.fixture
+def mock_token_dir(tmp_path):
+    """Create a temporary token directory structure for multi-profile tests."""
+    tokens_dir = tmp_path / "tokens"
+    tokens_dir.mkdir()
+
+    def _make_account(account_name="default", tiers=None):
+        """Create token files for an account.
+
+        Args:
+            account_name: The account directory name.
+            tiers: dict mapping tier name to token JSON content, e.g.
+                   {"readonly": '{"token": "ro"}', "standard": '{"token": "std"}'}
+        """
+        account_dir = tokens_dir / account_name
+        account_dir.mkdir(exist_ok=True)
+        if tiers:
+            for tier, content in tiers.items():
+                (account_dir / f"token_{tier}.json").write_text(content)
+        return account_dir
+
+    _make_account.base = tmp_path
+    _make_account.tokens_dir = tokens_dir
+    return _make_account
+
+
+@pytest.fixture
 def mock_gmail_service(mocker):
     """Create a mock Gmail API service for testing."""
     mock_service = mocker.MagicMock()

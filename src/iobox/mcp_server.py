@@ -12,7 +12,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service
+from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service, set_active_mode
 from iobox.email_retrieval import (
     batch_get_emails,
     batch_modify_labels,
@@ -42,9 +42,31 @@ from iobox.file_manager import (
     save_email_to_markdown,
 )
 from iobox.markdown_converter import convert_email_to_markdown, convert_thread_to_markdown
+from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode, get_mode_from_env
 from iobox.utils import slugify_text
 
 mcp = FastMCP("iobox")
+
+# ---------------------------------------------------------------------------
+# Tool registry – functions are collected here and selectively registered
+# with mcp.tool() based on the active access mode.
+# ---------------------------------------------------------------------------
+
+_ALL_TOOLS: dict[str, callable] = {}
+
+
+def _tool(fn):
+    """Collect a tool function without registering it yet."""
+    _ALL_TOOLS[fn.__name__] = fn
+    return fn
+
+
+def register_tools(mode: AccessMode) -> None:
+    """Register only the MCP tools allowed for *mode*."""
+    allowed = MCP_TOOLS_BY_MODE[mode]
+    for name, fn in _ALL_TOOLS.items():
+        if name in allowed:
+            mcp.tool()(fn)
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +74,7 @@ mcp = FastMCP("iobox")
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@_tool
 def search_gmail(
     query: str,
     max_results: int = 10,
@@ -85,7 +107,7 @@ def search_gmail(
     )
 
 
-@mcp.tool()
+@_tool
 def get_email(message_id: str, prefer_html: bool = True) -> dict:
     """Retrieve full email content by Gmail message ID.
 
@@ -106,7 +128,7 @@ def get_email(message_id: str, prefer_html: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@_tool
 def save_email(
     message_id: str,
     output_dir: str = ".",
@@ -149,7 +171,7 @@ def save_email(
     return filepath
 
 
-@mcp.tool()
+@_tool
 def save_thread(
     thread_id: str,
     output_dir: str = ".",
@@ -181,7 +203,7 @@ def save_thread(
     return filepath
 
 
-@mcp.tool()
+@_tool
 def save_emails_by_query(
     query: str,
     output_dir: str = ".",
@@ -310,7 +332,7 @@ def save_emails_by_query(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@_tool
 def send_email(
     to: str,
     subject: str,
@@ -351,7 +373,7 @@ def send_email(
     return send_message(service, message)
 
 
-@mcp.tool()
+@_tool
 def forward_gmail(
     message_id: str,
     to: str,
@@ -368,7 +390,7 @@ def forward_gmail(
     return forward_email(service, message_id=message_id, to=to, additional_text=note)
 
 
-@mcp.tool()
+@_tool
 def batch_forward_gmail(
     query: str,
     to: str,
@@ -413,7 +435,7 @@ def batch_forward_gmail(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@_tool
 def create_gmail_draft(
     to: str,
     subject: str,
@@ -454,7 +476,7 @@ def create_gmail_draft(
     return create_draft(service, message)
 
 
-@mcp.tool()
+@_tool
 def list_gmail_drafts(max_results: int = 10) -> list[dict]:
     """List Gmail drafts.
 
@@ -465,7 +487,7 @@ def list_gmail_drafts(max_results: int = 10) -> list[dict]:
     return list_drafts(service, max_results=max_results)
 
 
-@mcp.tool()
+@_tool
 def send_gmail_draft(draft_id: str) -> dict:
     """Send an existing Gmail draft.
 
@@ -476,7 +498,7 @@ def send_gmail_draft(draft_id: str) -> dict:
     return send_draft(service, draft_id)
 
 
-@mcp.tool()
+@_tool
 def delete_gmail_draft(draft_id: str) -> dict:
     """Permanently delete a Gmail draft.
 
@@ -492,7 +514,7 @@ def delete_gmail_draft(draft_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@_tool
 def modify_labels(
     message_id: str,
     mark_read: bool = False,
@@ -541,7 +563,7 @@ def modify_labels(
     return modify_message_labels(service, message_id, add_labels or None, remove_labels or None)
 
 
-@mcp.tool()
+@_tool
 def batch_modify_gmail_labels(
     query: str,
     max_results: int = 10,
@@ -610,7 +632,7 @@ def batch_modify_gmail_labels(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@_tool
 def trash_gmail(message_id: str) -> dict:
     """Move a Gmail message to trash.
 
@@ -621,7 +643,7 @@ def trash_gmail(message_id: str) -> dict:
     return trash_message(service, message_id)
 
 
-@mcp.tool()
+@_tool
 def untrash_gmail(message_id: str) -> dict:
     """Restore a Gmail message from trash.
 
@@ -632,7 +654,7 @@ def untrash_gmail(message_id: str) -> dict:
     return untrash_message(service, message_id)
 
 
-@mcp.tool()
+@_tool
 def batch_trash_gmail(
     query: str,
     max_results: int = 10,
@@ -665,7 +687,7 @@ def batch_trash_gmail(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@_tool
 def check_auth() -> dict:
     """Check Gmail authentication status and profile info."""
     status = check_auth_status()
@@ -681,4 +703,10 @@ def check_auth() -> dict:
 
 
 if __name__ == "__main__":
+    from iobox.accounts import get_account_from_env, set_active_account
+
+    mode = get_mode_from_env()
+    set_active_mode(mode)
+    set_active_account(get_account_from_env())
+    register_tools(mode)
     mcp.run(transport="stdio")

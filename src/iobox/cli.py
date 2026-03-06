@@ -11,7 +11,8 @@ from pathlib import Path
 import typer
 
 from iobox import __version__
-from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service
+from iobox.accounts import set_active_account
+from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service, set_active_mode
 from iobox.email_retrieval import (
     batch_get_emails,
     batch_modify_labels,
@@ -45,6 +46,7 @@ from iobox.file_manager import (
 )
 from iobox.markdown import convert_email_to_markdown
 from iobox.markdown_converter import convert_thread_to_markdown
+from iobox.modes import CLI_COMMANDS_BY_MODE, AccessMode, get_mode_from_env
 
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
@@ -66,12 +68,17 @@ def version():
 
 
 @app.command()
-def auth_status():
+def auth_status(ctx: typer.Context):
     """Check the status of Gmail API authentication."""
     status = check_auth_status()
 
+    current_mode = ctx.obj.get("mode", AccessMode.standard) if ctx.obj else AccessMode.standard
+    current_account = ctx.obj.get("account", "default") if ctx.obj else "default"
+
     typer.echo("\nAuthentication Status")
     typer.echo("-------------------")
+    typer.echo(f"Access mode: {current_mode.value}")
+    typer.echo(f"Account: {current_account}")
     typer.echo(f"Authenticated: {status['authenticated']}")
     typer.echo(f"Credentials file exists: {status['credentials_file_exists']}")
     typer.echo(f"Credentials path: {status['credentials_path']}")
@@ -419,9 +426,7 @@ def save(
                         continue
 
                     subj = email_data.get("subject", "No Subject")
-                    typer.echo(
-                        f"Processing email {idx}/{len(ids_to_process)}: {subj}"
-                    )
+                    typer.echo(f"Processing email {idx}/{len(ids_to_process)}: {subj}")
 
                     # Convert to markdown
                     markdown_content = convert_email_to_markdown(email_data)
@@ -843,13 +848,54 @@ def trash(
 def main(
     ctx: typer.Context,
     version_flag: bool = version_callback,
+    mode: str = typer.Option(
+        None,
+        "--mode",
+        help="Access mode: readonly, standard (default), or dangerous",
+        envvar="IOBOX_MODE",
+    ),
+    account: str = typer.Option(
+        None,
+        "--account",
+        help="Account profile name for token storage (default: 'default')",
+        envvar="IOBOX_ACCOUNT",
+    ),
 ):
     """
     Iobox - Gmail to Markdown Converter
 
     Use commands to interact with Gmail and convert emails to Markdown.
     """
-    pass
+    # Resolve the access mode (CLI flag > env var > default).
+    if mode is not None:
+        try:
+            resolved_mode = AccessMode(mode.lower().strip())
+        except ValueError:
+            valid = ", ".join(m.value for m in AccessMode)
+            typer.echo(f"Error: Invalid mode '{mode}'. Must be one of: {valid}", err=True)
+            raise typer.Exit(code=1) from None
+    else:
+        resolved_mode = get_mode_from_env()
+
+    # Resolve the account name (CLI flag > env var > default).
+    resolved_account = account.strip() if account else "default"
+
+    set_active_mode(resolved_mode)
+    set_active_account(resolved_account)
+
+    ctx.ensure_object(dict)
+    ctx.obj["mode"] = resolved_mode
+    ctx.obj["account"] = resolved_account
+
+    # Gate the invoked subcommand against the allowed set for this mode.
+    cmd = ctx.invoked_subcommand
+    if cmd is not None and cmd not in CLI_COMMANDS_BY_MODE[resolved_mode]:
+        typer.echo(
+            f"Error: Command '{cmd}' is not allowed in '{resolved_mode.value}' mode. "
+            f"Use --mode dangerous to enable it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 def run():

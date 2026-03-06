@@ -11,7 +11,9 @@ Iobox is a Gmail to Markdown converter that extracts emails from Gmail based on 
 ### Core Modules
 
 - **`src/iobox/cli.py`**: Typer-based CLI with commands for search, save, send, forward, draft-create/list/send/delete, label, trash, auth-status, and version
-- **`src/iobox/auth.py`**: Gmail API OAuth 2.0 authentication handling with credential management
+- **`src/iobox/auth.py`**: Gmail API OAuth 2.0 authentication with multi-profile token storage (per-account, per-scope-tier)
+- **`src/iobox/accounts.py`**: Account management — tracks the active account name used to namespace token files
+- **`src/iobox/modes.py`**: Access mode definitions (readonly/standard/dangerous) controlling scopes and command gating
 - **`src/iobox/email_search.py`**: Email search using Gmail API with query parsing and date filtering
 - **`src/iobox/email_retrieval.py`**: Full email content retrieval and attachment download
 - **`src/iobox/email_sender.py`**: Compose, send, and forward emails via Gmail API
@@ -59,14 +61,28 @@ iobox --help
 The application requires Google OAuth 2.0 credentials:
 1. Create a Google Cloud project with Gmail API enabled
 2. Download OAuth credentials as `credentials.json` in project root
-3. First run will trigger OAuth flow and create `token.json`
+3. First run will trigger OAuth flow and create a token file
+
+### Multi-Profile Token Storage
+
+Tokens are stored per account and per scope tier under `$CREDENTIALS_DIR/tokens/{account}/`:
+- `token_readonly.json` — gmail.readonly scope
+- `token_standard.json` — gmail.modify + gmail.compose scopes
+
+This means switching between `--mode readonly` and `--mode standard` never destroys an existing token. A broader token (standard) is automatically accepted in readonly mode.
+
+Legacy `token.json` files are auto-migrated on first run (copied, not deleted).
+
+If `GMAIL_TOKEN_FILE` is explicitly set to a non-default value, the legacy single-file behavior is used instead.
 
 ## Configuration
 
 Environment variables can be set in `.env` file:
 - `CREDENTIALS_DIR`: Directory for credential files (default: current working directory)
 - `GOOGLE_APPLICATION_CREDENTIALS`: Path to credentials.json (default: 'credentials.json')
-- `GMAIL_TOKEN_FILE`: Path to token.json (default: 'token.json')
+- `GMAIL_TOKEN_FILE`: Path to token.json (default: 'token.json') — when set to a non-default value, bypasses multi-profile token directory
+- `IOBOX_MODE`: Access mode — `readonly`, `standard` (default), or `dangerous`
+- `IOBOX_ACCOUNT`: Account profile name for multi-account token storage (default: 'default')
 
 ## CLI Commands
 
