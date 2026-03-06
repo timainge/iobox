@@ -17,9 +17,9 @@ approved: true
 
 - [x] Implement `OutlookProvider` read operations in `src/iobox/providers/outlook.py`: `authenticate()`, `search_emails()` (with `$filter` / `$search` path selection), `get_email_content()`, `batch_get_emails()`, `get_thread()`, `download_attachment()`, `_message_to_email_data()`, and set `Prefer: IdType="ImmutableId"` header on all Graph requests [id: outlook-read] [depends: outlook-auth, outlook-fixtures]
 
-- [ ] Implement `OutlookProvider` write operations in `src/iobox/providers/outlook.py`: `send_message()` (with file attachment support), `forward_message()` (native Graph forward), `create_draft()`, `list_drafts()`, `send_draft()`, `delete_draft()` [id: outlook-write] [depends: outlook-read]
+- [x] Implement `OutlookProvider` write operations in `src/iobox/providers/outlook.py`: `send_message()` (with file attachment support), `forward_message()` (native Graph forward), `create_draft()`, `list_drafts()`, `send_draft()`, `delete_draft()` [id: outlook-write] [depends: outlook-read]
 
-- [ ] Implement `OutlookProvider` organization operations in `src/iobox/providers/outlook.py`: `mark_read()`, `set_star()`, `archive()`, `trash()`, `untrash()`, `add_tag()`, `remove_tag()`, `list_tags()`, using Graph's `$batch` with 20-request chunks for multi-message ops [id: outlook-org] [depends: outlook-read]
+- [x] Implement `OutlookProvider` organization operations in `src/iobox/providers/outlook.py`: `mark_read()`, `set_star()`, `archive()`, `trash()`, `untrash()`, `add_tag()`, `remove_tag()`, `list_tags()`, using Graph's `$batch` with 20-request chunks for multi-message ops [id: outlook-org] [depends: outlook-read] 
 
 - [ ] Add query translation layer — `_build_gmail_query()` in `GmailProvider` (all `EmailQuery` fields → Gmail `q=` syntax), `_build_outlook_filter()` and `_build_outlook_search()` in `OutlookProvider` (`$filter` vs `$search` based on `text` presence, `raw_query` passthrough for both) [id: query-translation] [depends: gmail-provider, outlook-read]
 
