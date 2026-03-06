@@ -33,4 +33,4 @@ approved: true
 
 - [x] Add shared ABC contract tests in `tests/unit/test_provider_contract.py` (both providers implement all methods, return correct types, `EmailData` has required keys) and query translation tests in `tests/unit/test_query_translation.py` (all `EmailQuery` fields individually and combined, `$search` vs `$filter` path selection, `raw_query` passthrough) [id: test-contracts] [depends: test-gmail-provider, test-outlook-provider]
 
-- [ ] Add delta sync unit tests in `tests/unit/test_outlook_sync.py` (normal response, 410-Gone fallback, initial sync with no token) and cross-provider integration tests in `tests/integration/test_provider_parity.py` (identical `EmailData` output format, markdown output identical for same content) [id: test-integration] [depends: test-contracts, outlook-sync]
+- [x] Add delta sync unit tests in `tests/unit/test_outlook_sync.py` (normal response, 410-Gone fallback, initial sync with no token) and cross-provider integration tests in `tests/integration/test_provider_parity.py` (identical `EmailData` output format, markdown output identical for same content) [id: test-integration] [depends: test-contracts, outlook-sync]
