@@ -6,37 +6,15 @@ This module provides a user-friendly CLI for interacting with iobox functionalit
 
 import os
 import sys
+from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from iobox import __version__
 from iobox.accounts import set_active_account
-from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service, set_active_mode
-from iobox.email_retrieval import (
-    batch_get_emails,
-    batch_modify_labels,
-    get_label_map,
-    get_thread_content,
-    modify_message_labels,
-    resolve_label_name,
-    trash_message,
-    untrash_message,
-)
-from iobox.email_search import (
-    get_email_content,
-    get_new_messages,
-    search_emails,
-)
-from iobox.email_sender import (
-    compose_message,
-    create_draft,
-    delete_draft,
-    forward_email,
-    list_drafts,
-    send_draft,
-    send_message,
-)
+from iobox.auth import set_active_mode
 from iobox.file_manager import (
     SyncState,
     check_for_duplicates,
@@ -47,6 +25,7 @@ from iobox.file_manager import (
 from iobox.markdown import convert_email_to_markdown
 from iobox.markdown_converter import convert_thread_to_markdown
 from iobox.modes import CLI_COMMANDS_BY_MODE, AccessMode, get_mode_from_env
+from iobox.providers import EmailProvider, EmailQuery, get_provider
 
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
@@ -61,6 +40,62 @@ version_callback = typer.Option(
 )
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _email_data_to_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Convert an EmailData dict (``from_`` key) to legacy format (``from`` key).
+
+    Existing modules (markdown_converter, file_manager) expect the sender to
+    live under the ``"from"`` key, but :class:`EmailData` uses ``"from_"``
+    because ``from`` is a Python keyword.  This helper bridges the two.
+    """
+    result = dict(data)
+    if "from_" in result and "from" not in result:
+        result["from"] = result.pop("from_")
+    return result
+
+
+def _parse_dates(
+    days: int | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[date | None, date | None]:
+    """Convert CLI date parameters into ``(after, before)`` date objects.
+
+    * When ``start_date`` is given it takes precedence over ``days``.
+    * ``days`` is relative to today.
+    * Returns ``(None, None)`` when no date constraints are provided.
+    """
+    after: date | None = None
+    before: date | None = None
+
+    if start_date:
+        # Accept YYYY/MM/DD format
+        parts = start_date.replace("-", "/").split("/")
+        after = date(int(parts[0]), int(parts[1]), int(parts[2]))
+    elif days is not None:
+        after = date.today() - timedelta(days=days)
+
+    if end_date:
+        parts = end_date.replace("-", "/").split("/")
+        before = date(int(parts[0]), int(parts[1]), int(parts[2]))
+
+    return after, before
+
+
+def _get_provider(ctx: typer.Context) -> EmailProvider:
+    """Return the provider stored on the Typer context."""
+    return ctx.obj["provider"]
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
 @app.command()
 def version():
     """Display the current version of iobox."""
@@ -69,47 +104,83 @@ def version():
 
 @app.command()
 def auth_status(ctx: typer.Context):
-    """Check the status of Gmail API authentication."""
-    status = check_auth_status()
-
+    """Check the status of email provider authentication."""
     current_mode = ctx.obj.get("mode", AccessMode.standard) if ctx.obj else AccessMode.standard
     current_account = ctx.obj.get("account", "default") if ctx.obj else "default"
+    provider_name = ctx.obj.get("provider_name", "gmail") if ctx.obj else "gmail"
 
     typer.echo("\nAuthentication Status")
     typer.echo("-------------------")
+    typer.echo(f"Provider: {provider_name}")
     typer.echo(f"Access mode: {current_mode.value}")
     typer.echo(f"Account: {current_account}")
-    typer.echo(f"Authenticated: {status['authenticated']}")
-    typer.echo(f"Credentials file exists: {status['credentials_file_exists']}")
-    typer.echo(f"Credentials path: {status['credentials_path']}")
-    typer.echo(f"Token file exists: {status['token_file_exists']}")
-    typer.echo(f"Token path: {status['token_path']}")
 
-    if status["token_file_exists"] and "expired" in status:
-        typer.echo(f"Token expired: {status['expired']}")
-        typer.echo(f"Has refresh token: {status['has_refresh_token']}")
+    if provider_name == "outlook":
+        from iobox.providers.outlook_auth import check_outlook_auth_status
 
-    if not status["credentials_file_exists"]:
-        typer.echo("\nTo set up Google Cloud OAuth 2.0 credentials:")
-        typer.echo("1. Go to https://console.cloud.google.com/")
-        typer.echo("2. Create a project or select an existing one")
-        typer.echo("3. Navigate to APIs & Services > Credentials")
-        typer.echo("4. Click 'Create Credentials' > 'OAuth client ID'")
-        typer.echo("5. Choose 'Desktop app' as application type")
-        typer.echo(
-            "6. Download the JSON file and save it as 'credentials.json' in the project root"
-        )
+        status = check_outlook_auth_status()
+        typer.echo(f"Authenticated: {status['authenticated']}")
+        typer.echo(f"Client ID configured: {status['client_id_configured']}")
+        typer.echo(f"Tenant ID: {status['tenant_id']}")
+        typer.echo(f"Token file exists: {status['token_file_exists']}")
+        typer.echo(f"Token path: {status['token_path']}")
 
-    try:
-        service = get_gmail_service()
-        profile = get_gmail_profile(service)
-        typer.echo("\nGmail Profile")
-        typer.echo("-------------------")
-        typer.echo(f"Email: {profile.get('emailAddress', 'Unknown')}")
-        typer.echo(f"Messages: {profile.get('messagesTotal', 0):,}")
-        typer.echo(f"Threads: {profile.get('threadsTotal', 0):,}")
-    except Exception:
-        pass
+        if "error" in status:
+            typer.echo(f"Error: {status['error']}")
+
+        if not status["client_id_configured"]:
+            typer.echo("\nTo set up Outlook / Microsoft 365 credentials:")
+            typer.echo("1. Go to https://entra.microsoft.com")
+            typer.echo("2. Register an application (or use an existing one)")
+            typer.echo("3. Set OUTLOOK_CLIENT_ID in your .env file")
+            typer.echo("4. Optionally set OUTLOOK_CLIENT_SECRET and OUTLOOK_TENANT_ID")
+
+        if status["authenticated"]:
+            try:
+                provider = _get_provider(ctx)
+                profile = provider.get_profile()
+                typer.echo("\nOutlook Profile")
+                typer.echo("-------------------")
+                typer.echo(f"Email: {profile.get('email', 'Unknown')}")
+                typer.echo(f"Display name: {profile.get('display_name', 'Unknown')}")
+            except Exception:
+                pass
+    else:
+        # Gmail auth status
+        from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service
+
+        status = check_auth_status()
+        typer.echo(f"Authenticated: {status['authenticated']}")
+        typer.echo(f"Credentials file exists: {status['credentials_file_exists']}")
+        typer.echo(f"Credentials path: {status['credentials_path']}")
+        typer.echo(f"Token file exists: {status['token_file_exists']}")
+        typer.echo(f"Token path: {status['token_path']}")
+
+        if status["token_file_exists"] and "expired" in status:
+            typer.echo(f"Token expired: {status['expired']}")
+            typer.echo(f"Has refresh token: {status['has_refresh_token']}")
+
+        if not status["credentials_file_exists"]:
+            typer.echo("\nTo set up Google Cloud OAuth 2.0 credentials:")
+            typer.echo("1. Go to https://console.cloud.google.com/")
+            typer.echo("2. Create a project or select an existing one")
+            typer.echo("3. Navigate to APIs & Services > Credentials")
+            typer.echo("4. Click 'Create Credentials' > 'OAuth client ID'")
+            typer.echo("5. Choose 'Desktop app' as application type")
+            typer.echo(
+                "6. Download the JSON file and save it as 'credentials.json' in the project root"
+            )
+
+        try:
+            service = get_gmail_service()
+            profile = get_gmail_profile(service)
+            typer.echo("\nGmail Profile")
+            typer.echo("-------------------")
+            typer.echo(f"Email: {profile.get('emailAddress', 'Unknown')}")
+            typer.echo(f"Messages: {profile.get('messagesTotal', 0):,}")
+            typer.echo(f"Threads: {profile.get('threadsTotal', 0):,}")
+        except Exception:
+            pass
 
 
 @app.command()
@@ -135,25 +206,23 @@ def search(
     include_spam_trash: bool = typer.Option(
         False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
     ),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """Search for emails matching the specified query."""
     try:
-        # Authenticate with Gmail API
-        service = get_gmail_service()
-        label_map = get_label_map(service)
+        provider = _get_provider(ctx)
 
-        # Search for emails
-        typer.echo(f"Searching for emails matching: {query}")
-        results = search_emails(
-            service,
-            query,
-            max_results,
-            days,
-            start_date,
-            end_date,
-            label_map=label_map,
+        after, before = _parse_dates(days, start_date, end_date)
+        eq = EmailQuery(
+            raw_query=query,
+            max_results=max_results,
+            after=after,
+            before=before,
             include_spam_trash=include_spam_trash,
         )
+
+        typer.echo(f"Searching for emails matching: {query}")
+        results = provider.search_emails(eq)
 
         if not results:
             typer.echo("No emails found matching the query.")
@@ -177,26 +246,27 @@ def search(
             typer.echo("")
 
         for i, email in enumerate(results, 1):
-            subject = email.get("subject", "No subject")
-            sender = email.get("from", "Unknown sender")
-            date = email.get("date", "Unknown date")
+            email_dict = _email_data_to_dict(email)
+            subject = email_dict.get("subject", "No subject")
+            sender = email_dict.get("from", "Unknown sender")
+            date_str = email_dict.get("date", "Unknown date")
 
             # Format the date more nicely if possible
             try:
                 from dateutil import parser
 
-                date_obj = parser.parse(date)
+                date_obj = parser.parse(date_str)
                 date_str = date_obj.strftime("%d/%m/%Y %H:%M")
             except Exception:
-                date_str = date
+                pass
 
-            labels = email.get("labels", [])
+            labels = email_dict.get("labels", [])
             label_str = ", ".join(labels) if labels else "No labels"
 
             typer.echo(f"{i}. {subject}")
-            typer.echo(f"   ID: {email.get('message_id', 'No ID')}")
+            typer.echo(f"   ID: {email_dict.get('message_id', 'No ID')}")
 
-            snippet = email.get("snippet", "")
+            snippet = email_dict.get("snippet", "")
             if snippet:
                 import html
 
@@ -265,6 +335,7 @@ def save(
     sync: bool = typer.Option(
         False, "--sync", help="Enable incremental sync: only fetch new emails since last run"
     ),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
     Save emails as Markdown files.
@@ -281,27 +352,24 @@ def save(
             typer.echo("\nFor help, run: iobox save --help")
             raise typer.Exit(code=1)
 
-        # Authenticate with Gmail API
-        service = get_gmail_service()
-        label_map = get_label_map(service)
+        provider = _get_provider(ctx)
+        preferred = "text/html" if html_preferred else "text/plain"
 
         # Create output directory if it doesn't exist
         output_dir = create_output_directory(output_dir)
 
         # Parse attachment types if provided
-        attachment_filters = []
+        attachment_filters: list[str] = []
         if attachment_types:
             attachment_filters = [ext.strip().lower() for ext in attachment_types.split(",")]
 
         # Thread mode
         if thread_id is not None:
-            messages = get_thread_content(
-                service,
-                thread_id,
-                preferred_content_type="text/html" if html_preferred else "text/plain",
-            )
-            markdown_content = convert_thread_to_markdown(messages)
-            subject = messages[0].get("subject", "thread") if messages else "thread"
+            messages = provider.get_thread(thread_id)
+            # Convert for markdown compatibility
+            messages_dicts = [_email_data_to_dict(m) for m in messages]
+            markdown_content = convert_thread_to_markdown(messages_dicts)
+            subject = messages_dicts[0].get("subject", "thread") if messages_dicts else "thread"
             from iobox.utils import slugify_text
 
             subject_slug = slugify_text(subject)
@@ -314,31 +382,27 @@ def save(
 
         # Single email mode
         if message_id is not None:
-            # Get email content
-            email_data = get_email_content(
-                service,
-                message_id,
-                preferred_content_type="text/html" if html_preferred else "text/plain",
-                label_map=label_map,
-            )
+            # Get email content via provider
+            email_data = provider.get_email_content(message_id, preferred_content_type=preferred)
+            email_dict = _email_data_to_dict(email_data)
 
             # Convert to markdown
-            markdown_content = convert_email_to_markdown(email_data)
+            markdown_content = convert_email_to_markdown(email_dict)
 
             # Save to file
             filepath = save_email_to_markdown(
-                email_data=email_data, markdown_content=markdown_content, output_dir=output_dir
+                email_data=email_dict, markdown_content=markdown_content, output_dir=output_dir
             )
 
             typer.echo(f"Successfully saved email to {filepath}")
 
             # Download attachments if requested
-            if download_attachments and email_data.get("attachments"):
+            if download_attachments and email_dict.get("attachments"):
                 att_result = download_email_attachments(
-                    service=service,
-                    email_data=email_data,
+                    email_data=email_dict,
                     output_dir=output_dir,
                     attachment_filters=attachment_filters,
+                    download_fn=provider.download_attachment,
                 )
                 typer.echo(f"  Downloaded {att_result['downloaded_count']} attachment(s)")
                 for err in att_result["errors"]:
@@ -357,7 +421,7 @@ def save(
                     typer.echo(
                         f"Incremental sync: checking for new emails since historyId {hid}..."
                     )
-                    new_ids = get_new_messages(service, sync_state.last_history_id)
+                    new_ids = provider.get_new_messages(sync_state.last_history_id)
                     if new_ids is not None:
                         typer.echo(f"Found {len(new_ids)} new message(s) since last sync.")
                         message_ids_to_fetch = new_ids
@@ -369,30 +433,29 @@ def save(
                 if not message_ids_to_fetch:
                     typer.echo("No new emails since last sync.")
                     # Still update the history ID
-                    profile = service.users().getProfile(userId="me").execute()
-                    sync_state.update(profile.get("historyId", sync_state.last_history_id), [])
+                    current_sync = provider.get_sync_state()
+                    sync_state.update(current_sync, [])
                     return
                 results_for_batch = [{"message_id": mid} for mid in message_ids_to_fetch]
             else:
                 # Full search
-                typer.echo(f"Searching for emails matching: {query}")
-                search_results = search_emails(
-                    service,
-                    query,
-                    max_results,
-                    days,
-                    start_date,
-                    end_date,
-                    label_map=label_map,
+                after, before = _parse_dates(days, start_date, end_date)
+                eq = EmailQuery(
+                    raw_query=query,
+                    max_results=max_results,
+                    after=after,
+                    before=before,
                     include_spam_trash=include_spam_trash,
                 )
+                typer.echo(f"Searching for emails matching: {query}")
+                search_results = provider.search_emails(eq)
                 if not search_results:
                     typer.echo("No emails found matching the query.")
                     if sync:
-                        profile = service.users().getProfile(userId="me").execute()
-                        sync_state.update(profile.get("historyId", ""), [])
+                        current_sync = provider.get_sync_state()
+                        sync_state.update(current_sync, [])
                     return
-                results_for_batch = search_results
+                results_for_batch = [_email_data_to_dict(r) for r in search_results]
 
             total_emails = len(results_for_batch)
             typer.echo(f"\nFound {total_emails} emails to process.")
@@ -411,29 +474,28 @@ def save(
             # Batch-fetch full content for all non-duplicate emails
             if ids_to_process:
                 typer.echo(f"Fetching {len(ids_to_process)} email(s) in batch...")
-                email_batch = batch_get_emails(
-                    service,
+                email_batch = provider.batch_get_emails(
                     ids_to_process,
-                    preferred_content_type="text/html" if html_preferred else "text/plain",
-                    label_map=label_map,
+                    preferred_content_type=preferred,
                 )
 
-                for idx, email_data in enumerate(email_batch, 1):
-                    if "error" in email_data:
+                for idx, raw_email_data in enumerate(email_batch, 1):
+                    email_dict = _email_data_to_dict(raw_email_data)
+                    if "error" in email_dict:
                         typer.echo(
-                            f"  Skipping email {email_data['message_id']}: {email_data['error']}"
+                            f"  Skipping email {email_dict['message_id']}: {email_dict['error']}"
                         )
                         continue
 
-                    subj = email_data.get("subject", "No Subject")
+                    subj = email_dict.get("subject", "No Subject")
                     typer.echo(f"Processing email {idx}/{len(ids_to_process)}: {subj}")
 
                     # Convert to markdown
-                    markdown_content = convert_email_to_markdown(email_data)
+                    markdown_content = convert_email_to_markdown(email_dict)
 
                     # Save to file
                     save_email_to_markdown(
-                        email_data=email_data,
+                        email_data=email_dict,
                         markdown_content=markdown_content,
                         output_dir=output_dir,
                     )
@@ -441,12 +503,12 @@ def save(
                     saved_count += 1
 
                     # Download attachments if requested
-                    if download_attachments and email_data.get("attachments"):
+                    if download_attachments and email_dict.get("attachments"):
                         result_dict = download_email_attachments(
-                            service=service,
-                            email_data=email_data,
+                            email_data=email_dict,
                             output_dir=output_dir,
                             attachment_filters=attachment_filters,
+                            download_fn=provider.download_attachment,
                         )
                         attachment_count += result_dict["downloaded_count"]
                         for err in result_dict["errors"]:
@@ -454,9 +516,9 @@ def save(
 
             # Update sync state after successful save
             if sync:
-                profile = service.users().getProfile(userId="me").execute()
-                sync_state.update(profile.get("historyId", ""), ids_to_process)
-                typer.echo(f"Sync state updated (historyId: {profile.get('historyId', 'unknown')})")
+                current_sync = provider.get_sync_state()
+                sync_state.update(current_sync, ids_to_process)
+                typer.echo(f"Sync state updated (historyId: {current_sync})")
 
             # Summary message
             typer.echo(f"\nCompleted processing {total_emails} emails:")
@@ -490,6 +552,7 @@ def forward(
     note: str = typer.Option(
         None, "--note", "-n", help="Optional note to prepend to forwarded email"
     ),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
     Forward emails to a recipient.
@@ -503,20 +566,22 @@ def forward(
             typer.echo("Error: You must specify either --message-id (-m) or --query (-q)")
             raise typer.Exit(code=1)
 
-        service = get_gmail_service()
+        provider = _get_provider(ctx)
 
         if message_id is not None:
             typer.echo(f"Forwarding email {message_id} to {to}...")
-            result = forward_email(
-                service,
-                message_id=message_id,
-                to=to,
-                additional_text=note,
-            )
+            result = provider.forward_message(message_id=message_id, to=to, comment=note)
             typer.echo(f"Successfully forwarded. New message ID: {result.get('id', 'unknown')}")
         else:
+            after, before = _parse_dates(days, start_date, end_date)
+            eq = EmailQuery(
+                raw_query=query,
+                max_results=max_results,
+                after=after,
+                before=before,
+            )
             typer.echo(f"Searching for emails matching: {query}")
-            results = search_emails(service, query, max_results, days, start_date, end_date)
+            results = provider.search_emails(eq)
 
             if not results:
                 typer.echo("No emails found matching the query.")
@@ -527,7 +592,7 @@ def forward(
             for email_summary in results:
                 mid = email_summary["message_id"]
                 typer.echo(f"Forwarding: {email_summary.get('subject', 'No Subject')}")
-                forward_email(service, message_id=mid, to=to, additional_text=note)
+                provider.forward_message(message_id=mid, to=to, comment=note)
                 forwarded += 1
 
             typer.echo(f"\nForwarded {forwarded} emails to {to}.")
@@ -551,6 +616,7 @@ def send(
     attach: list[str] | None = typer.Option(
         None, "--attach", help="File path to attach (can be specified multiple times)"
     ),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
     Compose and send an email.
@@ -581,8 +647,8 @@ def send(
                     typer.echo(f"Error: Attachment file not found: {file_path}")
                     raise typer.Exit(code=1)
 
-        service = get_gmail_service()
-        message = compose_message(
+        provider = _get_provider(ctx)
+        result = provider.send_message(
             to=to,
             subject=subject,
             body=body,
@@ -591,7 +657,6 @@ def send(
             content_type=content_type,
             attachments=attach or None,
         )
-        result = send_message(service, message)
 
         typer.echo(f"Email sent successfully. Message ID: {result.get('id', 'unknown')}")
 
@@ -614,6 +679,7 @@ def draft_create(
     attach: list[str] | None = typer.Option(
         None, "--attach", help="File path to attach (can be specified multiple times)"
     ),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """Create an email draft without sending it."""
     try:
@@ -640,17 +706,15 @@ def draft_create(
                     typer.echo(f"Error: Attachment file not found: {file_path}")
                     raise typer.Exit(code=1)
 
-        service = get_gmail_service()
-        message = compose_message(
+        provider = _get_provider(ctx)
+        result = provider.create_draft(
             to=to,
             subject=subject,
             body=body,
             cc=cc,
             bcc=bcc,
             content_type=content_type,
-            attachments=attach or None,
         )
-        result = create_draft(service, message)
 
         typer.echo(f"Draft created successfully. Draft ID: {result.get('id', 'unknown')}")
 
@@ -662,11 +726,12 @@ def draft_create(
 @app.command(name="draft-list")
 def draft_list(
     max_results: int = typer.Option(10, "--max", "-m", help="Maximum number of drafts to list"),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
-    """List Gmail drafts."""
+    """List email drafts."""
     try:
-        service = get_gmail_service()
-        drafts = list_drafts(service, max_results=max_results)
+        provider = _get_provider(ctx)
+        drafts = provider.list_drafts(max_results=max_results)
 
         if not drafts:
             typer.echo("No drafts found.")
@@ -676,7 +741,7 @@ def draft_list(
         for draft in drafts:
             typer.echo(f"\nID: {draft['id']}")
             typer.echo(f"  Subject: {draft['subject']}")
-            if draft["snippet"]:
+            if draft.get("snippet"):
                 typer.echo(f"  Preview: {draft['snippet'][:70]}")
 
     except Exception as e:
@@ -687,11 +752,12 @@ def draft_list(
 @app.command(name="draft-send")
 def draft_send(
     draft_id: str = typer.Option(..., "--draft-id", help="ID of the draft to send"),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """Send an existing draft."""
     try:
-        service = get_gmail_service()
-        result = send_draft(service, draft_id)
+        provider = _get_provider(ctx)
+        result = provider.send_draft(draft_id)
         typer.echo(f"Draft sent successfully. Message ID: {result.get('id', 'unknown')}")
 
     except Exception as e:
@@ -702,11 +768,12 @@ def draft_send(
 @app.command(name="draft-delete")
 def draft_delete(
     draft_id: str = typer.Option(..., "--draft-id", help="ID of the draft to delete"),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """Permanently delete a draft."""
     try:
-        service = get_gmail_service()
-        result = delete_draft(service, draft_id)
+        provider = _get_provider(ctx)
+        result = provider.delete_draft(draft_id)
         typer.echo(f"Draft deleted successfully. Draft ID: {result.get('draft_id', draft_id)}")
 
     except Exception as e:
@@ -729,6 +796,7 @@ def label(
     archive: bool = typer.Option(False, "--archive", help="Archive (remove from INBOX)"),
     add: str = typer.Option(None, "--add", help="Add label by name"),
     remove: str = typer.Option(None, "--remove", help="Remove label by name"),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
     Add or remove labels on one or more messages.
@@ -740,45 +808,44 @@ def label(
             typer.echo("Error: You must specify --message-id or --query (-q)")
             raise typer.Exit(code=1)
 
-        service = get_gmail_service()
+        provider = _get_provider(ctx)
 
-        add_labels: list[str] = []
-        remove_labels: list[str] = []
-
-        if mark_read:
-            remove_labels.append("UNREAD")
-        if mark_unread:
-            add_labels.append("UNREAD")
-        if star:
-            add_labels.append("STARRED")
-        if unstar:
-            remove_labels.append("STARRED")
-        if archive:
-            remove_labels.append("INBOX")
-        if add:
-            add_labels.append(resolve_label_name(service, add))
-        if remove:
-            remove_labels.append(resolve_label_name(service, remove))
+        def _apply_label_ops(mid: str) -> None:
+            """Apply all requested label operations to a single message."""
+            if mark_read:
+                provider.mark_read(mid, read=True)
+            if mark_unread:
+                provider.mark_read(mid, read=False)
+            if star:
+                provider.set_star(mid, starred=True)
+            if unstar:
+                provider.set_star(mid, starred=False)
+            if archive:
+                provider.archive(mid)
+            if add:
+                provider.add_tag(mid, add)
+            if remove:
+                provider.remove_tag(mid, remove)
 
         if message_id is not None:
-            modify_message_labels(service, message_id, add_labels or None, remove_labels or None)
+            _apply_label_ops(message_id)
             typer.echo(f"Labels updated for message {message_id}")
         else:
-            label_map = get_label_map(service)
-            results = search_emails(service, query, max_results, days, label_map=label_map)
+            after, _before = _parse_dates(days, None, None)
+            eq = EmailQuery(
+                raw_query=query,
+                max_results=max_results,
+                after=after,
+            )
+            results = provider.search_emails(eq)
             if not results:
                 typer.echo("No emails found matching the query.")
                 return
 
-            msg_ids = [r["message_id"] for r in results]
-            if len(msg_ids) >= 2:
-                batch_modify_labels(service, msg_ids, add_labels or None, remove_labels or None)
-            else:
-                modify_message_labels(
-                    service, msg_ids[0], add_labels or None, remove_labels or None
-                )
+            for r in results:
+                _apply_label_ops(r["message_id"])
 
-            typer.echo(f"Labels updated for {len(msg_ids)} message(s)")
+            typer.echo(f"Labels updated for {len(results)} message(s)")
 
     except Exception as e:
         typer.echo(f"Error updating labels: {e}", err=True)
@@ -794,6 +861,7 @@ def trash(
     max_results: int = typer.Option(
         10, "-m", "--max-results", help="Maximum number of messages in batch mode"
     ),
+    ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
     Move messages to trash or restore them from trash.
@@ -806,19 +874,24 @@ def trash(
             typer.echo("Error: You must specify --message-id or --query (-q)")
             raise typer.Exit(code=1)
 
-        service = get_gmail_service()
+        provider = _get_provider(ctx)
         past_tense = "Restored" if untrash else "Trashed"
         verb = "restore" if untrash else "trash"
 
         if message_id is not None:
             if untrash:
-                untrash_message(service, message_id)
+                provider.untrash(message_id)
             else:
-                trash_message(service, message_id)
+                provider.trash(message_id)
             typer.echo(f"{past_tense} message {message_id}")
         else:
-            label_map = get_label_map(service)
-            results = search_emails(service, query, max_results, days, label_map=label_map)
+            after, _before = _parse_dates(days, None, None)
+            eq = EmailQuery(
+                raw_query=query,
+                max_results=max_results,
+                after=after,
+            )
+            results = provider.search_emails(eq)
             if not results:
                 typer.echo("No emails found matching the query.")
                 return
@@ -831,9 +904,9 @@ def trash(
             for r in results:
                 mid = r["message_id"]
                 if untrash:
-                    untrash_message(service, mid)
+                    provider.untrash(mid)
                 else:
-                    trash_message(service, mid)
+                    provider.trash(mid)
 
             typer.echo(f"{past_tense} {len(results)} message(s)")
 
@@ -860,11 +933,17 @@ def main(
         help="Account profile name for token storage (default: 'default')",
         envvar="IOBOX_ACCOUNT",
     ),
+    provider: str = typer.Option(
+        "gmail",
+        "--provider",
+        help="Email provider: gmail or outlook",
+        envvar="IOBOX_PROVIDER",
+    ),
 ):
     """
-    Iobox - Gmail to Markdown Converter
+    Iobox - Email to Markdown Converter
 
-    Use commands to interact with Gmail and convert emails to Markdown.
+    Use commands to interact with your email provider and convert emails to Markdown.
     """
     # Resolve the access mode (CLI flag > env var > default).
     if mode is not None:
@@ -886,6 +965,14 @@ def main(
     ctx.ensure_object(dict)
     ctx.obj["mode"] = resolved_mode
     ctx.obj["account"] = resolved_account
+    ctx.obj["provider_name"] = provider.lower().strip()
+
+    # Instantiate the provider (lazy auth — no browser/prompt in callback).
+    try:
+        ctx.obj["provider"] = get_provider(ctx.obj["provider_name"])
+    except (ValueError, ImportError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
 
     # Gate the invoked subcommand against the allowed set for this mode.
     cmd = ctx.invoked_subcommand

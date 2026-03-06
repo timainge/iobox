@@ -335,24 +335,32 @@ class SyncState:
 
 
 def download_email_attachments(
-    service,
-    email_data: dict[str, Any],
-    output_dir: str,
+    service=None,
+    email_data: dict[str, Any] | None = None,
+    output_dir: str = "",
     attachment_filters: list[str] | None = None,
+    download_fn: Any | None = None,
 ) -> dict[str, Any]:
     """
     Download all attachments for an email.
 
     Args:
-        service: Authenticated Gmail API service
-        email_data: Email data dictionary
-        output_dir: Directory to save attachments to
-        attachment_filters: List of file extensions to filter by (e.g. ['pdf', 'docx'])
+        service: Authenticated Gmail API service (legacy — used when *download_fn* is ``None``).
+        email_data: Email data dictionary.
+        output_dir: Directory to save attachments to.
+        attachment_filters: List of file extensions to filter by (e.g. ['pdf', 'docx']).
+        download_fn: Optional callable ``(message_id, attachment_id) -> bytes``.
+            When provided, it is used instead of the Gmail-specific download path
+            so that any provider backend can supply attachment data.
 
     Returns:
         dict: Result with downloaded_count, skipped_count, and errors list
     """
-    from iobox.email_retrieval import download_attachment
+    if download_fn is None:
+        from iobox.email_retrieval import download_attachment as _dl
+
+        def download_fn(message_id: str, attachment_id: str) -> bytes:  # type: ignore[misc]
+            return _dl(service, message_id, attachment_id)
 
     message_id = email_data.get("message_id", "")
     attachments = email_data.get("attachments", [])
@@ -386,7 +394,7 @@ def download_email_attachments(
 
         try:
             logging.info(f"Downloading attachment: {filename}")
-            attachment_data = download_attachment(service, message_id, attachment_id)
+            attachment_data = download_fn(message_id, attachment_id)
 
             if attachment_data:
                 filepath = save_attachment(

@@ -41,6 +41,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+outlook = ["O365>=2.1.8"]
 mcp = ["mcp>=1.2"]
 dev = [
     "pytest>=8.0",
