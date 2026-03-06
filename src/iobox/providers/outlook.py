@@ -7,8 +7,12 @@ library (which wraps the Microsoft Graph API internally).
 Read operations (authenticate, search, get content, batch fetch, threads,
 attachment download, and query translation) are fully implemented here.
 Write operations (send, forward, drafts CRUD) are also fully implemented.
-Organization and sync operations are stubbed with ``NotImplementedError``
-and will be filled in by subsequent tasks.
+Organization operations (mark read, star/flag, archive, trash, untrash,
+category tags) are fully implemented with a ``_batch_graph_requests()``
+helper that chunks multi-message operations into 20-request batches via
+Graph's ``$batch`` endpoint.
+Sync operations are stubbed with ``NotImplementedError`` and will be
+filled in by a subsequent task.
 
 ImmutableId header
 ------------------
@@ -544,52 +548,183 @@ class OutlookProvider(EmailProvider):
         return {"message_id": draft_id, "status": "deleted"}
 
     # ------------------------------------------------------------------
-    # 4. System operations — to be implemented in a later task
+    # Internal batch helper
     # ------------------------------------------------------------------
+
+    def _batch_graph_requests(
+        self, requests: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Send multiple Graph API requests using the ``$batch`` endpoint.
+
+        Microsoft Graph's ``$batch`` endpoint accepts at most 20 individual
+        requests per call.  This helper transparently chunks larger lists
+        and returns all individual responses in order.
+
+        Each element of *requests* should be a dict matching the Graph batch
+        request format::
+
+            {
+                "id": "1",
+                "method": "PATCH",
+                "url": "/me/messages/{id}",
+                "body": { ... },
+                "headers": {"Content-Type": "application/json"},
+            }
+
+        Args:
+            requests: List of individual Graph batch request dicts.
+
+        Returns:
+            Flat list of response dicts (``{"id", "status", "body"}``),
+            one per input request.
+        """
+        _BATCH_LIMIT = 20
+        con = self._acct.con
+        all_responses: list[dict[str, Any]] = []
+
+        for start in range(0, len(requests), _BATCH_LIMIT):
+            chunk = requests[start : start + _BATCH_LIMIT]
+            payload = {"requests": chunk}
+            resp = con.post(
+                f"{con.protocol.service_url}/$batch",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            if resp and hasattr(resp, "json"):
+                body = resp.json()
+                all_responses.extend(body.get("responses", []))
+            else:
+                logger.warning("Batch request returned no response for chunk starting at %d", start)
+
+        return all_responses
+
+    # ------------------------------------------------------------------
+    # 4. System operations (mark read, star, archive, trash)
+    # ------------------------------------------------------------------
+
+    def _get_message_or_raise(self, message_id: str) -> Any:
+        """Fetch a message by ID, raising ``ValueError`` if not found."""
+        msg = self._mb.get_message(object_id=message_id)
+        if msg is None:
+            raise ValueError(f"Message not found: {message_id!r}")
+        return msg
 
     def mark_read(self, message_id: str, read: bool = True) -> None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.mark_read() will be implemented in the org-ops task."
-        )
+        """Toggle the ``isRead`` property on a message.
+
+        Args:
+            message_id: Immutable Graph message ID.
+            read: ``True`` to mark as read (default), ``False`` for unread.
+        """
+        msg = self._get_message_or_raise(message_id)
+        if read:
+            msg.mark_as_read()
+        else:
+            msg.mark_as_unread()
 
     def set_star(self, message_id: str, starred: bool = True) -> None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.set_star() will be implemented in the org-ops task."
-        )
+        """Toggle the follow-up flag (Outlook's equivalent of Gmail's star).
+
+        Maps ``starred=True`` → ``flag.flagStatus = "flagged"`` and
+        ``starred=False`` → ``flag.flagStatus = "notFlagged"``.
+
+        Args:
+            message_id: Immutable Graph message ID.
+            starred: ``True`` to flag (default), ``False`` to unflag.
+        """
+        msg = self._get_message_or_raise(message_id)
+        status = "flagged" if starred else "notFlagged"
+        msg.flag = {"flagStatus": status}
+        msg.save_message()
 
     def archive(self, message_id: str) -> None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.archive() will be implemented in the org-ops task."
-        )
+        """Move a message to the Archive well-known folder.
+
+        Args:
+            message_id: Immutable Graph message ID.
+        """
+        msg = self._get_message_or_raise(message_id)
+        archive_folder = self._mb.archive_folder()
+        msg.move(archive_folder)
 
     def trash(self, message_id: str) -> None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.trash() will be implemented in the org-ops task."
-        )
+        """Soft-delete a message (move to Deleted Items).
+
+        python-o365's ``Message.delete()`` performs a soft delete,
+        moving the message to the Deleted Items folder.
+
+        Args:
+            message_id: Immutable Graph message ID.
+        """
+        msg = self._get_message_or_raise(message_id)
+        msg.delete()
 
     def untrash(self, message_id: str) -> None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.untrash() will be implemented in the org-ops task."
-        )
+        """Restore a message from Deleted Items back to Inbox.
+
+        Args:
+            message_id: Immutable Graph message ID.
+        """
+        msg = self._get_message_or_raise(message_id)
+        inbox_folder = self._mb.inbox_folder()
+        msg.move(inbox_folder)
 
     # ------------------------------------------------------------------
-    # 5. Tag operations — to be implemented in a later task
+    # 5. Tag operations (Outlook categories)
     # ------------------------------------------------------------------
 
     def add_tag(self, message_id: str, tag_name: str) -> None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.add_tag() will be implemented in the org-ops task."
-        )
+        """Append a category to the message's ``categories`` array.
+
+        No-op if the category is already present.
+
+        Args:
+            message_id: Immutable Graph message ID.
+            tag_name: Category name to add.
+        """
+        msg = self._get_message_or_raise(message_id)
+        categories: list[str] = list(msg.categories) if msg.categories else []
+        if tag_name not in categories:
+            categories.append(tag_name)
+            msg.categories = categories
+            msg.save_message()
 
     def remove_tag(self, message_id: str, tag_name: str) -> None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.remove_tag() will be implemented in the org-ops task."
-        )
+        """Remove a category from the message's ``categories`` array.
+
+        No-op if the category is not present.
+
+        Args:
+            message_id: Immutable Graph message ID.
+            tag_name: Category name to remove.
+        """
+        msg = self._get_message_or_raise(message_id)
+        categories: list[str] = list(msg.categories) if msg.categories else []
+        if tag_name in categories:
+            categories.remove(tag_name)
+            msg.categories = categories
+            msg.save_message()
 
     def list_tags(self) -> dict[str, str]:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.list_tags() will be implemented in the org-ops task."
-        )
+        """Return the master category list as a ``{name: name}`` mapping.
+
+        Outlook categories are identified by display name (not ID), so
+        both key and value are the category name.
+
+        Returns:
+            Dict mapping category name → category name.
+        """
+        con = self._acct.con
+        url = f"{con.protocol.service_url}/me/outlook/masterCategories"
+        resp = con.get(url)
+        result: dict[str, str] = {}
+        if resp and hasattr(resp, "json"):
+            data = resp.json()
+            for cat in data.get("value", []):
+                name = cat.get("displayName", "")
+                if name:
+                    result[name] = name
+        return result
 
     # ------------------------------------------------------------------
     # 6. Sync — to be implemented in a later task
