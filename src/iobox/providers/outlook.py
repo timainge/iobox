@@ -153,7 +153,11 @@ class OutlookProvider(EmailProvider):
     def _build_outlook_filter(self, query: EmailQuery) -> Any:
         """Build an OData ``$filter`` query using the python-o365 Query builder.
 
-        Used when no free-text (``query.text``) is present.
+        Used when no free-text (``query.text``) is present.  All structured
+        ``EmailQuery`` fields are translated to OData filter expressions.
+
+        ``raw_query`` is handled upstream in ``search_emails()`` and is never
+        passed to this method.
 
         Args:
             query: Structured email query parameters.
@@ -165,6 +169,9 @@ class OutlookProvider(EmailProvider):
 
         if query.from_addr:
             q = q.on_attribute("from/emailAddress/address").equals(query.from_addr)
+
+        if query.to_addr:
+            q = q.on_attribute("toRecipients/emailAddress/address").equals(query.to_addr)
 
         if query.subject:
             q = q.on_attribute("subject").contains(query.subject)
@@ -187,13 +194,26 @@ class OutlookProvider(EmailProvider):
         elif query.is_unread is False:
             q = q.on_attribute("isRead").equals(True)
 
+        if query.label:
+            # OData lambda: categories/any(c:c eq 'LabelName')
+            # We encode the full OData filter expression as the "attribute"
+            # and use a raw marker so the provider can reconstruct it.
+            escaped = query.label.replace("'", "''")
+            raw_expr = f"categories/any(c:c eq '{escaped}')"
+            q.on_attribute(raw_expr).equals(True)
+
         return q
 
     def _build_outlook_search(self, query: EmailQuery) -> str:
         """Build a KQL ``$search`` string.
 
-        Used when ``query.text`` is present.  Note: ``$filter`` and ``$search``
-        **cannot** be combined on Graph message collections.
+        Used when ``query.text`` is present or ``raw_query`` triggers the
+        ``$search`` path.  Note: ``$filter`` and ``$search`` **cannot** be
+        combined on Graph message collections, so all conditions are expressed
+        as KQL keywords here.
+
+        ``raw_query`` is handled upstream in ``search_emails()`` and is never
+        passed to this method.
 
         Args:
             query: Structured email query parameters.
@@ -205,6 +225,8 @@ class OutlookProvider(EmailProvider):
 
         if query.from_addr:
             parts.append(f"from:{query.from_addr}")
+        if query.to_addr:
+            parts.append(f"to:{query.to_addr}")
         if query.subject:
             parts.append(f"subject:{query.subject}")
         if query.after:
@@ -213,6 +235,14 @@ class OutlookProvider(EmailProvider):
             parts.append(f"received<{query.before.isoformat()}")
         if query.has_attachment is True:
             parts.append("hasAttachments:true")
+        elif query.has_attachment is False:
+            parts.append("hasAttachments:false")
+        if query.is_unread is True:
+            parts.append("isRead:false")
+        elif query.is_unread is False:
+            parts.append("isRead:true")
+        if query.label:
+            parts.append(f"category:{query.label}")
         if query.text:
             parts.append(f'"{query.text}"')
 

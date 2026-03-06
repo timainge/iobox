@@ -48,10 +48,12 @@ class GmailProvider(EmailProvider):
         native Gmail search syntax directly.  Otherwise each populated field is
         converted to the equivalent Gmail operator.
 
-        Date fields (``after`` / ``before``) are *not* included here — they are
-        passed as ``start_date`` / ``end_date`` keyword arguments to
-        ``email_search.search_emails`` so that the existing date-handling logic
-        is reused without duplication.
+        All ``EmailQuery`` fields are translated here, including date fields
+        (``after`` / ``before``) which use Gmail's ``after:`` / ``before:``
+        operators with ``YYYY/MM/DD`` format.  The ``search_emails`` method
+        also passes dates as ``start_date`` / ``end_date`` keyword arguments
+        to ``email_search.search_emails`` — the duplication is harmless and
+        keeps this method a complete, self-contained translation.
 
         Returns:
             Gmail ``q=`` query string (may be empty string).
@@ -69,6 +71,10 @@ class GmailProvider(EmailProvider):
             parts.append(f"to:{query.to_addr}")
         if query.subject:
             parts.append(f"subject:{query.subject}")
+        if query.after:
+            parts.append(f"after:{query.after.strftime('%Y/%m/%d')}")
+        if query.before:
+            parts.append(f"before:{query.before.strftime('%Y/%m/%d')}")
         if query.has_attachment is True:
             parts.append("has:attachment")
         elif query.has_attachment is False:
