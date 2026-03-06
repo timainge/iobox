@@ -15,7 +15,7 @@ approved: true
 
 - [x] Create `src/iobox/providers/outlook_auth.py` with `get_outlook_account()` (browser and device-code flows) and `check_outlook_auth_status()`, reading `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_TENANT_ID` env vars, persisting tokens under `$CREDENTIALS_DIR/tokens/outlook/o365_token.txt` [id: outlook-auth] [depends: provider-abstraction]
 
-- [ ] Implement `OutlookProvider` read operations in `src/iobox/providers/outlook.py`: `authenticate()`, `search_emails()` (with `$filter` / `$search` path selection), `get_email_content()`, `batch_get_emails()`, `get_thread()`, `download_attachment()`, `_message_to_email_data()`, and set `Prefer: IdType="ImmutableId"` header on all Graph requests [id: outlook-read] [depends: outlook-auth, outlook-fixtures]
+- [x] Implement `OutlookProvider` read operations in `src/iobox/providers/outlook.py`: `authenticate()`, `search_emails()` (with `$filter` / `$search` path selection), `get_email_content()`, `batch_get_emails()`, `get_thread()`, `download_attachment()`, `_message_to_email_data()`, and set `Prefer: IdType="ImmutableId"` header on all Graph requests [id: outlook-read] [depends: outlook-auth, outlook-fixtures]
 
 - [ ] Implement `OutlookProvider` write operations in `src/iobox/providers/outlook.py`: `send_message()` (with file attachment support), `forward_message()` (native Graph forward), `create_draft()`, `list_drafts()`, `send_draft()`, `delete_draft()` [id: outlook-write] [depends: outlook-read]
 
