@@ -263,13 +263,27 @@ def save_attachment(attachment_data: bytes, filename: str, email_id: str, output
 
 
 class SyncState:
-    """Manages incremental sync state for a directory."""
+    """Manages incremental sync state for a directory.
+
+    Supports both Gmail and Outlook sync tokens:
+
+    * **Gmail** uses a single ``last_history_id`` string (the ``historyId``
+      returned by the Gmail API).
+    * **Outlook** uses ``delta_links`` — a dict mapping folder identifiers
+      (e.g. ``"inbox"``) to Microsoft Graph delta link URLs that encode the
+      server-side sync cursor.
+
+    The ``provider`` field (``"gmail"`` or ``"outlook"``) is persisted so
+    that consumers know which token fields are relevant.
+    """
 
     FILENAME = ".iobox-sync.json"
 
     def __init__(self, directory: str):
         self.filepath = os.path.join(directory, self.FILENAME)
+        self.provider: str | None = None
         self.last_history_id: str | None = None
+        self.delta_links: dict[str, str] = {}
         self.last_sync_time: str | None = None
         self.synced_message_ids: list[str] = []
 
@@ -278,7 +292,9 @@ class SyncState:
         if os.path.exists(self.filepath):
             with open(self.filepath) as f:
                 data = json.load(f)
+            self.provider = data.get("provider")
             self.last_history_id = data.get("last_history_id")
+            self.delta_links = data.get("delta_links", {})
             self.last_sync_time = data.get("last_sync_time")
             self.synced_message_ids = data.get("synced_message_ids", [])
             return True
@@ -287,7 +303,9 @@ class SyncState:
     def save(self) -> None:
         """Save current sync state to file."""
         data = {
+            "provider": self.provider,
             "last_history_id": self.last_history_id,
+            "delta_links": self.delta_links,
             "last_sync_time": datetime.utcnow().isoformat(),
             "synced_message_ids": self.synced_message_ids,
         }
@@ -295,8 +313,23 @@ class SyncState:
             json.dump(data, f, indent=2)
 
     def update(self, history_id: str, new_message_ids: list[str]) -> None:
-        """Update state with new sync results."""
+        """Update state with new sync results (Gmail convenience method)."""
         self.last_history_id = history_id
+        self.synced_message_ids = list(set(self.synced_message_ids + new_message_ids))
+        self.save()
+
+    def update_delta(self, folder: str, delta_link: str, new_message_ids: list[str]) -> None:
+        """Update state with new Outlook delta sync results.
+
+        Args:
+            folder: Folder key (e.g. ``"inbox"``).
+            delta_link: The ``@odata.deltaLink`` URL from the last page of the
+                delta response — used as the cursor for the next sync.
+            new_message_ids: Newly discovered message IDs to merge into
+                ``synced_message_ids``.
+        """
+        self.provider = "outlook"
+        self.delta_links[folder] = delta_link
         self.synced_message_ids = list(set(self.synced_message_ids + new_message_ids))
         self.save()
 

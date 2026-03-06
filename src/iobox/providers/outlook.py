@@ -11,8 +11,10 @@ Organization operations (mark read, star/flag, archive, trash, untrash,
 category tags) are fully implemented with a ``_batch_graph_requests()``
 helper that chunks multi-message operations into 20-request batches via
 Graph's ``$batch`` endpoint.
-Sync operations are stubbed with ``NotImplementedError`` and will be
-filled in by a subsequent task.
+Sync operations use Microsoft Graph's delta query mechanism to enable
+incremental sync — fetching only messages added or changed since the
+last sync.  A 410-Gone response (expired delta token) is handled
+gracefully by signalling a full re-sync.
 
 ImmutableId header
 ------------------
@@ -757,15 +759,149 @@ class OutlookProvider(EmailProvider):
         return result
 
     # ------------------------------------------------------------------
-    # 6. Sync — to be implemented in a later task
+    # 6. Sync — delta query for incremental sync
     # ------------------------------------------------------------------
 
+    # Default folder used for delta sync.
+    _DELTA_FOLDER = "inbox"
+
+    def _get_inbox_delta_url(self) -> str:
+        """Return the initial delta URL for the inbox folder."""
+        con = self._acct.con
+        return f"{con.protocol.service_url}/me/mailFolders/inbox/messages/delta"
+
     def get_sync_state(self) -> str:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.get_sync_state() will be implemented in the sync task."
-        )
+        """Return an opaque sync-state token for the Outlook inbox.
+
+        Performs an initial delta query that walks all pages until the
+        ``@odata.deltaLink`` is returned, then returns that link as the
+        sync token.  Callers should persist this and pass it to
+        :meth:`get_new_messages` for subsequent incremental syncs.
+
+        Returns:
+            The ``@odata.deltaLink`` URL (an opaque token string).
+        """
+        con = self._acct.con
+        url = self._get_inbox_delta_url()
+        # Walk all pages to exhaust the initial snapshot.
+        delta_link = self._exhaust_delta_pages(con, url)
+        return delta_link
 
     def get_new_messages(self, sync_token: str) -> list[str] | None:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.get_new_messages() will be implemented in the sync task."
-        )
+        """Return message IDs added/changed since *sync_token*.
+
+        *sync_token* is a ``@odata.deltaLink`` URL previously returned by
+        :meth:`get_sync_state` or a prior call to this method.
+
+        Returns:
+            A list of message IDs (may be empty), or ``None`` when the
+            delta token has expired (HTTP 410 Gone) and a full re-sync is
+            needed.  The caller should discard the old token and call
+            :meth:`get_sync_state` again to obtain a fresh baseline.
+        """
+        con = self._acct.con
+
+        try:
+            message_ids, _new_delta = self._fetch_delta(con, sync_token)
+            return message_ids
+        except _DeltaGoneError:
+            # 410 Gone — delta token expired; signal full re-sync.
+            logger.warning(
+                "Outlook delta token expired (410 Gone). A full re-sync is required."
+            )
+            return None
+
+    def get_new_messages_with_token(self, sync_token: str) -> tuple[list[str], str] | None:
+        """Like :meth:`get_new_messages` but also returns the refreshed delta link.
+
+        Returns:
+            A ``(message_ids, new_delta_link)`` tuple, or ``None`` when the
+            delta token has expired and a full re-sync is needed.
+        """
+        con = self._acct.con
+        try:
+            return self._fetch_delta(con, sync_token)
+        except _DeltaGoneError:
+            logger.warning(
+                "Outlook delta token expired (410 Gone). A full re-sync is required."
+            )
+            return None
+
+    # ---- internal delta helpers ----------------------------------------
+
+    def _fetch_delta(
+        self, con: Any, url: str
+    ) -> tuple[list[str], str]:
+        """Follow delta pages starting at *url*, collecting message IDs.
+
+        Args:
+            con: The authenticated ``Connection`` from the O365 account.
+            url: Either a ``@odata.deltaLink`` (incremental) or the initial
+                delta endpoint URL.
+
+        Returns:
+            ``(message_ids, delta_link)`` where ``delta_link`` is the new
+            ``@odata.deltaLink`` for the next sync round.
+
+        Raises:
+            _DeltaGoneError: If the server returns HTTP 410 (token expired).
+        """
+        message_ids: list[str] = []
+        delta_link = self._exhaust_delta_pages(con, url, message_ids)
+        return message_ids, delta_link
+
+    def _exhaust_delta_pages(
+        self, con: Any, url: str, message_ids: list[str] | None = None
+    ) -> str:
+        """Walk all delta response pages and return the final deltaLink.
+
+        Args:
+            con: Authenticated connection.
+            url: Starting URL (initial delta URL or a deltaLink).
+            message_ids: If provided, message IDs from each page are appended
+                into this list (mutated in place).
+
+        Returns:
+            The ``@odata.deltaLink`` from the last page.
+
+        Raises:
+            _DeltaGoneError: On HTTP 410.
+            RuntimeError: If no ``@odata.deltaLink`` is found after paging.
+        """
+        current_url = url
+        while True:
+            resp = con.get(current_url, headers=_IMMUTABLE_ID_HEADER)
+
+            # Handle 410 Gone — delta token expired.
+            if hasattr(resp, "status_code") and resp.status_code == 410:
+                raise _DeltaGoneError("Delta token expired (HTTP 410 Gone)")
+
+            if resp is None or not hasattr(resp, "json"):
+                raise RuntimeError("Delta request returned no valid response")
+
+            data = resp.json()
+
+            # Collect message IDs from this page.
+            if message_ids is not None:
+                for item in data.get("value", []):
+                    mid = item.get("id")
+                    if mid:
+                        message_ids.append(mid)
+
+            # Check for next page or final delta link.
+            next_link = data.get("@odata.nextLink")
+            delta_link = data.get("@odata.deltaLink")
+
+            if delta_link:
+                return delta_link
+            elif next_link:
+                current_url = next_link
+            else:
+                raise RuntimeError(
+                    "Delta response contained neither @odata.nextLink "
+                    "nor @odata.deltaLink"
+                )
+
+
+class _DeltaGoneError(Exception):
+    """Internal exception raised when Graph returns 410 for an expired delta token."""
