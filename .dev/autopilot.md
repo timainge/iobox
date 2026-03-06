@@ -13,7 +13,7 @@ approved: true
 
 - [x] Add mock fixtures for Outlook in `tests/fixtures/mock_outlook_responses.py` — python-o365 `Account`, `Mailbox`, `Message`, `Attachment`, and delta response objects needed by all Outlook tests [id: outlook-fixtures] [depends: provider-abstraction]
 
-- [ ] Create `src/iobox/providers/outlook_auth.py` with `get_outlook_account()` (browser and device-code flows) and `check_outlook_auth_status()`, reading `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_TENANT_ID` env vars, persisting tokens under `$CREDENTIALS_DIR/tokens/outlook/o365_token.txt` [id: outlook-auth] [depends: provider-abstraction]
+- [x] Create `src/iobox/providers/outlook_auth.py` with `get_outlook_account()` (browser and device-code flows) and `check_outlook_auth_status()`, reading `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_TENANT_ID` env vars, persisting tokens under `$CREDENTIALS_DIR/tokens/outlook/o365_token.txt` [id: outlook-auth] [depends: provider-abstraction]
 
 - [ ] Implement `OutlookProvider` read operations in `src/iobox/providers/outlook.py`: `authenticate()`, `search_emails()` (with `$filter` / `$search` path selection), `get_email_content()`, `batch_get_emails()`, `get_thread()`, `download_attachment()`, `_message_to_email_data()`, and set `Prefer: IdType="ImmutableId"` header on all Graph requests [id: outlook-read] [depends: outlook-auth, outlook-fixtures]
 
