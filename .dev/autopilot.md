@@ -23,7 +23,7 @@ approved: true
 
 - [x] Add query translation layer — `_build_gmail_query()` in `GmailProvider` (all `EmailQuery` fields → Gmail `q=` syntax), `_build_outlook_filter()` and `_build_outlook_search()` in `OutlookProvider` (`$filter` vs `$search` based on `text` presence, `raw_query` passthrough for both) [id: query-translation] [depends: gmail-provider, outlook-read]
 
-- [ ] Implement `OutlookProvider` incremental sync in `src/iobox/providers/outlook.py` (`get_sync_state()`, `get_new_messages()` with delta query and 410-Gone fallback) and extend `SyncState` in `src/iobox/file_manager.py` to store both `last_history_id` (Gmail) and `delta_links: dict[str, str]` (Outlook) with `provider` field [id: outlook-sync] [depends: outlook-read]
+- [x] Implement `OutlookProvider` incremental sync in `src/iobox/providers/outlook.py` (`get_sync_state()`, `get_new_messages()` with delta query and 410-Gone fallback) and extend `SyncState` in `src/iobox/file_manager.py` to store both `last_history_id` (Gmail) and `delta_links: dict[str, str]` (Outlook) with `provider` field [id: outlook-sync] [depends: outlook-read]
 
 - [ ] Refactor `src/iobox/cli.py` to add global `--provider` option (default `gmail`, env var `IOBOX_PROVIDER`) in `app.callback()`, route all commands through `ctx.obj["provider"]` using `EmailQuery`, update `auth-status` to show provider-specific info, and add optional-dependency `outlook = ["O365>=2.1.8"]` to `pyproject.toml` [id: cli-refactor] [depends: gmail-provider, query-translation]
 
