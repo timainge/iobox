@@ -1,16 +1,17 @@
 ---
-title: Phase 10 — O365/Outlook Support
+title: "Phase 10 \u2014 O365/Outlook Support"
 spec: .dev/specs/10-outlook-o365-support.md
-status: in-progress
+status: active
+approved: true
 ---
 
 ## Tasks
 
-- [ ] Create provider abstraction layer (`src/iobox/providers/base.py` and `src/iobox/providers/__init__.py`) with `EmailProvider` ABC, `EmailQuery` dataclass, `EmailData` TypedDict, and `get_provider()` factory using lazy importlib loading [id: provider-abstraction]
+- [x] Create provider abstraction layer (`src/iobox/providers/base.py` and `src/iobox/providers/__init__.py`) with `EmailProvider` ABC, `EmailQuery` dataclass, `EmailData` TypedDict, and `get_provider()` factory using lazy importlib loading [id: provider-abstraction]
 
-- [ ] Implement `GmailProvider` in `src/iobox/providers/gmail.py` that wraps all existing Gmail modules (`email_search`, `email_retrieval`, `email_sender`, `auth`) behind the `EmailProvider` ABC with `_build_gmail_query()` translation and `_to_email_data()` normalization — no direct Gmail API calls in the wrapper [id: gmail-provider] [depends: provider-abstraction]
+- [x] Implement `GmailProvider` in `src/iobox/providers/gmail.py` that wraps all existing Gmail modules (`email_search`, `email_retrieval`, `email_sender`, `auth`) behind the `EmailProvider` ABC with `_build_gmail_query()` translation and `_to_email_data()` normalization — no direct Gmail API calls in the wrapper [id: gmail-provider] [depends: provider-abstraction]
 
-- [ ] Add mock fixtures for Outlook in `tests/fixtures/mock_outlook_responses.py` — python-o365 `Account`, `Mailbox`, `Message`, `Attachment`, and delta response objects needed by all Outlook tests [id: outlook-fixtures] [depends: provider-abstraction]
+- [x] Add mock fixtures for Outlook in `tests/fixtures/mock_outlook_responses.py` — python-o365 `Account`, `Mailbox`, `Message`, `Attachment`, and delta response objects needed by all Outlook tests [id: outlook-fixtures] [depends: provider-abstraction]
 
 - [ ] Create `src/iobox/providers/outlook_auth.py` with `get_outlook_account()` (browser and device-code flows) and `check_outlook_auth_status()`, reading `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_TENANT_ID` env vars, persisting tokens under `$CREDENTIALS_DIR/tokens/outlook/o365_token.txt` [id: outlook-auth] [depends: provider-abstraction]
 
