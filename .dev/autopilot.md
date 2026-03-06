@@ -25,9 +25,9 @@ approved: true
 
 - [x] Implement `OutlookProvider` incremental sync in `src/iobox/providers/outlook.py` (`get_sync_state()`, `get_new_messages()` with delta query and 410-Gone fallback) and extend `SyncState` in `src/iobox/file_manager.py` to store both `last_history_id` (Gmail) and `delta_links: dict[str, str]` (Outlook) with `provider` field [id: outlook-sync] [depends: outlook-read]
 
-- [ ] Refactor `src/iobox/cli.py` to add global `--provider` option (default `gmail`, env var `IOBOX_PROVIDER`) in `app.callback()`, route all commands through `ctx.obj["provider"]` using `EmailQuery`, update `auth-status` to show provider-specific info, and add optional-dependency `outlook = ["O365>=2.1.8"]` to `pyproject.toml` [id: cli-refactor] [depends: gmail-provider, query-translation]
+- [x] Refactor `src/iobox/cli.py` to add global `--provider` option (default `gmail`, env var `IOBOX_PROVIDER`) in `app.callback()`, route all commands through `ctx.obj["provider"]` using `EmailQuery`, update `auth-status` to show provider-specific info, and add optional-dependency `outlook = ["O365>=2.1.8"]` to `pyproject.toml` [id: cli-refactor] [depends: gmail-provider, query-translation]
 
-- [ ] Add unit tests for `GmailProvider` in `tests/unit/test_gmail_provider.py` — one test per abstract method verifying correct delegation to existing module functions, plus `_build_gmail_query()` and `_to_email_data()` field-by-field coverage [id: test-gmail-provider] [depends: gmail-provider, query-translation]
+- [x] Add unit tests for `GmailProvider` in `tests/unit/test_gmail_provider.py` — one test per abstract method verifying correct delegation to existing module functions, plus `_build_gmail_query()` and `_to_email_data()` field-by-field coverage [id: test-gmail-provider] [depends: gmail-provider, query-translation]
 
 - [ ] Add unit tests for `OutlookProvider` in `tests/unit/test_outlook_provider.py` — all abstract methods with mocked python-o365 objects, and unit tests for `outlook_auth.py` in `tests/unit/test_outlook_auth.py` (browser/device-code flows, missing client ID error, status check) [id: test-outlook-provider] [depends: outlook-org, outlook-write, outlook-sync, outlook-fixtures]
 
