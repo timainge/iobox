@@ -6,7 +6,8 @@ library (which wraps the Microsoft Graph API internally).
 
 Read operations (authenticate, search, get content, batch fetch, threads,
 attachment download, and query translation) are fully implemented here.
-Write, organization, and sync operations are stubbed with ``NotImplementedError``
+Write operations (send, forward, drafts CRUD) are also fully implemented.
+Organization and sync operations are stubbed with ``NotImplementedError``
 and will be filled in by subsequent tasks.
 
 ImmutableId header
@@ -373,7 +374,7 @@ class OutlookProvider(EmailProvider):
         )
 
     # ------------------------------------------------------------------
-    # 3. Send, forward & drafts — to be implemented in a later task
+    # 3. Send, forward & drafts
     # ------------------------------------------------------------------
 
     def send_message(
@@ -386,16 +387,68 @@ class OutlookProvider(EmailProvider):
         content_type: str = "plain",
         attachments: list[str] | None = None,
     ) -> dict:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.send_message() will be implemented in the write-ops task."
-        )
+        """Compose and immediately send an email via Microsoft Graph.
+
+        python-o365 handles attachment sizing internally:
+        files < 3 MB are sent inline; larger files use an upload session.
+
+        Args:
+            to: Primary recipient email address.
+            subject: Email subject line.
+            body: Email body text (plain or HTML depending on *content_type*).
+            cc: Optional CC recipient address.
+            bcc: Optional BCC recipient address.
+            content_type: ``"plain"`` (default) or ``"html"``.
+            attachments: Optional list of local file paths to attach.
+
+        Returns:
+            Dict with ``message_id`` and ``status`` keys.
+        """
+        msg = self._mb.new_message()
+        msg.to.add(to)
+        if cc:
+            msg.cc.add(cc)
+        if bcc:
+            msg.bcc.add(bcc)
+        msg.subject = subject
+        msg.body = body
+        if content_type.lower() == "html":
+            msg.body_type = "HTML"
+        else:
+            msg.body_type = "Text"
+        for path in (attachments or []):
+            msg.attachments.add(path)
+        msg.send()
+        return {"message_id": msg.object_id, "status": "sent"}
 
     def forward_message(
         self, message_id: str, to: str, comment: str | None = None
     ) -> dict:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.forward_message() will be implemented in the write-ops task."
-        )
+        """Forward an existing message using the native Graph forward endpoint.
+
+        No manual "---------- Forwarded message ----------" body construction
+        is needed — Graph handles the forwarded body automatically.
+
+        Args:
+            message_id: Immutable message ID to forward.
+            to: Recipient address for the forward.
+            comment: Optional introductory text prepended to the forwarded body.
+
+        Returns:
+            Dict with ``message_id`` and ``status`` keys.
+
+        Raises:
+            ValueError: If the source message is not found.
+        """
+        msg = self._mb.get_message(object_id=message_id)
+        if msg is None:
+            raise ValueError(f"Message not found: {message_id!r}")
+        fwd = msg.forward()
+        fwd.to.add(to)
+        if comment:
+            fwd.body = comment
+        fwd.send()
+        return {"message_id": fwd.object_id, "status": "sent"}
 
     def create_draft(
         self,
@@ -406,24 +459,89 @@ class OutlookProvider(EmailProvider):
         bcc: str | None = None,
         content_type: str = "plain",
     ) -> dict:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.create_draft() will be implemented in the write-ops task."
-        )
+        """Create a new draft message and save it in the Drafts folder.
+
+        Args:
+            to: Primary recipient email address.
+            subject: Email subject line.
+            body: Email body text (plain or HTML depending on *content_type*).
+            cc: Optional CC recipient address.
+            bcc: Optional BCC recipient address.
+            content_type: ``"plain"`` (default) or ``"html"``.
+
+        Returns:
+            Dict with ``message_id`` and ``status`` keys.
+        """
+        msg = self._mb.new_message()
+        msg.to.add(to)
+        if cc:
+            msg.cc.add(cc)
+        if bcc:
+            msg.bcc.add(bcc)
+        msg.subject = subject
+        msg.body = body
+        if content_type.lower() == "html":
+            msg.body_type = "HTML"
+        else:
+            msg.body_type = "Text"
+        msg.save_draft()
+        return {"message_id": msg.object_id, "status": "draft"}
 
     def list_drafts(self, max_results: int = 10) -> list[dict]:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.list_drafts() will be implemented in the write-ops task."
-        )
+        """Return a list of draft summaries from the Drafts folder.
+
+        Args:
+            max_results: Maximum number of drafts to return (default 10).
+
+        Returns:
+            List of dicts with ``message_id``, ``subject``, and ``snippet`` keys.
+        """
+        drafts_folder = self._mb.drafts_folder()
+        messages = drafts_folder.get_messages(limit=max_results)
+        return [
+            {
+                "message_id": msg.object_id,
+                "subject": msg.subject or "",
+                "snippet": msg.body_preview or "",
+            }
+            for msg in messages
+        ]
 
     def send_draft(self, draft_id: str) -> dict:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.send_draft() will be implemented in the write-ops task."
-        )
+        """Send an existing draft message.
+
+        Args:
+            draft_id: Immutable message ID of the draft to send.
+
+        Returns:
+            Dict with ``message_id`` and ``status`` keys.
+
+        Raises:
+            ValueError: If the draft is not found.
+        """
+        msg = self._mb.get_message(object_id=draft_id)
+        if msg is None:
+            raise ValueError(f"Draft not found: {draft_id!r}")
+        msg.send()
+        return {"message_id": draft_id, "status": "sent"}
 
     def delete_draft(self, draft_id: str) -> dict:
-        raise NotImplementedError(  # pragma: no cover
-            "OutlookProvider.delete_draft() will be implemented in the write-ops task."
-        )
+        """Permanently delete a draft message.
+
+        Args:
+            draft_id: Immutable message ID of the draft to delete.
+
+        Returns:
+            Dict with ``message_id`` and ``status`` keys.
+
+        Raises:
+            ValueError: If the draft is not found.
+        """
+        msg = self._mb.get_message(object_id=draft_id)
+        if msg is None:
+            raise ValueError(f"Draft not found: {draft_id!r}")
+        msg.delete()
+        return {"message_id": draft_id, "status": "deleted"}
 
     # ------------------------------------------------------------------
     # 4. System operations — to be implemented in a later task
