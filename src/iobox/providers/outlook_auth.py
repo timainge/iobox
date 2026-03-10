@@ -29,7 +29,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Configuration — resolved once at module import time.
+# Configuration — module-level constants kept for backward compatibility.
+# Actual resolution happens lazily in _get_config() so that tests can patch
+# os.getenv (or _get_config itself) after import without ordering constraints.
 # ---------------------------------------------------------------------------
 
 OUTLOOK_CLIENT_ID: str = os.getenv("OUTLOOK_CLIENT_ID", "")
@@ -41,6 +43,27 @@ OUTLOOK_TOKEN_DIR: str = os.path.join(CREDENTIALS_DIR, "tokens", "outlook")
 
 # Delegated Graph permissions required by iobox.
 OUTLOOK_SCOPES: list[str] = ["Mail.ReadWrite", "Mail.Send"]
+
+
+# ---------------------------------------------------------------------------
+# Internal config helper — called lazily so patches applied after import work.
+# ---------------------------------------------------------------------------
+
+
+def _get_config() -> dict:
+    """Return a dict of resolved configuration values.
+
+    Reads environment variables at call time so that tests can patch
+    ``os.getenv`` (or this function) without needing to reload the module.
+    """
+    credentials_dir = os.getenv("CREDENTIALS_DIR", os.getcwd())
+    return {
+        "client_id": os.getenv("OUTLOOK_CLIENT_ID", ""),
+        "client_secret": os.getenv("OUTLOOK_CLIENT_SECRET", ""),
+        "tenant_id": os.getenv("OUTLOOK_TENANT_ID", "common"),
+        "credentials_dir": credentials_dir,
+        "token_dir": os.path.join(credentials_dir, "tokens", "outlook"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -76,22 +99,25 @@ def get_outlook_account(*, device_code: bool = False) -> "Account":  # type: ign
             "or: pip install O365>=2.1.8"
         ) from exc
 
-    if not OUTLOOK_CLIENT_ID:
+    cfg = _get_config()
+
+    if not cfg["client_id"]:
         raise ValueError(
             "OUTLOOK_CLIENT_ID environment variable is required. "
             "Register an app at https://entra.microsoft.com and set the "
             "Application (client) ID in your .env file."
         )
 
-    credentials = (OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET)
-    os.makedirs(OUTLOOK_TOKEN_DIR, exist_ok=True)
+    credentials = (cfg["client_id"], cfg["client_secret"])
+    token_dir = cfg["token_dir"]
+    os.makedirs(token_dir, exist_ok=True)
     token_backend = FileSystemTokenBackend(
-        token_path=OUTLOOK_TOKEN_DIR, token_filename="o365_token.txt"
+        token_path=token_dir, token_filename="o365_token.txt"
     )
 
     account = Account(
         credentials,
-        tenant_id=OUTLOOK_TENANT_ID,
+        tenant_id=cfg["tenant_id"],
         token_backend=token_backend,
     )
 
@@ -137,11 +163,13 @@ def check_outlook_auth_status() -> dict:
         ``error`` (str, optional)
             Present only if an exception occurred while reading the token.
     """
-    token_path = os.path.join(OUTLOOK_TOKEN_DIR, "o365_token.txt")
+    cfg = _get_config()
+    token_dir = cfg["token_dir"]
+    token_path = os.path.join(token_dir, "o365_token.txt")
     status: dict = {
         "authenticated": False,
-        "client_id_configured": bool(OUTLOOK_CLIENT_ID),
-        "tenant_id": OUTLOOK_TENANT_ID,
+        "client_id_configured": bool(cfg["client_id"]),
+        "tenant_id": cfg["tenant_id"],
         "token_file_exists": os.path.exists(token_path),
         "token_path": token_path,
     }
@@ -152,13 +180,13 @@ def check_outlook_auth_status() -> dict:
     try:
         from O365 import Account, FileSystemTokenBackend
 
-        credentials = (OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET)
+        credentials = (cfg["client_id"], cfg["client_secret"])
         token_backend = FileSystemTokenBackend(
-            token_path=OUTLOOK_TOKEN_DIR, token_filename="o365_token.txt"
+            token_path=token_dir, token_filename="o365_token.txt"
         )
         account = Account(
             credentials,
-            tenant_id=OUTLOOK_TENANT_ID,
+            tenant_id=cfg["tenant_id"],
             token_backend=token_backend,
         )
         status["authenticated"] = account.is_authenticated
