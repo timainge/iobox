@@ -8,7 +8,7 @@ that all provider implementations must satisfy.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import TypedDict
 
@@ -25,18 +25,18 @@ class EmailMetadata(TypedDict):
 
     message_id: str
     subject: str
-    from_: str          # "Display Name <email>" format
+    from_: str  # "Display Name <email>" format
     date: str
     snippet: str
-    labels: list[str]   # Gmail labels or Outlook categories
-    thread_id: str      # Gmail threadId or Outlook conversationId
+    labels: list[str]  # Gmail labels or Outlook categories
+    thread_id: str  # Gmail threadId or Outlook conversationId
 
 
 class EmailData(EmailMetadata, total=False):
     """Full email data — optional fields present only after content retrieval."""
 
     body: str
-    content_type: str   # 'text/plain' or 'text/html'
+    content_type: str  # 'text/plain' or 'text/html'
     attachments: list[AttachmentInfo]
 
 
@@ -119,9 +119,7 @@ class EmailProvider(ABC):
     ) -> dict: ...
 
     @abstractmethod
-    def forward_message(
-        self, message_id: str, to: str, comment: str | None = None
-    ) -> dict: ...
+    def forward_message(self, message_id: str, to: str, comment: str | None = None) -> dict: ...
 
     @abstractmethod
     def create_draft(
@@ -182,3 +180,17 @@ class EmailProvider(ABC):
 
     @abstractmethod
     def get_new_messages(self, sync_token: str) -> list[str] | None: ...
+
+    @abstractmethod
+    def get_new_messages_with_token(self, sync_token: str) -> tuple[list[str], str] | None:
+        """Like :meth:`get_new_messages` but also returns the refreshed sync token.
+
+        Returns:
+            A ``(message_ids, new_sync_token)`` tuple, or ``None`` when the
+            sync token has expired and a full re-sync is needed.
+
+        Note:
+            Implementations should return the refreshed token so callers can
+            persist it for the next incremental sync without a second round-trip.
+        """
+        ...

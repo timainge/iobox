@@ -10,20 +10,18 @@ Verifies that both GmailProvider and OutlookProvider:
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.providers.base import EmailData, EmailProvider, EmailQuery
+from iobox.providers.base import EmailProvider, EmailQuery
 from iobox.providers.gmail import GmailProvider
 from iobox.providers.outlook import OutlookProvider
-
 from tests.fixtures.mock_outlook_responses import (
+    MockHttpResponse,
     make_full_mock_account,
     make_mock_message,
 )
-
 
 # ---------------------------------------------------------------------------
 # Required keys that must be present in every EmailData dict
@@ -195,6 +193,27 @@ class TestGmailReturnTypes:
         result = gmail_provider.list_tags()
         assert isinstance(result, dict)
 
+    @patch("iobox.providers.gmail._auth.get_gmail_profile")
+    @patch("iobox.providers.gmail._search.get_new_messages")
+    def test_get_new_messages_with_token_returns_tuple(
+        self, mock_get_new, mock_profile, gmail_provider
+    ):
+        mock_get_new.return_value = ["m1", "m2"]
+        mock_profile.return_value = {"historyId": "99999"}
+        result = gmail_provider.get_new_messages_with_token("12345")
+        assert isinstance(result, tuple)
+        message_ids, new_token = result
+        assert isinstance(message_ids, list)
+        assert isinstance(new_token, str)
+        assert message_ids == ["m1", "m2"]
+        assert new_token == "99999"
+
+    @patch("iobox.providers.gmail._search.get_new_messages")
+    def test_get_new_messages_with_token_returns_none_on_expiry(self, mock_get_new, gmail_provider):
+        mock_get_new.return_value = None
+        result = gmail_provider.get_new_messages_with_token("expired-token")
+        assert result is None
+
 
 class TestOutlookReturnTypes:
     """Verify OutlookProvider methods return correct types."""
@@ -221,9 +240,7 @@ class TestOutlookReturnTypes:
         assert isinstance(result, list)
 
     def test_download_attachment_returns_bytes(self, outlook_provider):
-        result = outlook_provider.download_attachment(
-            "outlook-msg-id-3", "outlook-attach-id-1"
-        )
+        result = outlook_provider.download_attachment("outlook-msg-id-3", "outlook-attach-id-1")
         assert isinstance(result, bytes)
 
     def test_get_profile_returns_dict(self, outlook_provider):
@@ -243,6 +260,30 @@ class TestOutlookReturnTypes:
         con._delta_responses[url] = {"value": [{"displayName": "Work"}]}
         result = outlook_provider.list_tags()
         assert isinstance(result, dict)
+
+    def test_get_new_messages_with_token_returns_tuple(self, outlook_provider):
+        delta_link = "https://graph.microsoft.com/v1.0/delta?token=abc"
+        new_delta = "https://graph.microsoft.com/v1.0/delta?token=def"
+        outlook_provider._account.con._delta_responses[delta_link] = {
+            "value": [{"id": "msg-a"}, {"id": "msg-b"}],
+            "@odata.deltaLink": new_delta,
+        }
+        result = outlook_provider.get_new_messages_with_token(delta_link)
+        assert result is not None
+        message_ids, new_token = result
+        assert isinstance(message_ids, list)
+        assert isinstance(new_token, str)
+        assert message_ids == ["msg-a", "msg-b"]
+        assert new_token == new_delta
+
+    def test_get_new_messages_with_token_returns_none_on_expiry(self, outlook_provider):
+        gone_resp = MockHttpResponse({})
+        gone_resp.status_code = 410
+        outlook_provider._account.con.get = MagicMock(return_value=gone_resp)
+        result = outlook_provider.get_new_messages_with_token(
+            "https://graph.microsoft.com/v1.0/delta?token=expired"
+        )
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

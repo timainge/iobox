@@ -236,9 +236,7 @@ class GmailProvider(EmailProvider):
         )
         return _sender.send_message(self._svc, message)
 
-    def forward_message(
-        self, message_id: str, to: str, comment: str | None = None
-    ) -> dict:
+    def forward_message(self, message_id: str, to: str, comment: str | None = None) -> dict:
         """Retrieve an existing email and forward it to ``to``."""
         return _sender.forward_email(
             self._svc,
@@ -286,30 +284,20 @@ class GmailProvider(EmailProvider):
     def mark_read(self, message_id: str, read: bool = True) -> None:
         """Mark a message as read or unread."""
         if read:
-            _retrieval.modify_message_labels(
-                self._svc, message_id, remove_labels=["UNREAD"]
-            )
+            _retrieval.modify_message_labels(self._svc, message_id, remove_labels=["UNREAD"])
         else:
-            _retrieval.modify_message_labels(
-                self._svc, message_id, add_labels=["UNREAD"]
-            )
+            _retrieval.modify_message_labels(self._svc, message_id, add_labels=["UNREAD"])
 
     def set_star(self, message_id: str, starred: bool = True) -> None:
         """Add or remove the STARRED label."""
         if starred:
-            _retrieval.modify_message_labels(
-                self._svc, message_id, add_labels=["STARRED"]
-            )
+            _retrieval.modify_message_labels(self._svc, message_id, add_labels=["STARRED"])
         else:
-            _retrieval.modify_message_labels(
-                self._svc, message_id, remove_labels=["STARRED"]
-            )
+            _retrieval.modify_message_labels(self._svc, message_id, remove_labels=["STARRED"])
 
     def archive(self, message_id: str) -> None:
         """Archive a message by removing the INBOX label."""
-        _retrieval.modify_message_labels(
-            self._svc, message_id, remove_labels=["INBOX"]
-        )
+        _retrieval.modify_message_labels(self._svc, message_id, remove_labels=["INBOX"])
 
     def trash(self, message_id: str) -> None:
         """Move a message to Trash."""
@@ -326,16 +314,12 @@ class GmailProvider(EmailProvider):
     def add_tag(self, message_id: str, tag_name: str) -> None:
         """Apply a label (tag) to a message, resolving the name to a label ID."""
         label_id = _retrieval.resolve_label_name(self._svc, tag_name)
-        _retrieval.modify_message_labels(
-            self._svc, message_id, add_labels=[label_id]
-        )
+        _retrieval.modify_message_labels(self._svc, message_id, add_labels=[label_id])
 
     def remove_tag(self, message_id: str, tag_name: str) -> None:
         """Remove a label (tag) from a message."""
         label_id = _retrieval.resolve_label_name(self._svc, tag_name)
-        _retrieval.modify_message_labels(
-            self._svc, message_id, remove_labels=[label_id]
-        )
+        _retrieval.modify_message_labels(self._svc, message_id, remove_labels=[label_id])
 
     def list_tags(self) -> dict[str, str]:
         """Return the full label ID → name mapping for the authenticated account."""
@@ -356,3 +340,20 @@ class GmailProvider(EmailProvider):
         Returns ``None`` when the history has expired and a full re-sync is needed.
         """
         return _search.get_new_messages(self._svc, sync_token)
+
+    def get_new_messages_with_token(self, sync_token: str) -> tuple[list[str], str] | None:
+        """Return new message IDs and the refreshed historyId since ``sync_token``.
+
+        Calls the existing history API and then fetches the current historyId from
+        the Gmail profile to return as the new sync token.
+
+        Returns:
+            A ``(message_ids, new_history_id)`` tuple, or ``None`` when the history
+            has expired and a full re-sync is needed.
+        """
+        message_ids = _search.get_new_messages(self._svc, sync_token)
+        if message_ids is None:
+            return None
+        profile = _auth.get_gmail_profile(self._svc)
+        new_token = str(profile.get("historyId", ""))
+        return (message_ids, new_token)
