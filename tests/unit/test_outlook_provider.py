@@ -202,6 +202,21 @@ class TestSearchEmails:
         results = provider.search_emails(query)
         assert len(results) <= 2
 
+    def test_search_returns_messages_from_all_folders(self, provider):
+        """search_emails must find messages outside the Inbox (all-mail search).
+
+        ``MOCK_DRAFT_MESSAGE`` is stored in ``_messages_by_id`` but placed in
+        the Drafts folder — NOT the Inbox.  The old ``inbox_folder()``-based
+        implementation would miss it; the new ``self._mb.get_messages()`` path
+        should return it.
+        """
+        query = EmailQuery(max_results=100)
+        results = provider.search_emails(query)
+        result_ids = {r["message_id"] for r in results}
+        assert "outlook-draft-id-1" in result_ids, (
+            "Draft message (non-inbox) should be found by search_emails"
+        )
+
 
 # ---------------------------------------------------------------------------
 # get_email_content
@@ -257,6 +272,28 @@ class TestGetThread:
     def test_empty_thread(self, provider):
         results = provider.get_thread("nonexistent-conv-id")
         assert isinstance(results, list)
+
+    def test_get_thread_finds_messages_across_all_folders(self, provider):
+        """get_thread must find thread messages outside the Inbox.
+
+        Adds a message with the target ``conversationId`` to ``_messages_by_id``
+        without placing it in the inbox.  The new ``self._mb.get_messages()``
+        implementation should surface it; the old ``inbox_folder()`` path
+        would not.
+        """
+        extra_msg = make_mock_message(
+            object_id="thread-sent-msg",
+            conversation_id="outlook-conv-thread-1",
+            subject="Re: Thread Email (sent copy)",
+        )
+        # Register in the global lookup only — not in the inbox folder.
+        provider._mailbox._messages_by_id["thread-sent-msg"] = extra_msg
+
+        results = provider.get_thread("outlook-conv-thread-1")
+        result_ids = {r["message_id"] for r in results}
+        assert "thread-sent-msg" in result_ids, (
+            "Non-inbox thread message should be returned by get_thread"
+        )
 
 
 # ---------------------------------------------------------------------------

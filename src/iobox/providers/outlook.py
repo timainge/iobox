@@ -26,11 +26,23 @@ This prevents message IDs from silently changing when messages are moved
 between folders — a Microsoft Graph quirk that would break any saved
 reference to a message ID.
 
+All-mail search
+---------------
+``search_emails()`` and ``get_thread()`` use the root mailbox message
+collection (``self._mb.get_messages()``) rather than
+``self._mb.inbox_folder().get_messages()``.  This searches across **all
+folders** — Inbox, Sent, Archive, Drafts, and custom folders — so that no
+messages are silently excluded.
+
+The python-o365 ``MailBox`` object (``self._mb``) exposes a ``get_messages()``
+method that targets the ``/me/messages`` Graph endpoint rather than the
+folder-scoped ``/me/mailFolders/{id}/messages`` endpoint.
+
 Query path selection
 --------------------
-Microsoft Graph's ``/me/mailFolders/{id}/messages`` endpoint cannot combine
-``$filter`` and ``$search`` in the same request.  The provider selects the
-path based on whether free-text search is needed:
+Microsoft Graph's ``/me/messages`` endpoint (like its folder-scoped cousin)
+cannot combine ``$filter`` and ``$search`` in the same request.  The provider
+selects the path based on whether free-text search is needed:
 
 * ``raw_query`` set → KQL passthrough via ``$search``
 * ``query.text`` set → ``$search`` with KQL built from all query fields
@@ -82,6 +94,7 @@ class OutlookProvider(EmailProvider):
 
     def _set_immutable_id_header(self) -> None:
         """Apply the ImmutableId preference header to all Graph requests."""
+        assert self._account is not None  # guaranteed by authenticate() calling this
         self._account.con.session.headers.update(_IMMUTABLE_ID_HEADER)
 
     def _message_to_email_data(
@@ -283,7 +296,11 @@ class OutlookProvider(EmailProvider):
     # ------------------------------------------------------------------
 
     def search_emails(self, query: EmailQuery) -> list[EmailData]:
-        """Search the Outlook inbox and return normalised metadata results.
+        """Search all mail folders and return normalised metadata results.
+
+        Searches across **all folders** (Inbox, Sent, Archive, Drafts, and
+        custom folders) via the root mailbox message collection
+        (``/me/messages``).
 
         Query path selection:
 
@@ -297,21 +314,19 @@ class OutlookProvider(EmailProvider):
         Returns:
             List of :class:`EmailData` dicts (body absent — metadata only).
         """
-        inbox = self._mb.inbox_folder()
-
         if query.raw_query:
             # Raw KQL passthrough.
-            q = inbox.new_query().search(query.raw_query)
-            messages = inbox.get_messages(query=q, limit=query.max_results)
+            q = self._mb.new_query().search(query.raw_query)
+            messages = self._mb.get_messages(query=q, limit=query.max_results)
         elif query.text:
             # Free-text present — must use $search; cannot combine with $filter.
             kql = self._build_outlook_search(query)
-            q = inbox.new_query().search(kql)
-            messages = inbox.get_messages(query=q, limit=query.max_results)
+            q = self._mb.new_query().search(kql)
+            messages = self._mb.get_messages(query=q, limit=query.max_results)
         else:
             # Structured filters only — use $filter path.
             q = self._build_outlook_filter(query)
-            messages = inbox.get_messages(query=q, limit=query.max_results)
+            messages = self._mb.get_messages(query=q, limit=query.max_results)
 
         return [self._message_to_email_data(msg, include_body=False) for msg in messages]
 
@@ -364,7 +379,10 @@ class OutlookProvider(EmailProvider):
     def get_thread(self, thread_id: str) -> list[EmailData]:
         """Return all messages in a conversation, ordered chronologically.
 
-        Filters inbox messages by ``conversationId`` using the ``$filter`` path.
+        Searches across **all folders** so that thread replies in Sent Items or
+        other folders are included alongside Inbox messages.  Filters by
+        ``conversationId`` using the ``$filter`` path via the root mailbox
+        message collection (``/me/messages``).
 
         Args:
             thread_id: The Outlook ``conversationId`` (maps to ``thread_id``
@@ -373,9 +391,8 @@ class OutlookProvider(EmailProvider):
         Returns:
             List of :class:`EmailData` dicts ordered by ``receivedDateTime``.
         """
-        inbox = self._mb.inbox_folder()
-        q = inbox.new_query().on_attribute("conversationId").equals(thread_id)
-        messages = inbox.get_messages(query=q, order_by="receivedDateTime asc")
+        q = self._mb.new_query().on_attribute("conversationId").equals(thread_id)
+        messages = self._mb.get_messages(query=q, order_by="receivedDateTime asc")
         return [self._message_to_email_data(msg, include_body=True) for msg in messages]
 
     def download_attachment(self, message_id: str, attachment_id: str) -> bytes:
@@ -399,7 +416,7 @@ class OutlookProvider(EmailProvider):
         for attachment in msg.attachments:
             a_id = getattr(attachment, "attachment_id", None)
             if a_id == attachment_id:
-                return attachment.content
+                return bytes(attachment.content)  # type: ignore[arg-type]
 
         raise ValueError(f"Attachment {attachment_id!r} not found in message {message_id!r}")
 

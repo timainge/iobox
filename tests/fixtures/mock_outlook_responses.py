@@ -227,9 +227,7 @@ class MockMessage:
         return fwd
 
     def __repr__(self) -> str:
-        return (
-            f"MockMessage(object_id={self.object_id!r}, subject={self.subject!r})"
-        )
+        return f"MockMessage(object_id={self.object_id!r}, subject={self.subject!r})"
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +366,24 @@ class MockMailbox:
         self._new_messages.append(msg)
         return msg
 
+    def get_messages(
+        self,
+        query: MockQuery | None = None,
+        limit: int | None = None,
+        order_by: str | None = None,
+    ) -> list[MockMessage]:
+        """Return messages from all folders (global mailbox search).
+
+        Mimics ``MailBox.get_messages()`` which targets ``/me/messages`` rather
+        than a specific folder.  Query and order_by are ignored in the mock;
+        all messages indexed in ``_messages_by_id`` are returned (respecting
+        *limit*).
+        """
+        msgs = list(self._messages_by_id.values())
+        if limit is not None:
+            msgs = msgs[:limit]
+        return msgs
+
     def new_query(self) -> MockQuery:
         return MockQuery()
 
@@ -442,9 +458,7 @@ class MockAccount:
         scopes: list[str] | None = None,
         grant_type: str | None = None,
     ) -> bool:
-        self._authenticate_calls.append(
-            {"scopes": scopes, "grant_type": grant_type}
-        )
+        self._authenticate_calls.append({"scopes": scopes, "grant_type": grant_type})
         self.is_authenticated = True
         return True
 
@@ -548,9 +562,7 @@ MOCK_HTML_MESSAGE: MockMessage = make_mock_message(
     received=datetime(2026, 3, 6, 10, 0, 0, tzinfo=timezone.utc),
     body_preview="This is the HTML version of the email.",
     body=(
-        "<html><body>"
-        "<p>This is the <strong>HTML</strong> version of the email.</p>"
-        "</body></html>"
+        "<html><body><p>This is the <strong>HTML</strong> version of the email.</p></body></html>"
     ),
     body_type="HTML",
     is_read=False,
@@ -670,9 +682,7 @@ MOCK_THREAD_MESSAGE_2: MockMessage = make_mock_message(
 
 #: Normal delta response — two new messages, no removals.
 MOCK_DELTA_RESPONSE: dict = {
-    "@odata.context": (
-        "https://graph.microsoft.com/v1.0/$metadata#Collection(message)"
-    ),
+    "@odata.context": ("https://graph.microsoft.com/v1.0/$metadata#Collection(message)"),
     "value": [
         {
             "id": "outlook-msg-id-1",
@@ -686,16 +696,13 @@ MOCK_DELTA_RESPONSE: dict = {
         },
     ],
     "@odata.deltaLink": (
-        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
-        "/delta?$deltatoken=abc123"
+        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=abc123"
     ),
 }
 
 #: Delta response that includes a soft-deleted message (``@removed`` annotation).
 MOCK_DELTA_RESPONSE_WITH_REMOVED: dict = {
-    "@odata.context": (
-        "https://graph.microsoft.com/v1.0/$metadata#Collection(message)"
-    ),
+    "@odata.context": ("https://graph.microsoft.com/v1.0/$metadata#Collection(message)"),
     "value": [
         {
             "id": "outlook-msg-id-1",
@@ -708,20 +715,16 @@ MOCK_DELTA_RESPONSE_WITH_REMOVED: dict = {
         },
     ],
     "@odata.deltaLink": (
-        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
-        "/delta?$deltatoken=def456"
+        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=def456"
     ),
 }
 
 #: Empty delta response — no new or removed messages since last sync.
 MOCK_DELTA_RESPONSE_EMPTY: dict = {
-    "@odata.context": (
-        "https://graph.microsoft.com/v1.0/$metadata#Collection(message)"
-    ),
+    "@odata.context": ("https://graph.microsoft.com/v1.0/$metadata#Collection(message)"),
     "value": [],
     "@odata.deltaLink": (
-        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
-        "/delta?$deltatoken=ghi789"
+        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=ghi789"
     ),
 }
 
@@ -750,6 +753,7 @@ MOCK_MASTER_CATEGORIES: list[dict] = [
 # ---------------------------------------------------------------------------
 # Convenience account/mailbox fixtures
 # ---------------------------------------------------------------------------
+
 
 #: A pre-authenticated account with all fixture messages in the inbox.
 def make_full_mock_account() -> MockAccount:
