@@ -4,7 +4,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Iobox is a Gmail to Markdown converter that extracts emails from Gmail based on specific criteria and saves them as markdown files with YAML frontmatter. The tool provides a command-line interface for searching, filtering, and exporting emails with optional attachment downloads.
+Iobox is a multi-provider email to Markdown tool that extracts emails from Gmail or Outlook/O365 based on specific criteria and saves them as markdown files with YAML frontmatter. The tool provides a command-line interface for searching, filtering, and exporting emails with optional attachment downloads.
+
+## Provider Architecture (Phase 10+)
+
+Iobox uses an abstract provider layer so multiple email backends can share a single CLI.
+
+- **`EmailProvider` ABC** — `src/iobox/providers/base.py` defines the interface all providers must implement (search, retrieve, send, label, trash, etc.).
+- **`GmailProvider`** — default provider backed by the Google Gmail API (`src/iobox/providers/gmail.py`).
+- **`OutlookProvider`** — Microsoft 365 / Exchange Online provider backed by the `O365` library (`src/iobox/providers/outlook.py`).
+
+### Selecting a provider
+
+```bash
+# Use Outlook instead of Gmail (CLI flag)
+iobox --provider outlook search -q "from:boss@example.com"
+
+# Or set the environment variable
+export IOBOX_PROVIDER=outlook
+iobox search -q "from:boss@example.com"
+```
+
+### Outlook setup
+
+Outlook requires two additional env vars (set in `.env` or the shell):
+```
+OUTLOOK_CLIENT_ID=<your Azure app client ID>
+OUTLOOK_TENANT_ID=<your tenant ID or "common">
+```
+
+Install the optional Outlook dependency:
+```bash
+pip install 'iobox[outlook]'
+```
 
 ## Architecture
 
@@ -74,6 +106,15 @@ This means switching between `--mode readonly` and `--mode standard` never destr
 Legacy `token.json` files are auto-migrated on first run (copied, not deleted).
 
 If `GMAIL_TOKEN_FILE` is explicitly set to a non-default value, the legacy single-file behavior is used instead.
+
+## Key Invariants
+
+Knowing these prevents subtle bugs when working across providers or converters:
+
+- **`EmailData["from_"]` vs `"from"`** — Providers store the sender under the key `from_` (underscore) to avoid the Python keyword `from`. However `markdown_converter.py` and `file_manager.py` expect the key `from` (no underscore). The `_email_data_to_dict()` helper in `cli.py` (≈ line 48–58) bridges this — do not change the key in `EmailData` or in provider return values.
+- **Outlook searches inbox only; Gmail searches all mail** — `OutlookProvider` queries `inbox_folder()` by default. Emails in Sent, Archive, or custom folders may not be returned. Gmail searches the full mailbox.
+- **Outlook message IDs use ImmutableId** — Outlook IDs are stable across folder moves. Gmail IDs are message-scoped and also stable, but the format differs.
+- **Write ops return `{"message_id": ..., "status": ...}` — not `"id"`** — All provider write methods (`send_message`, `create_draft`, `send_draft`, `delete_draft`, `forward_message`) return a dict with `message_id` as the ID key. CLI code must read `result.get("message_id", ...)`, not `result.get("id", ...)`.
 
 ## Configuration
 
@@ -148,6 +189,7 @@ iobox version     # Show version
 - **Live tests**: CLI integration tests against a real Gmail account (`tests/live/`)
 - **Coverage**: Configured via `pyproject.toml` with HTML reports in `htmlcov/`
 - **Fixtures**: Centralized mock responses in `tests/fixtures/mock_responses.py`
+- **Test grouping convention**: Prefer `class Test<Feature>` grouping within test files (see `tests/unit/test_outlook_provider.py` for the canonical style). This keeps related assertions together and makes it easier to run a subset with `-k TestFeature`.
 
 ### Live Tests
 ```bash
