@@ -210,7 +210,7 @@ reports no missing-abstract-method errors for `GmailProvider` or `OutlookProvide
 
 ---
 
-### [ ] fix-outlook-auth-env-at-import
+### [x] fix-outlook-auth-env-at-import
 
 **`outlook_auth.py` resolves env vars at module import time — breaks test isolation.**
 
