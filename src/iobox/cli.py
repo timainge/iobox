@@ -571,7 +571,7 @@ def forward(
         if message_id is not None:
             typer.echo(f"Forwarding email {message_id} to {to}...")
             result = provider.forward_message(message_id=message_id, to=to, comment=note)
-            typer.echo(f"Successfully forwarded. New message ID: {result.get('id', 'unknown')}")
+            typer.echo(f"Successfully forwarded. New message ID: {result.get('message_id', 'unknown')}")
         else:
             after, before = _parse_dates(days, start_date, end_date)
             eq = EmailQuery(
@@ -658,7 +658,7 @@ def send(
             attachments=attach or None,
         )
 
-        typer.echo(f"Email sent successfully. Message ID: {result.get('id', 'unknown')}")
+        typer.echo(f"Email sent successfully. Message ID: {result.get('message_id', 'unknown')}")
 
     except Exception as e:
         typer.echo(f"Error sending email: {e}")
@@ -716,7 +716,7 @@ def draft_create(
             content_type=content_type,
         )
 
-        typer.echo(f"Draft created successfully. Draft ID: {result.get('id', 'unknown')}")
+        typer.echo(f"Draft created successfully. Draft ID: {result.get('message_id', 'unknown')}")
 
     except Exception as e:
         typer.echo(f"Error creating draft: {e}")
@@ -739,7 +739,7 @@ def draft_list(
 
         typer.echo(f"Found {len(drafts)} draft(s):")
         for draft in drafts:
-            typer.echo(f"\nID: {draft['id']}")
+            typer.echo(f"\nID: {draft['message_id']}")
             typer.echo(f"  Subject: {draft['subject']}")
             if draft.get("snippet"):
                 typer.echo(f"  Preview: {draft['snippet'][:70]}")
@@ -758,7 +758,7 @@ def draft_send(
     try:
         provider = _get_provider(ctx)
         result = provider.send_draft(draft_id)
-        typer.echo(f"Draft sent successfully. Message ID: {result.get('id', 'unknown')}")
+        typer.echo(f"Draft sent successfully. Message ID: {result.get('message_id', 'unknown')}")
 
     except Exception as e:
         typer.echo(f"Error sending draft: {e}")
@@ -774,7 +774,7 @@ def draft_delete(
     try:
         provider = _get_provider(ctx)
         result = provider.delete_draft(draft_id)
-        typer.echo(f"Draft deleted successfully. Draft ID: {result.get('draft_id', draft_id)}")
+        typer.echo(f"Draft deleted successfully. Draft ID: {result.get('message_id', draft_id)}")
 
     except Exception as e:
         typer.echo(f"Error deleting draft: {e}")

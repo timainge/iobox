@@ -27,12 +27,12 @@ def _mock_provider(**overrides) -> MagicMock:
     p.get_email_content.return_value = overrides.get("get_email_content", {})
     p.batch_get_emails.return_value = overrides.get("batch_get_emails", [])
     p.get_thread.return_value = overrides.get("get_thread", [])
-    p.send_message.return_value = overrides.get("send_message", {"id": "sent-1"})
-    p.forward_message.return_value = overrides.get("forward_message", {"id": "fwd-1"})
-    p.create_draft.return_value = overrides.get("create_draft", {"id": "draft-1"})
+    p.send_message.return_value = overrides.get("send_message", {"message_id": "sent-1"})
+    p.forward_message.return_value = overrides.get("forward_message", {"message_id": "fwd-1"})
+    p.create_draft.return_value = overrides.get("create_draft", {"message_id": "draft-1"})
     p.list_drafts.return_value = overrides.get("list_drafts", [])
-    p.send_draft.return_value = overrides.get("send_draft", {"id": "sent-draft"})
-    p.delete_draft.return_value = overrides.get("delete_draft", {"draft_id": "d1"})
+    p.send_draft.return_value = overrides.get("send_draft", {"message_id": "sent-draft"})
+    p.delete_draft.return_value = overrides.get("delete_draft", {"message_id": "d1"})
     p.get_sync_state.return_value = overrides.get("get_sync_state", "hist-100")
     p.get_new_messages.return_value = overrides.get("get_new_messages", None)
     p.get_profile.return_value = overrides.get("get_profile", {})
@@ -217,7 +217,7 @@ class TestCliCommands:
 
     def test_forward_single_email(self):
         """Test forwarding a single email by message ID."""
-        provider = _mock_provider(forward_message={"id": "fwd-1"})
+        provider = _mock_provider(forward_message={"message_id": "fwd-1"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -242,7 +242,7 @@ class TestCliCommands:
             {"message_id": "m2", "subject": "Second", "from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""},
         ]
 
-        provider = _mock_provider(search_emails=mock_emails, forward_message={"id": "fwd-x"})
+        provider = _mock_provider(search_emails=mock_emails, forward_message={"message_id": "fwd-x"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -279,7 +279,7 @@ class TestCliCommands:
 
     def test_send_with_body(self):
         """Test sending an email with inline body."""
-        provider = _mock_provider(send_message={"id": "sent-1"})
+        provider = _mock_provider(send_message={"message_id": "sent-1"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -313,7 +313,7 @@ class TestCliCommands:
         body_file = tmp_path / "body.txt"
         body_file.write_text("File body content")
 
-        provider = _mock_provider(send_message={"id": "sent-2"})
+        provider = _mock_provider(send_message={"message_id": "sent-2"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -344,7 +344,7 @@ class TestCliCommands:
 
     def test_send_html_flag(self):
         """Test send with --html flag sets content_type to html."""
-        provider = _mock_provider(send_message={"id": "sent-3"})
+        provider = _mock_provider(send_message={"message_id": "sent-3"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -742,7 +742,7 @@ class TestDraftCommands:
 
     def test_draft_create_command(self):
         """Test draft-create command creates a draft."""
-        provider = _mock_provider(create_draft={"id": "draft-1"})
+        provider = _mock_provider(create_draft={"message_id": "draft-1"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -765,8 +765,8 @@ class TestDraftCommands:
     def test_draft_list_command(self):
         """Test draft-list command lists drafts."""
         mock_drafts = [
-            {"id": "draft-1", "subject": "First Draft", "snippet": "First snippet"},
-            {"id": "draft-2", "subject": "Second Draft", "snippet": "Second snippet"},
+            {"message_id": "draft-1", "subject": "First Draft", "snippet": "First snippet"},
+            {"message_id": "draft-2", "subject": "Second Draft", "snippet": "Second snippet"},
         ]
 
         provider = _mock_provider(list_drafts=mock_drafts)
@@ -789,7 +789,7 @@ class TestDraftCommands:
 
     def test_draft_send_command(self):
         """Test draft-send command sends a draft."""
-        provider = _mock_provider(send_draft={"id": "sent-from-draft"})
+        provider = _mock_provider(send_draft={"message_id": "sent-from-draft"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -806,7 +806,7 @@ class TestDraftCommands:
 
     def test_draft_delete_command(self):
         """Test draft-delete command deletes a draft."""
-        provider = _mock_provider(delete_draft={"status": "deleted", "draft_id": "draft-1"})
+        provider = _mock_provider(delete_draft={"status": "deleted", "message_id": "draft-1"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -827,7 +827,7 @@ class TestModeGating:
 
     def test_default_mode_is_standard(self):
         """Default mode allows draft-create but blocks send."""
-        provider = _mock_provider(create_draft={"id": "d1"})
+        provider = _mock_provider(create_draft={"message_id": "d1"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -914,7 +914,7 @@ class TestModeGating:
 
     def test_dangerous_allows_send(self):
         """send is allowed in dangerous mode."""
-        provider = _mock_provider(send_message={"id": "sent-1"})
+        provider = _mock_provider(send_message={"message_id": "sent-1"})
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
