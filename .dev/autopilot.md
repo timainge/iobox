@@ -102,7 +102,7 @@ actually works but the key name is still inconsistent. Normalise it to
 
 ---
 
-### [ ] fix-outlook-write-op-error-handling
+### [x] fix-outlook-write-op-error-handling
 
 **python-o365 returns `False` on write failures; iobox ignores the return value.**
 
