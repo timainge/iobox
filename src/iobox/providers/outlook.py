@@ -771,6 +771,157 @@ class OutlookProvider(EmailProvider):
         return result
 
     # ------------------------------------------------------------------
+    # 7. Batch operations — Graph $batch for bulk org mutations
+    # ------------------------------------------------------------------
+
+    def batch_mark_read(self, message_ids: list[str], read: bool = True) -> None:
+        """Mark multiple messages as read or unread via a single Graph $batch call.
+
+        Builds one PATCH sub-request per message (``isRead`` property) and
+        routes them through :meth:`_batch_graph_requests`, which automatically
+        chunks lists larger than 20 into multiple batch calls.
+
+        Each sub-request URL is a relative path required by the Graph $batch
+        endpoint (e.g. ``/me/messages/{id}``).
+
+        Args:
+            message_ids: List of immutable message IDs to update.
+            read: ``True`` to mark as read (default), ``False`` for unread.
+        """
+        requests = [
+            {
+                "id": str(i),
+                "method": "PATCH",
+                "url": f"/me/messages/{mid}",
+                "body": {"isRead": read},
+                "headers": {"Content-Type": "application/json"},
+            }
+            for i, mid in enumerate(message_ids)
+        ]
+        if requests:
+            self._batch_graph_requests(requests)
+
+    def batch_archive(self, message_ids: list[str]) -> None:
+        """Move multiple messages to the Archive folder via a single Graph $batch call.
+
+        Builds one POST ``/move`` sub-request per message and routes them
+        through :meth:`_batch_graph_requests`.
+
+        Each sub-request URL is a relative path required by the Graph $batch
+        endpoint (e.g. ``/me/messages/{id}/move``).
+
+        Args:
+            message_ids: List of immutable message IDs to archive.
+        """
+        requests = [
+            {
+                "id": str(i),
+                "method": "POST",
+                "url": f"/me/messages/{mid}/move",
+                "body": {"destinationId": "archive"},
+                "headers": {"Content-Type": "application/json"},
+            }
+            for i, mid in enumerate(message_ids)
+        ]
+        if requests:
+            self._batch_graph_requests(requests)
+
+    def batch_trash(self, message_ids: list[str]) -> None:
+        """Move multiple messages to Deleted Items via a single Graph $batch call.
+
+        Builds one POST ``/move`` sub-request per message and routes them
+        through :meth:`_batch_graph_requests`.
+
+        Each sub-request URL is a relative path required by the Graph $batch
+        endpoint (e.g. ``/me/messages/{id}/move``).
+
+        Args:
+            message_ids: List of immutable message IDs to trash.
+        """
+        requests = [
+            {
+                "id": str(i),
+                "method": "POST",
+                "url": f"/me/messages/{mid}/move",
+                "body": {"destinationId": "deleteditems"},
+                "headers": {"Content-Type": "application/json"},
+            }
+            for i, mid in enumerate(message_ids)
+        ]
+        if requests:
+            self._batch_graph_requests(requests)
+
+    def batch_add_tag(self, message_ids: list[str], tag_name: str) -> None:
+        """Add a category to multiple messages via a single Graph $batch call.
+
+        Fetches the current ``categories`` list for each message individually
+        (to avoid overwriting existing categories), then sends a single $batch
+        PATCH call containing only the messages where the tag was absent.
+
+        Each sub-request URL is a relative path required by the Graph $batch
+        endpoint (e.g. ``/me/messages/{id}``).
+
+        Args:
+            message_ids: List of immutable message IDs to tag.
+            tag_name: Category name to add.
+        """
+        batch_requests: list[dict[str, Any]] = []
+        for i, mid in enumerate(message_ids):
+            msg = self._mb.get_message(object_id=mid)
+            if msg is None:
+                logger.warning("batch_add_tag: message not found, skipping: %r", mid)
+                continue
+            categories: list[str] = list(msg.categories) if msg.categories else []
+            if tag_name not in categories:
+                categories.append(tag_name)
+                batch_requests.append(
+                    {
+                        "id": str(i),
+                        "method": "PATCH",
+                        "url": f"/me/messages/{mid}",
+                        "body": {"categories": categories},
+                        "headers": {"Content-Type": "application/json"},
+                    }
+                )
+        if batch_requests:
+            self._batch_graph_requests(batch_requests)
+
+    def batch_remove_tag(self, message_ids: list[str], tag_name: str) -> None:
+        """Remove a category from multiple messages via a single Graph $batch call.
+
+        Fetches the current ``categories`` list for each message individually,
+        then sends a single $batch PATCH call containing only the messages where
+        the tag was present.
+
+        Each sub-request URL is a relative path required by the Graph $batch
+        endpoint (e.g. ``/me/messages/{id}``).
+
+        Args:
+            message_ids: List of immutable message IDs to untag.
+            tag_name: Category name to remove.
+        """
+        batch_requests: list[dict[str, Any]] = []
+        for i, mid in enumerate(message_ids):
+            msg = self._mb.get_message(object_id=mid)
+            if msg is None:
+                logger.warning("batch_remove_tag: message not found, skipping: %r", mid)
+                continue
+            categories: list[str] = list(msg.categories) if msg.categories else []
+            if tag_name in categories:
+                categories.remove(tag_name)
+                batch_requests.append(
+                    {
+                        "id": str(i),
+                        "method": "PATCH",
+                        "url": f"/me/messages/{mid}",
+                        "body": {"categories": categories},
+                        "headers": {"Content-Type": "application/json"},
+                    }
+                )
+        if batch_requests:
+            self._batch_graph_requests(batch_requests)
+
+    # ------------------------------------------------------------------
     # 6. Sync — delta query for incremental sync
     # ------------------------------------------------------------------
 

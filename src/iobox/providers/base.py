@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class AttachmentInfo(TypedDict):
@@ -81,7 +81,7 @@ class EmailProvider(ABC):
     def authenticate(self) -> None: ...
 
     @abstractmethod
-    def get_profile(self) -> dict: ...
+    def get_profile(self) -> dict[str, Any]: ...
 
     # ── 2. Search & Read ──────────────────────────────────────
 
@@ -116,10 +116,12 @@ class EmailProvider(ABC):
         bcc: str | None = None,
         content_type: str = "plain",
         attachments: list[str] | None = None,
-    ) -> dict: ...
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
-    def forward_message(self, message_id: str, to: str, comment: str | None = None) -> dict: ...
+    def forward_message(
+        self, message_id: str, to: str, comment: str | None = None
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
     def create_draft(
@@ -130,16 +132,16 @@ class EmailProvider(ABC):
         cc: str | None = None,
         bcc: str | None = None,
         content_type: str = "plain",
-    ) -> dict: ...
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
-    def list_drafts(self, max_results: int = 10) -> list[dict]: ...
+    def list_drafts(self, max_results: int = 10) -> list[dict[str, Any]]: ...
 
     @abstractmethod
-    def send_draft(self, draft_id: str) -> dict: ...
+    def send_draft(self, draft_id: str) -> dict[str, Any]: ...
 
     @abstractmethod
-    def delete_draft(self, draft_id: str) -> dict: ...
+    def delete_draft(self, draft_id: str) -> dict[str, Any]: ...
 
     # ── 4. System Operations ──────────────────────────────────
     # Dedicated methods for operations that map differently across
@@ -172,6 +174,73 @@ class EmailProvider(ABC):
 
     @abstractmethod
     def list_tags(self) -> dict[str, str]: ...
+
+    # ── 7. Batch Operations (optional — loop default) ──────────
+    # Non-abstract convenience methods for bulk org operations.
+    # Providers may override to use native bulk APIs (e.g. Graph $batch).
+
+    def batch_mark_read(self, message_ids: list[str], read: bool = True) -> None:
+        """Mark multiple messages as read or unread.
+
+        Default implementation calls :meth:`mark_read` for each message.
+        Providers may override for more efficient bulk operations.
+
+        Args:
+            message_ids: List of message IDs to update.
+            read: ``True`` to mark as read (default), ``False`` for unread.
+        """
+        for message_id in message_ids:
+            self.mark_read(message_id, read=read)
+
+    def batch_archive(self, message_ids: list[str]) -> None:
+        """Archive multiple messages.
+
+        Default implementation calls :meth:`archive` for each message.
+        Providers may override for more efficient bulk operations.
+
+        Args:
+            message_ids: List of message IDs to archive.
+        """
+        for message_id in message_ids:
+            self.archive(message_id)
+
+    def batch_trash(self, message_ids: list[str]) -> None:
+        """Trash multiple messages.
+
+        Default implementation calls :meth:`trash` for each message.
+        Providers may override for more efficient bulk operations.
+
+        Args:
+            message_ids: List of message IDs to trash.
+        """
+        for message_id in message_ids:
+            self.trash(message_id)
+
+    def batch_add_tag(self, message_ids: list[str], tag_name: str) -> None:
+        """Add a tag to multiple messages.
+
+        Default implementation calls :meth:`add_tag` for each message.
+        Providers may override for more efficient bulk operations.
+
+        Args:
+            message_ids: List of message IDs to tag.
+            tag_name: Tag name to add.
+        """
+        for message_id in message_ids:
+            self.add_tag(message_id, tag_name)
+
+    def batch_remove_tag(self, message_ids: list[str], tag_name: str) -> None:
+        """Remove a tag from multiple messages.
+
+        Default implementation calls :meth:`remove_tag` for each message.
+        Providers may override for more efficient bulk operations.
+
+        Args:
+            message_ids: List of message IDs to untag.
+            tag_name: Tag name to remove.
+        """
+        for message_id in message_ids:
+            self.remove_tag(message_id, tag_name)
 
     # ── 6. Sync ───────────────────────────────────────────────
 

@@ -956,3 +956,270 @@ class TestLazyInit:
         # Accessing _mb should trigger auth + mailbox init
         mb = p._mb
         assert mb is not None
+
+
+# ---------------------------------------------------------------------------
+# Batch org operations
+# ---------------------------------------------------------------------------
+
+
+def _setup_batch_mock(provider: OutlookProvider) -> MagicMock:
+    """Wire provider.con.post to return a successful batch response stub.
+
+    Returns the ``MagicMock`` replacing ``provider._account.con.post`` so
+    callers can assert on ``call_count`` and ``call_args``.
+    """
+    provider._account.con.protocol = MagicMock()
+    provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"responses": [{"id": "0", "status": 200, "body": {}}]}
+    mock_post = MagicMock(return_value=mock_resp)
+    provider._account.con.post = mock_post
+    return mock_post
+
+
+class TestBatchMarkRead:
+    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg1 = make_mock_message(object_id="batch-read-id-1")
+        msg2 = make_mock_message(object_id="batch-read-id-2")
+        provider._mailbox._messages_by_id["batch-read-id-1"] = msg1
+        provider._mailbox._messages_by_id["batch-read-id-2"] = msg2
+        provider.batch_mark_read(["batch-read-id-1", "batch-read-id-2"], read=True)
+        assert mock_post.call_count == 1
+
+    def test_uses_relative_url_and_patch_method(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-read-id-3")
+        provider._mailbox._messages_by_id["batch-read-id-3"] = msg
+        provider.batch_mark_read(["batch-read-id-3"], read=False)
+        payload = mock_post.call_args[1]["data"]
+        sub_req = payload["requests"][0]
+        assert sub_req["url"] == "/me/messages/batch-read-id-3"
+        assert sub_req["method"] == "PATCH"
+        assert sub_req["body"]["isRead"] is False
+
+    def test_read_true_sets_is_read_true(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-read-id-4")
+        provider._mailbox._messages_by_id["batch-read-id-4"] = msg
+        provider.batch_mark_read(["batch-read-id-4"], read=True)
+        payload = mock_post.call_args[1]["data"]
+        assert payload["requests"][0]["body"]["isRead"] is True
+
+    def test_empty_list_does_not_call_batch(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        provider.batch_mark_read([])
+        assert mock_post.call_count == 0
+
+    def test_chunks_at_20(self, provider):
+        """21 messages should result in 2 batch POST calls (20 + 1)."""
+        mock_post = _setup_batch_mock(provider)
+        msg_ids = [f"fake-read-id-{i}" for i in range(21)]
+        provider.batch_mark_read(msg_ids, read=True)
+        assert mock_post.call_count == 2
+
+
+class TestBatchArchive:
+    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg1 = make_mock_message(object_id="batch-arch-id-1")
+        msg2 = make_mock_message(object_id="batch-arch-id-2")
+        provider._mailbox._messages_by_id["batch-arch-id-1"] = msg1
+        provider._mailbox._messages_by_id["batch-arch-id-2"] = msg2
+        provider.batch_archive(["batch-arch-id-1", "batch-arch-id-2"])
+        assert mock_post.call_count == 1
+
+    def test_uses_move_url_with_archive_destination(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-arch-id-3")
+        provider._mailbox._messages_by_id["batch-arch-id-3"] = msg
+        provider.batch_archive(["batch-arch-id-3"])
+        payload = mock_post.call_args[1]["data"]
+        sub_req = payload["requests"][0]
+        assert sub_req["url"] == "/me/messages/batch-arch-id-3/move"
+        assert sub_req["method"] == "POST"
+        assert sub_req["body"]["destinationId"] == "archive"
+
+    def test_url_is_relative_not_absolute(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-arch-id-4")
+        provider._mailbox._messages_by_id["batch-arch-id-4"] = msg
+        provider.batch_archive(["batch-arch-id-4"])
+        payload = mock_post.call_args[1]["data"]
+        url = payload["requests"][0]["url"]
+        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
+
+    def test_empty_list_does_not_call_batch(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        provider.batch_archive([])
+        assert mock_post.call_count == 0
+
+    def test_chunks_at_20(self, provider):
+        """21 messages → 2 POST calls (20 + 1)."""
+        mock_post = _setup_batch_mock(provider)
+        msg_ids = [f"fake-arch-id-{i}" for i in range(21)]
+        provider.batch_archive(msg_ids)
+        assert mock_post.call_count == 2
+
+
+class TestBatchTrash:
+    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg1 = make_mock_message(object_id="batch-trash-id-1")
+        msg2 = make_mock_message(object_id="batch-trash-id-2")
+        provider._mailbox._messages_by_id["batch-trash-id-1"] = msg1
+        provider._mailbox._messages_by_id["batch-trash-id-2"] = msg2
+        provider.batch_trash(["batch-trash-id-1", "batch-trash-id-2"])
+        assert mock_post.call_count == 1
+
+    def test_uses_move_url_with_deleteditems_destination(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-trash-id-3")
+        provider._mailbox._messages_by_id["batch-trash-id-3"] = msg
+        provider.batch_trash(["batch-trash-id-3"])
+        payload = mock_post.call_args[1]["data"]
+        sub_req = payload["requests"][0]
+        assert sub_req["url"] == "/me/messages/batch-trash-id-3/move"
+        assert sub_req["method"] == "POST"
+        assert sub_req["body"]["destinationId"] == "deleteditems"
+
+    def test_url_is_relative_not_absolute(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-trash-id-4")
+        provider._mailbox._messages_by_id["batch-trash-id-4"] = msg
+        provider.batch_trash(["batch-trash-id-4"])
+        payload = mock_post.call_args[1]["data"]
+        url = payload["requests"][0]["url"]
+        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
+
+    def test_empty_list_does_not_call_batch(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        provider.batch_trash([])
+        assert mock_post.call_count == 0
+
+
+class TestBatchAddTag:
+    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
+        """Two messages without the tag → one $batch call with two sub-requests."""
+        mock_post = _setup_batch_mock(provider)
+        msg1 = make_mock_message(object_id="batch-addtag-id-1", categories=["Work"])
+        msg2 = make_mock_message(object_id="batch-addtag-id-2", categories=[])
+        provider._mailbox._messages_by_id["batch-addtag-id-1"] = msg1
+        provider._mailbox._messages_by_id["batch-addtag-id-2"] = msg2
+        provider.batch_add_tag(["batch-addtag-id-1", "batch-addtag-id-2"], "ProjectX")
+        assert mock_post.call_count == 1
+
+    def test_includes_new_tag_and_preserves_existing(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-addtag-id-3", categories=["Work"])
+        provider._mailbox._messages_by_id["batch-addtag-id-3"] = msg
+        provider.batch_add_tag(["batch-addtag-id-3"], "ProjectX")
+        payload = mock_post.call_args[1]["data"]
+        cats = payload["requests"][0]["body"]["categories"]
+        assert "ProjectX" in cats
+        assert "Work" in cats  # existing tag preserved
+
+    def test_skips_already_tagged_message(self, provider):
+        """If tag already present the message is excluded from the batch."""
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-addtag-id-4", categories=["Work"])
+        provider._mailbox._messages_by_id["batch-addtag-id-4"] = msg
+        provider.batch_add_tag(["batch-addtag-id-4"], "Work")
+        assert mock_post.call_count == 0
+
+    def test_skips_missing_message(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        provider.batch_add_tag(["nonexistent-batch-add-id"], "Tag")
+        assert mock_post.call_count == 0
+
+    def test_uses_relative_url(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-addtag-id-5", categories=[])
+        provider._mailbox._messages_by_id["batch-addtag-id-5"] = msg
+        provider.batch_add_tag(["batch-addtag-id-5"], "NewTag")
+        payload = mock_post.call_args[1]["data"]
+        url = payload["requests"][0]["url"]
+        assert url == "/me/messages/batch-addtag-id-5"
+        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
+
+
+class TestBatchRemoveTag:
+    def test_calls_batch_endpoint_once_for_tagged_messages(self, provider):
+        """Two messages with the tag → one $batch call."""
+        mock_post = _setup_batch_mock(provider)
+        msg1 = make_mock_message(object_id="batch-rmtag-id-1", categories=["Work"])
+        msg2 = make_mock_message(object_id="batch-rmtag-id-2", categories=["Work", "Important"])
+        provider._mailbox._messages_by_id["batch-rmtag-id-1"] = msg1
+        provider._mailbox._messages_by_id["batch-rmtag-id-2"] = msg2
+        provider.batch_remove_tag(["batch-rmtag-id-1", "batch-rmtag-id-2"], "Work")
+        assert mock_post.call_count == 1
+
+    def test_removes_tag_from_categories(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-rmtag-id-3", categories=["Work", "Important"])
+        provider._mailbox._messages_by_id["batch-rmtag-id-3"] = msg
+        provider.batch_remove_tag(["batch-rmtag-id-3"], "Work")
+        payload = mock_post.call_args[1]["data"]
+        cats = payload["requests"][0]["body"]["categories"]
+        assert "Work" not in cats
+        assert "Important" in cats  # unrelated tag preserved
+
+    def test_skips_message_without_tag(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-rmtag-id-4", categories=[])
+        provider._mailbox._messages_by_id["batch-rmtag-id-4"] = msg
+        provider.batch_remove_tag(["batch-rmtag-id-4"], "Work")
+        assert mock_post.call_count == 0
+
+    def test_skips_missing_message(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        provider.batch_remove_tag(["nonexistent-batch-rm-id"], "Tag")
+        assert mock_post.call_count == 0
+
+    def test_uses_relative_url(self, provider):
+        mock_post = _setup_batch_mock(provider)
+        msg = make_mock_message(object_id="batch-rmtag-id-5", categories=["Work"])
+        provider._mailbox._messages_by_id["batch-rmtag-id-5"] = msg
+        provider.batch_remove_tag(["batch-rmtag-id-5"], "Work")
+        payload = mock_post.call_args[1]["data"]
+        url = payload["requests"][0]["url"]
+        assert url == "/me/messages/batch-rmtag-id-5"
+        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
+
+
+class TestBatchOrgDefaultLoop:
+    """Verify that the ABC's default batch methods loop over single-message calls."""
+
+    def test_base_batch_mark_read_loops(self, provider):
+        """Default batch_mark_read in ABC must call mark_read for each ID."""
+        called: list[tuple[str, bool]] = []
+        original = provider.mark_read
+
+        def recording_mark_read(message_id: str, read: bool = True) -> None:
+            called.append((message_id, read))
+            original(message_id, read=read)
+
+        provider.mark_read = recording_mark_read  # type: ignore[method-assign]
+
+        # Call the ABC's default (non-overridden) loop via the base class directly.
+        from iobox.providers.base import EmailProvider
+
+        ids = ["outlook-msg-id-1", "outlook-msg-id-2"]
+        EmailProvider.batch_mark_read(provider, ids, read=False)
+        assert called == [("outlook-msg-id-1", False), ("outlook-msg-id-2", False)]
+
+    def test_base_batch_archive_loops(self, provider):
+        called: list[str] = []
+        original = provider.archive
+
+        def recording_archive(message_id: str) -> None:
+            called.append(message_id)
+            original(message_id)
+
+        provider.archive = recording_archive  # type: ignore[method-assign]
+
+        from iobox.providers.base import EmailProvider
+
+        EmailProvider.batch_archive(provider, ["outlook-msg-id-1", "outlook-msg-id-2"])
+        assert called == ["outlook-msg-id-1", "outlook-msg-id-2"]
