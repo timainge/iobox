@@ -55,8 +55,8 @@ class OutlookProvider(EmailProvider):
     """EmailProvider backed by Microsoft 365 via python-o365 / Graph API."""
 
     def __init__(self) -> None:
-        self._account: Any | None = None   # O365.Account instance
-        self._mailbox: Any | None = None   # O365.MailBox instance
+        self._account: Any | None = None  # O365.Account instance
+        self._mailbox: Any | None = None  # O365.MailBox instance
 
     # ------------------------------------------------------------------
     # Internal lazy-access properties
@@ -140,9 +140,7 @@ class OutlookProvider(EmailProvider):
                     AttachmentInfo(
                         id=getattr(a, "attachment_id", ""),
                         filename=getattr(a, "name", ""),
-                        mime_type=getattr(
-                            a, "content_type", "application/octet-stream"
-                        ),
+                        mime_type=getattr(a, "content_type", "application/octet-stream"),
                         size=getattr(a, "size", 0),
                     )
                     for a in msg.attachments
@@ -315,9 +313,7 @@ class OutlookProvider(EmailProvider):
             q = self._build_outlook_filter(query)
             messages = inbox.get_messages(query=q, limit=query.max_results)
 
-        return [
-            self._message_to_email_data(msg, include_body=False) for msg in messages
-        ]
+        return [self._message_to_email_data(msg, include_body=False) for msg in messages]
 
     def get_email_content(
         self, message_id: str, preferred_content_type: str = "text/plain"
@@ -405,9 +401,7 @@ class OutlookProvider(EmailProvider):
             if a_id == attachment_id:
                 return attachment.content
 
-        raise ValueError(
-            f"Attachment {attachment_id!r} not found in message {message_id!r}"
-        )
+        raise ValueError(f"Attachment {attachment_id!r} not found in message {message_id!r}")
 
     # ------------------------------------------------------------------
     # 3. Send, forward & drafts
@@ -452,14 +446,13 @@ class OutlookProvider(EmailProvider):
             msg.body_type = "HTML"
         else:
             msg.body_type = "Text"
-        for path in (attachments or []):
+        for path in attachments or []:
             msg.attachments.add(path)
-        msg.send()
+        if not msg.send():
+            raise RuntimeError(f"Failed to send message: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "sent"}
 
-    def forward_message(
-        self, message_id: str, to: str, comment: str | None = None
-    ) -> dict:
+    def forward_message(self, message_id: str, to: str, comment: str | None = None) -> dict:
         """Forward an existing message using the native Graph forward endpoint.
 
         No manual "---------- Forwarded message ----------" body construction
@@ -483,7 +476,8 @@ class OutlookProvider(EmailProvider):
         fwd.to.add(to)
         if comment:
             fwd.body = comment
-        fwd.send()
+        if not fwd.send():
+            raise RuntimeError(f"Failed to forward message: {fwd.object_id!r}")
         return {"message_id": fwd.object_id, "status": "sent"}
 
     def create_draft(
@@ -520,7 +514,8 @@ class OutlookProvider(EmailProvider):
             msg.body_type = "HTML"
         else:
             msg.body_type = "Text"
-        msg.save_draft()
+        if not msg.save_draft():
+            raise RuntimeError(f"Failed to save draft: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "draft"}
 
     def list_drafts(self, max_results: int = 10) -> list[dict]:
@@ -558,7 +553,8 @@ class OutlookProvider(EmailProvider):
         msg = self._mb.get_message(object_id=draft_id)
         if msg is None:
             raise ValueError(f"Draft not found: {draft_id!r}")
-        msg.send()
+        if not msg.send():
+            raise RuntimeError(f"Failed to send draft: {draft_id!r}")
         return {"message_id": draft_id, "status": "sent"}
 
     def delete_draft(self, draft_id: str) -> dict:
@@ -576,16 +572,15 @@ class OutlookProvider(EmailProvider):
         msg = self._mb.get_message(object_id=draft_id)
         if msg is None:
             raise ValueError(f"Draft not found: {draft_id!r}")
-        msg.delete()
+        if not msg.delete():
+            raise RuntimeError(f"Failed to delete draft: {draft_id!r}")
         return {"message_id": draft_id, "status": "deleted"}
 
     # ------------------------------------------------------------------
     # Internal batch helper
     # ------------------------------------------------------------------
 
-    def _batch_graph_requests(
-        self, requests: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _batch_graph_requests(self, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Send multiple Graph API requests using the ``$batch`` endpoint.
 
         Microsoft Graph's ``$batch`` endpoint accepts at most 20 individual
@@ -806,9 +801,7 @@ class OutlookProvider(EmailProvider):
             return message_ids
         except _DeltaGoneError:
             # 410 Gone — delta token expired; signal full re-sync.
-            logger.warning(
-                "Outlook delta token expired (410 Gone). A full re-sync is required."
-            )
+            logger.warning("Outlook delta token expired (410 Gone). A full re-sync is required.")
             return None
 
     def get_new_messages_with_token(self, sync_token: str) -> tuple[list[str], str] | None:
@@ -822,16 +815,12 @@ class OutlookProvider(EmailProvider):
         try:
             return self._fetch_delta(con, sync_token)
         except _DeltaGoneError:
-            logger.warning(
-                "Outlook delta token expired (410 Gone). A full re-sync is required."
-            )
+            logger.warning("Outlook delta token expired (410 Gone). A full re-sync is required.")
             return None
 
     # ---- internal delta helpers ----------------------------------------
 
-    def _fetch_delta(
-        self, con: Any, url: str
-    ) -> tuple[list[str], str]:
+    def _fetch_delta(self, con: Any, url: str) -> tuple[list[str], str]:
         """Follow delta pages starting at *url*, collecting message IDs.
 
         Args:
@@ -850,9 +839,7 @@ class OutlookProvider(EmailProvider):
         delta_link = self._exhaust_delta_pages(con, url, message_ids)
         return message_ids, delta_link
 
-    def _exhaust_delta_pages(
-        self, con: Any, url: str, message_ids: list[str] | None = None
-    ) -> str:
+    def _exhaust_delta_pages(self, con: Any, url: str, message_ids: list[str] | None = None) -> str:
         """Walk all delta response pages and return the final deltaLink.
 
         Args:
@@ -898,8 +885,7 @@ class OutlookProvider(EmailProvider):
                 current_url = next_link
             else:
                 raise RuntimeError(
-                    "Delta response contained neither @odata.nextLink "
-                    "nor @odata.deltaLink"
+                    "Delta response contained neither @odata.nextLink nor @odata.deltaLink"
                 )
 
 

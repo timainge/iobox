@@ -7,40 +7,24 @@ Tests all abstract methods with mocked python-o365 objects from
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from iobox.providers.base import EmailQuery
 from iobox.providers.outlook import OutlookProvider
-
 from tests.fixtures.mock_outlook_responses import (
-    MockAccount,
-    MockAttachment,
-    MockConnection,
-    MockFolder,
-    MockHttpResponse,
-    MockMailbox,
-    MockMessage,
-    make_full_mock_account,
-    make_mock_account,
-    make_mock_mailbox,
-    make_mock_message,
-    MOCK_ATTACHMENT_FILE,
-    MOCK_ATTACHMENT_IMAGE,
     MOCK_ATTACHMENT_MESSAGE,
-    MOCK_DELTA_RESPONSE,
-    MOCK_DRAFT_MESSAGE,
     MOCK_HTML_MESSAGE,
     MOCK_MULTI_ATTACHMENT_MESSAGE,
     MOCK_PLAIN_TEXT_MESSAGE,
-    MOCK_STARRED_MESSAGE,
-    MOCK_THREAD_MESSAGE_1,
-    MOCK_THREAD_MESSAGE_2,
-    MOCK_UNREAD_MESSAGE,
+    MockAccount,
+    MockHttpResponse,
+    make_full_mock_account,
+    make_mock_account,
+    make_mock_message,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -90,30 +74,22 @@ class TestMessageToEmailData:
         assert data["content_type"] == "text/html"
 
     def test_plain_text_content_type(self, provider):
-        data = provider._message_to_email_data(
-            MOCK_PLAIN_TEXT_MESSAGE, include_body=True
-        )
+        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=True)
         assert data["content_type"] == "text/plain"
 
     def test_body_included(self, provider):
-        data = provider._message_to_email_data(
-            MOCK_PLAIN_TEXT_MESSAGE, include_body=True
-        )
+        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=True)
         assert "body" in data
         assert data["body"] == "This is a plain text email."
 
     def test_body_excluded(self, provider):
-        data = provider._message_to_email_data(
-            MOCK_PLAIN_TEXT_MESSAGE, include_body=False
-        )
+        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=False)
         assert "body" not in data
         assert "content_type" not in data
         assert "attachments" not in data
 
     def test_attachments_present(self, provider):
-        data = provider._message_to_email_data(
-            MOCK_ATTACHMENT_MESSAGE, include_body=True
-        )
+        data = provider._message_to_email_data(MOCK_ATTACHMENT_MESSAGE, include_body=True)
         assert len(data["attachments"]) == 1
         att = data["attachments"][0]
         assert att["id"] == "outlook-attach-id-1"
@@ -122,9 +98,7 @@ class TestMessageToEmailData:
         assert att["size"] == 1024
 
     def test_multiple_attachments(self, provider):
-        data = provider._message_to_email_data(
-            MOCK_MULTI_ATTACHMENT_MESSAGE, include_body=True
-        )
+        data = provider._message_to_email_data(MOCK_MULTI_ATTACHMENT_MESSAGE, include_body=True)
         assert len(data["attachments"]) == 2
 
     def test_no_attachments(self, provider):
@@ -132,9 +106,7 @@ class TestMessageToEmailData:
         assert data["attachments"] == []
 
     def test_date_iso_format(self, provider):
-        data = provider._message_to_email_data(
-            MOCK_PLAIN_TEXT_MESSAGE, include_body=False
-        )
+        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=False)
         assert "2026-03-06" in data["date"]
 
     def test_sender_with_no_name(self, provider):
@@ -255,18 +227,14 @@ class TestGetEmailContent:
 
 class TestBatchGetEmails:
     def test_returns_multiple(self, provider):
-        results = provider.batch_get_emails(
-            ["outlook-msg-id-1", "outlook-msg-id-2"]
-        )
+        results = provider.batch_get_emails(["outlook-msg-id-1", "outlook-msg-id-2"])
         assert len(results) == 2
         ids = {r["message_id"] for r in results}
         assert "outlook-msg-id-1" in ids
         assert "outlook-msg-id-2" in ids
 
     def test_skips_missing_messages(self, provider):
-        results = provider.batch_get_emails(
-            ["outlook-msg-id-1", "does-not-exist"]
-        )
+        results = provider.batch_get_emails(["outlook-msg-id-1", "does-not-exist"])
         assert len(results) == 1
 
     def test_empty_list(self, provider):
@@ -298,9 +266,7 @@ class TestGetThread:
 
 class TestDownloadAttachment:
     def test_download_returns_bytes(self, provider):
-        content = provider.download_attachment(
-            "outlook-msg-id-3", "outlook-attach-id-1"
-        )
+        content = provider.download_attachment("outlook-msg-id-3", "outlook-attach-id-1")
         assert isinstance(content, bytes)
         assert content == b"%PDF-1.4 mock pdf content"
 
@@ -360,11 +326,19 @@ class TestSendMessage:
         assert result["status"] == "sent"
 
     def test_send_marks_message_as_sent(self, provider):
-        provider.send_message(
-            to="recipient@example.com", subject="Test", body="Hello"
-        )
+        provider.send_message(to="recipient@example.com", subject="Test", body="Hello")
         new_msg = provider._mailbox._new_messages[-1]
         assert new_msg._sent is True
+
+    def test_send_raises_runtime_error_on_failure(self, provider):
+        """send() returning False must raise RuntimeError."""
+        # Patch new_message() to return a message whose send() returns False.
+        failing_msg = make_mock_message(object_id="fail-send-id")
+        failing_msg.send = lambda: False  # type: ignore[method-assign]
+        provider._mailbox.new_message = lambda: failing_msg  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="Failed to send message"):
+            provider.send_message(to="recipient@example.com", subject="Test", body="Hello")
 
 
 # ---------------------------------------------------------------------------
@@ -374,21 +348,28 @@ class TestSendMessage:
 
 class TestForwardMessage:
     def test_forward_basic(self, provider):
-        result = provider.forward_message(
-            "outlook-msg-id-1", to="fwd@example.com"
-        )
+        result = provider.forward_message("outlook-msg-id-1", to="fwd@example.com")
         assert result["status"] == "sent"
         assert "message_id" in result
 
     def test_forward_with_comment(self, provider):
-        result = provider.forward_message(
-            "outlook-msg-id-1", to="fwd@example.com", comment="FYI"
-        )
+        result = provider.forward_message("outlook-msg-id-1", to="fwd@example.com", comment="FYI")
         assert result["status"] == "sent"
 
     def test_forward_raises_on_missing_message(self, provider):
         with pytest.raises(ValueError, match="Message not found"):
             provider.forward_message("nonexistent", to="fwd@example.com")
+
+    def test_forward_raises_runtime_error_on_failure(self, provider):
+        """fwd.send() returning False must raise RuntimeError."""
+        # Make the forwarded stub's send() return False.
+        original_msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
+        fwd_stub = make_mock_message(object_id="fwd-fail-id")
+        fwd_stub.send = lambda: False  # type: ignore[method-assign]
+        original_msg.forward = lambda: fwd_stub  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="Failed to forward message"):
+            provider.forward_message("outlook-msg-id-1", to="fwd@example.com")
 
 
 # ---------------------------------------------------------------------------
@@ -427,11 +408,18 @@ class TestCreateDraft:
         assert new_msg.body_type == "HTML"
 
     def test_draft_saved(self, provider):
-        provider.create_draft(
-            to="r@example.com", subject="Draft", body="body"
-        )
+        provider.create_draft(to="r@example.com", subject="Draft", body="body")
         new_msg = provider._mailbox._new_messages[-1]
         assert new_msg._draft_saved is True
+
+    def test_create_draft_raises_runtime_error_on_failure(self, provider):
+        """save_draft() returning False must raise RuntimeError."""
+        failing_msg = make_mock_message(object_id="fail-draft-id")
+        failing_msg.save_draft = lambda: False  # type: ignore[method-assign]
+        provider._mailbox.new_message = lambda: failing_msg  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="Failed to save draft"):
+            provider.create_draft(to="r@example.com", subject="Draft", body="body")
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +453,14 @@ class TestSendDraft:
         with pytest.raises(ValueError, match="Draft not found"):
             provider.send_draft("nonexistent-draft")
 
+    def test_send_draft_raises_runtime_error_on_failure(self, provider):
+        """send() returning False on an existing draft must raise RuntimeError."""
+        draft_msg = provider._mailbox.get_message(object_id="outlook-draft-id-1")
+        draft_msg.send = lambda: False  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="Failed to send draft"):
+            provider.send_draft("outlook-draft-id-1")
+
 
 # ---------------------------------------------------------------------------
 # delete_draft
@@ -480,6 +476,14 @@ class TestDeleteDraft:
     def test_delete_draft_raises_on_missing(self, provider):
         with pytest.raises(ValueError, match="Draft not found"):
             provider.delete_draft("nonexistent-draft")
+
+    def test_delete_draft_raises_runtime_error_on_failure(self, provider):
+        """delete() returning False on an existing draft must raise RuntimeError."""
+        draft_msg = provider._mailbox.get_message(object_id="outlook-draft-id-1")
+        draft_msg.delete = lambda: False  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="Failed to delete draft"):
+            provider.delete_draft("outlook-draft-id-1")
 
 
 # ---------------------------------------------------------------------------
@@ -671,17 +675,13 @@ class TestBuildOutlookFilter:
     def test_to_addr(self, provider):
         q = EmailQuery(to_addr="bob@example.com")
         result = provider._build_outlook_filter(q)
-        assert any(
-            "toRecipients" in f[0] and f[2] == "bob@example.com"
-            for f in result._filters
-        )
+        assert any("toRecipients" in f[0] and f[2] == "bob@example.com" for f in result._filters)
 
     def test_subject(self, provider):
         q = EmailQuery(subject="Report")
         result = provider._build_outlook_filter(q)
         assert any(
-            f[0] == "subject" and f[1] == "contains" and f[2] == "Report"
-            for f in result._filters
+            f[0] == "subject" and f[1] == "contains" and f[2] == "Report" for f in result._filters
         )
 
     def test_after_date(self, provider):
@@ -809,9 +809,7 @@ class TestBatchGraphRequests:
         provider._account.con.protocol = MagicMock()
         provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "responses": [{"id": "1", "status": 200, "body": {}}]
-        }
+        mock_resp.json.return_value = {"responses": [{"id": "1", "status": 200, "body": {}}]}
         provider._account.con.post = MagicMock(return_value=mock_resp)
 
         requests = [{"id": "1", "method": "PATCH", "url": "/me/messages/m1"}]
@@ -829,10 +827,9 @@ class TestBatchGraphRequests:
         provider._account.con.post = MagicMock(return_value=mock_resp)
 
         requests = [
-            {"id": str(i), "method": "PATCH", "url": f"/me/messages/m{i}"}
-            for i in range(25)
+            {"id": str(i), "method": "PATCH", "url": f"/me/messages/m{i}"} for i in range(25)
         ]
-        results = provider._batch_graph_requests(requests)
+        provider._batch_graph_requests(requests)
         # Should make 2 POST calls (20 + 5)
         assert provider._account.con.post.call_count == 2
 
