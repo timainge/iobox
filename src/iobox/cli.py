@@ -571,7 +571,8 @@ def forward(
         if message_id is not None:
             typer.echo(f"Forwarding email {message_id} to {to}...")
             result = provider.forward_message(message_id=message_id, to=to, comment=note)
-            typer.echo(f"Successfully forwarded. New message ID: {result.get('message_id', 'unknown')}")
+            msg_id = result.get("message_id", "unknown")
+            typer.echo(f"Successfully forwarded. New message ID: {msg_id}")
         else:
             after, before = _parse_dates(days, start_date, end_date)
             eq = EmailQuery(

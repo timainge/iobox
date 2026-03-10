@@ -16,16 +16,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from iobox.providers.outlook import OutlookProvider
-
 from tests.fixtures.mock_outlook_responses import (
     MockHttpResponse,
     make_full_mock_account,
     make_mock_account,
-    MOCK_DELTA_RESPONSE,
-    MOCK_DELTA_RESPONSE_EMPTY,
-    MOCK_DELTA_RESPONSE_WITH_REMOVED,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

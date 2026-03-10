@@ -31,7 +31,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Low-level building blocks
 # ---------------------------------------------------------------------------
@@ -212,7 +211,7 @@ class MockMessage:
         self._read_marked = False
         return True
 
-    def forward(self) -> "MockMessage":
+    def forward(self) -> MockMessage:
         """Returns a new stub message to configure and send as a forward."""
         fwd = MockMessage(
             object_id=f"fwd-{self.object_id}",
@@ -241,23 +240,23 @@ class MockMessage:
 class MockQueryCondition:
     """Mimics a chained condition returned by ``Query.on_attribute()``."""
 
-    def __init__(self, query: "MockQuery", attribute: str) -> None:
+    def __init__(self, query: MockQuery, attribute: str) -> None:
         self._query = query
         self._attribute = attribute
 
-    def equals(self, value: Any) -> "MockQuery":
+    def equals(self, value: Any) -> MockQuery:
         self._query._filters.append((self._attribute, "eq", value))
         return self._query
 
-    def contains(self, value: Any) -> "MockQuery":
+    def contains(self, value: Any) -> MockQuery:
         self._query._filters.append((self._attribute, "contains", value))
         return self._query
 
-    def greater_equal(self, value: Any) -> "MockQuery":
+    def greater_equal(self, value: Any) -> MockQuery:
         self._query._filters.append((self._attribute, "ge", value))
         return self._query
 
-    def less(self, value: Any) -> "MockQuery":
+    def less(self, value: Any) -> MockQuery:
         self._query._filters.append((self._attribute, "lt", value))
         return self._query
 
@@ -273,11 +272,11 @@ class MockQuery:
     def on_attribute(self, attribute: str) -> MockQueryCondition:
         return MockQueryCondition(self, attribute)
 
-    def search(self, search_text: str) -> "MockQuery":
+    def search(self, search_text: str) -> MockQuery:
         self._search = search_text
         return self
 
-    def order_by(self, attribute: str, ascending: bool = True) -> "MockQuery":
+    def order_by(self, attribute: str, ascending: bool = True) -> MockQuery:
         self._order_by = attribute
         return self
 
@@ -395,7 +394,7 @@ class MockConnection:
         self.session = MockSession()
         self._delta_responses: dict[str, dict] = {}
 
-    def get(self, url: str, **kwargs: Any) -> "MockHttpResponse":
+    def get(self, url: str, **kwargs: Any) -> MockHttpResponse:
         if url in self._delta_responses:
             return MockHttpResponse(self._delta_responses[url])
         raise ValueError(f"No mock delta response registered for URL: {url!r}")

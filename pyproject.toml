@@ -96,4 +96,7 @@ dev-dependencies = [
     "pytest",
     "pytest-cov",
     "pytest-mock",
+    "mypy",
+    "ruff",
+    "types-PyYAML",
 ]

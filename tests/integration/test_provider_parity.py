@@ -8,30 +8,23 @@ Verifies that GmailProvider and OutlookProvider produce:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from iobox.markdown_converter import convert_email_to_markdown, convert_html_to_markdown
 from iobox.providers.base import EmailData, EmailQuery
 from iobox.providers.outlook import OutlookProvider
-
 from tests.fixtures.mock_outlook_responses import (
     make_full_mock_account,
-    make_mock_message,
-    MOCK_PLAIN_TEXT_MESSAGE,
-    MOCK_HTML_MESSAGE,
-    MOCK_ATTACHMENT_MESSAGE,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 # Required keys that must appear in every full-retrieval EmailData
-REQUIRED_METADATA_KEYS = {"message_id", "subject", "from_", "date", "snippet", "labels", "thread_id"}
+REQUIRED_METADATA_KEYS = {
+    "message_id", "subject", "from_", "date", "snippet", "labels", "thread_id"
+}
 REQUIRED_FULL_KEYS = REQUIRED_METADATA_KEYS | {"body", "content_type", "attachments"}
 
 

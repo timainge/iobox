@@ -9,11 +9,11 @@ field-by-field.
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.providers.base import AttachmentInfo, EmailData, EmailQuery
+from iobox.providers.base import EmailQuery
 from iobox.providers.gmail import GmailProvider
 
 

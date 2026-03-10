@@ -237,12 +237,15 @@ class TestCliCommands:
 
     def test_forward_batch(self):
         """Test forwarding multiple emails via query."""
+        _e = {"from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""}
         mock_emails = [
-            {"message_id": "m1", "subject": "First", "from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""},
-            {"message_id": "m2", "subject": "Second", "from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""},
+            {"message_id": "m1", "subject": "First", **_e},
+            {"message_id": "m2", "subject": "Second", **_e},
         ]
 
-        provider = _mock_provider(search_emails=mock_emails, forward_message={"message_id": "fwd-x"})
+        provider = _mock_provider(
+            search_emails=mock_emails, forward_message={"message_id": "fwd-x"}
+        )
         with patch("iobox.cli.get_provider", return_value=provider):
             result = runner.invoke(
                 app,
@@ -563,9 +566,10 @@ class TestNewCliFeatures:
 
     def test_trash_batch_confirm(self):
         """trash --query prompts for confirmation before trashing."""
+        _e = {"from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""}
         mock_emails = [
-            {"message_id": "m1", "subject": "Old Email", "from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""},
-            {"message_id": "m2", "subject": "Another Old", "from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""},
+            {"message_id": "m1", "subject": "Old Email", **_e},
+            {"message_id": "m2", "subject": "Another Old", **_e},
         ]
 
         provider = _mock_provider(search_emails=mock_emails)
@@ -579,8 +583,9 @@ class TestNewCliFeatures:
 
     def test_trash_batch_abort(self):
         """trash --query with 'n' input aborts without trashing."""
+        _e = {"from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""}
         mock_emails = [
-            {"message_id": "m1", "subject": "Old", "from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""},
+            {"message_id": "m1", "subject": "Old", **_e},
         ]
 
         provider = _mock_provider(search_emails=mock_emails)
@@ -615,8 +620,11 @@ class TestSyncFlag:
         """First --sync run: no history state, does full search, saves state."""
         mock_email = self._mock_email_data("m1")
 
+        _e = {
+            "from_": "", "date": "", "snippet": "", "subject": "Test", "labels": [], "thread_id": ""
+        }
         provider = _mock_provider(
-            search_emails=[{"message_id": "m1", "from_": "", "date": "", "snippet": "", "subject": "Test", "labels": [], "thread_id": ""}],
+            search_emails=[{"message_id": "m1", **_e}],
             batch_get_emails=[mock_email],
             get_sync_state="hist-100",
         )
@@ -699,9 +707,12 @@ class TestSyncFlag:
         """When get_new_messages returns None, falls back to full search."""
         mock_email = self._mock_email_data("m-full")
 
+        _e = {
+            "from_": "", "date": "", "snippet": "", "subject": "Test", "labels": [], "thread_id": ""
+        }
         provider = _mock_provider(
             get_new_messages=None,
-            search_emails=[{"message_id": "m-full", "from_": "", "date": "", "snippet": "", "subject": "Test", "labels": [], "thread_id": ""}],
+            search_emails=[{"message_id": "m-full", **_e}],
             batch_get_emails=[mock_email],
             get_sync_state="hist-300",
         )

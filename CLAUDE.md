@@ -63,6 +63,18 @@ pip install 'iobox[outlook]'
 
 ## Development Commands
 
+### Pre-commit verification
+```bash
+# Run the full pre-commit check suite (lint + type-check + tests)
+make check
+
+# Individual targets
+make lint        # ruff linting
+make fmt         # ruff formatting
+make type-check  # mypy type checking
+make test        # unit + integration tests
+```
+
 ### Testing
 ```bash
 # Run all tests with coverage
