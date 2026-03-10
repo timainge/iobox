@@ -248,7 +248,7 @@ client ID without `importlib.reload`.
 
 ---
 
-### [ ] update-claude-md-provider-context [depends: fix-cli-result-key-mismatch]
+### [x] update-claude-md-provider-context [depends: fix-cli-result-key-mismatch]
 
 **CLAUDE.md still describes iobox as "a Gmail to Markdown converter" after Phase 10.**
 
