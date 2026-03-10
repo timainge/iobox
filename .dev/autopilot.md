@@ -137,7 +137,7 @@ call returns `False`.
 
 ---
 
-### [ ] split-emaildata-typeddict [depends: fix-outlook-label-filter]
+### [x] split-emaildata-typeddict [depends: fix-outlook-label-filter]
 
 **`EmailData(total=False)` makes all fields optional — required fields invisible to mypy.**
 
@@ -178,7 +178,7 @@ in a Python REPL; mypy reports no new errors for `src/iobox/providers/base.py`.
 
 ---
 
-### [ ] add-get-new-messages-with-token-to-abc [depends: split-emaildata-typeddict]
+### [x] add-get-new-messages-with-token-to-abc [depends: split-emaildata-typeddict]
 
 **`get_new_messages_with_token()` is a useful public method absent from the ABC.**
 
