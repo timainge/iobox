@@ -20,10 +20,9 @@ class AttachmentInfo(TypedDict):
     size: int
 
 
-class EmailData(TypedDict, total=False):
-    """Normalized email data dict returned by all providers."""
+class EmailMetadata(TypedDict):
+    """Fields always present in every EmailData dict."""
 
-    # Required — always present
     message_id: str
     subject: str
     from_: str          # "Display Name <email>" format
@@ -32,7 +31,10 @@ class EmailData(TypedDict, total=False):
     labels: list[str]   # Gmail labels or Outlook categories
     thread_id: str      # Gmail threadId or Outlook conversationId
 
-    # Present in full retrieval, absent in search/metadata results
+
+class EmailData(EmailMetadata, total=False):
+    """Full email data — optional fields present only after content retrieval."""
+
     body: str
     content_type: str   # 'text/plain' or 'text/html'
     attachments: list[AttachmentInfo]

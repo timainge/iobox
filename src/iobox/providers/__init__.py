@@ -9,11 +9,12 @@ the corresponding provider is actually requested.
 
 import importlib
 
-from iobox.providers.base import AttachmentInfo, EmailData, EmailProvider, EmailQuery
+from iobox.providers.base import AttachmentInfo, EmailData, EmailMetadata, EmailProvider, EmailQuery
 
 __all__ = [
     "AttachmentInfo",
     "EmailData",
+    "EmailMetadata",
     "EmailProvider",
     "EmailQuery",
     "get_provider",
