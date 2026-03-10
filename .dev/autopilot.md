@@ -333,7 +333,7 @@ dev-dependencies = [
 
 ---
 
-### [ ] configure-mypy-strict [depends: add-makefile, split-emaildata-typeddict]
+### [ ] configure-mypy-strict [depends: add-makefile, split-emaildata-typeddict] [attempts: 3]
 
 **Mypy is configured but not enforced; `[tool.mypy]` in `pyproject.toml` is minimal.**
 
@@ -387,7 +387,7 @@ passes end-to-end.
 
 ---
 
-### [ ] fix-outlook-search-all-mail [depends: fix-outlook-label-filter]
+### [x] fix-outlook-search-all-mail [depends: fix-outlook-label-filter]
 
 **Outlook `search_emails`, `get_thread`, and `batch_get_emails` search inbox only.**
 
@@ -420,7 +420,7 @@ full parity cannot be achieved without a live tenant test.
 
 ---
 
-### [ ] wire-outlook-batch-org-operations [depends: fix-outlook-write-op-error-handling]
+### [x] wire-outlook-batch-org-operations [depends: fix-outlook-write-op-error-handling] [attempts: 1]
 
 **`_batch_graph_requests` helper exists but is never called — org methods use single-message operations.**
 
