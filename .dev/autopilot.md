@@ -281,7 +281,7 @@ Files to change:
 
 ---
 
-### [ ] add-makefile
+### [x] add-makefile
 
 **No dev task runner exists; agents and contributors reconstruct command strings from CLAUDE.md.**
 
