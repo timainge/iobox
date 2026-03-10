@@ -66,7 +66,7 @@ the label filter line reads `q = q.on_attribute(...)`.
 
 ---
 
-### [ ] fix-cli-result-key-mismatch
+### [x] fix-cli-result-key-mismatch
 
 **Two CLI key bugs — result IDs always show "unknown"; `draft-list` raises KeyError.**
 
