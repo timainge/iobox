@@ -202,7 +202,7 @@ class OutlookProvider(EmailProvider):
             # and use a raw marker so the provider can reconstruct it.
             escaped = query.label.replace("'", "''")
             raw_expr = f"categories/any(c:c eq '{escaped}')"
-            q.on_attribute(raw_expr).equals(True)
+            q = q.on_attribute(raw_expr).equals(True)
 
         return q
 
