@@ -2,7 +2,7 @@
 goal: Fix post-Phase-10 code review findings for Outlook/O365 provider
 spec: .dev/code-review.md
 approved: true
-status: active
+status: stuck
 ---
 
 ## Context
@@ -333,7 +333,7 @@ dev-dependencies = [
 
 ---
 
-### [ ] configure-mypy-strict [depends: add-makefile, split-emaildata-typeddict] [attempts: 3]
+### [x] configure-mypy-strict [depends: add-makefile, split-emaildata-typeddict]
 
 **Mypy is configured but not enforced; `[tool.mypy]` in `pyproject.toml` is minimal.**
 

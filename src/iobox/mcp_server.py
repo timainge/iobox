@@ -9,6 +9,7 @@ Run with: python -m iobox.mcp_server
 """
 
 import os
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -52,7 +53,7 @@ mcp = FastMCP("iobox")
 # with mcp.tool() based on the active access mode.
 # ---------------------------------------------------------------------------
 
-_ALL_TOOLS: dict[str, callable] = {}
+_ALL_TOOLS: dict[str, Any] = {}
 
 
 def _tool(fn):

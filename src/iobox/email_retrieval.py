@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 _label_cache: dict[str, str] = {}
 
 
-def get_label_map(service) -> dict[str, str]:
+def get_label_map(service: Any) -> dict[str, str]:
     """
     Fetch the Gmail label ID-to-name mapping for the authenticated user.
 
@@ -109,9 +109,9 @@ def _process_message_response(
 
 
 def get_email_content(
-    service,
-    message_id: str = None,
-    msg_id: str = None,
+    service: Any,
+    message_id: str | None = None,
+    msg_id: str | None = None,
     preferred_content_type: str = "text/plain",
     label_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -154,7 +154,7 @@ def get_email_content(
 
 
 def batch_get_emails(
-    service,
+    service: Any,
     message_ids: list[str],
     format: str = "full",
     preferred_content_type: str = "text/plain",
@@ -177,7 +177,7 @@ def batch_get_emails(
     results: dict[str, Any] = {}
     errors: dict[str, str] = {}
 
-    def callback(request_id, response, exception):
+    def callback(request_id: str, response: Any, exception: Exception | None) -> None:
         if exception:
             errors[request_id] = str(exception)
         else:
@@ -209,7 +209,7 @@ def batch_get_emails(
 
 
 def get_thread_content(
-    service, thread_id: str, preferred_content_type: str = "text/plain"
+    service: Any, thread_id: str, preferred_content_type: str = "text/plain"
 ) -> list[dict[str, Any]]:
     """
     Retrieve all messages in a Gmail thread.
@@ -270,7 +270,7 @@ def get_thread_content(
 
 
 def modify_message_labels(
-    service,
+    service: Any,
     message_id: str,
     add_labels: list[str] | None = None,
     remove_labels: list[str] | None = None,
@@ -292,10 +292,13 @@ def modify_message_labels(
         body["addLabelIds"] = add_labels
     if remove_labels:
         body["removeLabelIds"] = remove_labels
-    return service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+    result: dict[str, Any] = (
+        service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+    )
+    return result
 
 
-def resolve_label_name(service, label_name: str) -> str:
+def resolve_label_name(service: Any, label_name: str) -> str:
     """
     Resolve a human-readable label name to a Gmail label ID.
 
@@ -326,7 +329,7 @@ def resolve_label_name(service, label_name: str) -> str:
 
 
 def batch_modify_labels(
-    service,
+    service: Any,
     message_ids: list[str],
     add_labels: list[str] | None = None,
     remove_labels: list[str] | None = None,
@@ -357,7 +360,7 @@ def batch_modify_labels(
     return {"modified_count": len(message_ids)}
 
 
-def trash_message(service, message_id: str) -> dict[str, Any]:
+def trash_message(service: Any, message_id: str) -> dict[str, Any]:
     """
     Move a message to trash.
 
@@ -368,10 +371,11 @@ def trash_message(service, message_id: str) -> dict[str, Any]:
     Returns:
         dict: Updated message resource
     """
-    return service.users().messages().trash(userId="me", id=message_id).execute()
+    result: dict[str, Any] = service.users().messages().trash(userId="me", id=message_id).execute()
+    return result
 
 
-def untrash_message(service, message_id: str) -> dict[str, Any]:
+def untrash_message(service: Any, message_id: str) -> dict[str, Any]:
     """
     Remove a message from trash.
 
@@ -382,7 +386,10 @@ def untrash_message(service, message_id: str) -> dict[str, Any]:
     Returns:
         dict: Updated message resource
     """
-    return service.users().messages().untrash(userId="me", id=message_id).execute()
+    result: dict[str, Any] = (
+        service.users().messages().untrash(userId="me", id=message_id).execute()
+    )
+    return result
 
 
 def _find_attachments(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -414,7 +421,7 @@ def _find_attachments(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return attachments
 
 
-def download_attachment(service, message_id: str, attachment_id: str) -> bytes:
+def download_attachment(service: Any, message_id: str, attachment_id: str) -> bytes:
     """
     Download an email attachment by its ID.
 

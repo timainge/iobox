@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 
 def batch_get_metadata(
-    service, message_ids: list[str], label_map: dict[str, str] | None = None
+    service: Any, message_ids: list[str], label_map: dict[str, str] | None = None
 ) -> list[dict[str, Any]]:
     """
     Fetch metadata for multiple messages using BatchHttpRequest.
@@ -38,7 +38,7 @@ def batch_get_metadata(
     results: dict[str, Any] = {}
     errors: dict[str, str] = {}
 
-    def callback(request_id, response, exception):
+    def callback(request_id: str, response: Any, exception: Exception | None) -> None:
         if exception:
             errors[request_id] = str(exception)
         else:
@@ -82,7 +82,7 @@ def batch_get_metadata(
                     "from": headers.get("From", "Unknown"),
                     "date": headers.get("Date", ""),
                     "snippet": msg.get("snippet", ""),
-                    "labels": resolved_labels,
+                    "labels": resolved_labels,  # type: ignore[dict-item]  # resolved_labels may contain list values from batch label resolution
                 }
             )
         else:

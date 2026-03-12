@@ -25,7 +25,7 @@ from iobox.file_manager import (
 from iobox.markdown import convert_email_to_markdown
 from iobox.markdown_converter import convert_thread_to_markdown
 from iobox.modes import CLI_COMMANDS_BY_MODE, AccessMode, get_mode_from_env
-from iobox.providers import EmailProvider, EmailQuery, get_provider
+from iobox.providers import EmailData, EmailProvider, EmailQuery, get_provider
 
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
@@ -36,7 +36,7 @@ version_callback = typer.Option(
     "--version",
     "-v",
     help="Show version and exit",
-    callback=lambda value: typer.echo(f"iobox version {__version__}") or exit(0) if value else None,
+    callback=lambda value: typer.echo(f"iobox version {__version__}") or exit(0) if value else None,  # type: ignore[func-returns-value]  # typer.echo returns None; `or` is intentional short-circuit
 )
 
 
@@ -45,7 +45,7 @@ version_callback = typer.Option(
 # ---------------------------------------------------------------------------
 
 
-def _email_data_to_dict(data: dict[str, Any]) -> dict[str, Any]:
+def _email_data_to_dict(data: EmailData | dict[str, Any]) -> dict[str, Any]:
     """Convert an EmailData dict (``from_`` key) to legacy format (``from`` key).
 
     Existing modules (markdown_converter, file_manager) expect the sender to
@@ -643,9 +643,9 @@ def send(
             content_type = "html"
 
         if attach:
-            for file_path in attach:
-                if not Path(file_path).exists():
-                    typer.echo(f"Error: Attachment file not found: {file_path}")
+            for attach_path in attach:
+                if not Path(attach_path).exists():
+                    typer.echo(f"Error: Attachment file not found: {attach_path}")
                     raise typer.Exit(code=1)
 
         provider = _get_provider(ctx)
@@ -702,9 +702,9 @@ def draft_create(
             content_type = "html"
 
         if attach:
-            for file_path in attach:
-                if not Path(file_path).exists():
-                    typer.echo(f"Error: Attachment file not found: {file_path}")
+            for attach_path in attach:
+                if not Path(attach_path).exists():
+                    typer.echo(f"Error: Attachment file not found: {attach_path}")
                     raise typer.Exit(code=1)
 
         provider = _get_provider(ctx)

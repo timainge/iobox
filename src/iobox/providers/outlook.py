@@ -278,7 +278,7 @@ class OutlookProvider(EmailProvider):
         self._mailbox = self._account.mailbox()
         self._set_immutable_id_header()
 
-    def get_profile(self) -> dict:
+    def get_profile(self) -> dict[str, Any]:
         """Return basic authentication status as a profile dict.
 
         python-o365 does not expose ``/me`` profile data via a dedicated method;
@@ -416,7 +416,7 @@ class OutlookProvider(EmailProvider):
         for attachment in msg.attachments:
             a_id = getattr(attachment, "attachment_id", None)
             if a_id == attachment_id:
-                return bytes(attachment.content)  # type: ignore[arg-type]
+                return bytes(attachment.content)
 
         raise ValueError(f"Attachment {attachment_id!r} not found in message {message_id!r}")
 
@@ -433,7 +433,7 @@ class OutlookProvider(EmailProvider):
         bcc: str | None = None,
         content_type: str = "plain",
         attachments: list[str] | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Compose and immediately send an email via Microsoft Graph.
 
         python-o365 handles attachment sizing internally:
@@ -469,7 +469,9 @@ class OutlookProvider(EmailProvider):
             raise RuntimeError(f"Failed to send message: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "sent"}
 
-    def forward_message(self, message_id: str, to: str, comment: str | None = None) -> dict:
+    def forward_message(
+        self, message_id: str, to: str, comment: str | None = None
+    ) -> dict[str, Any]:
         """Forward an existing message using the native Graph forward endpoint.
 
         No manual "---------- Forwarded message ----------" body construction
@@ -505,7 +507,7 @@ class OutlookProvider(EmailProvider):
         cc: str | None = None,
         bcc: str | None = None,
         content_type: str = "plain",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Create a new draft message and save it in the Drafts folder.
 
         Args:
@@ -535,7 +537,7 @@ class OutlookProvider(EmailProvider):
             raise RuntimeError(f"Failed to save draft: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "draft"}
 
-    def list_drafts(self, max_results: int = 10) -> list[dict]:
+    def list_drafts(self, max_results: int = 10) -> list[dict[str, Any]]:
         """Return a list of draft summaries from the Drafts folder.
 
         Args:
@@ -555,7 +557,7 @@ class OutlookProvider(EmailProvider):
             for msg in messages
         ]
 
-    def send_draft(self, draft_id: str) -> dict:
+    def send_draft(self, draft_id: str) -> dict[str, Any]:
         """Send an existing draft message.
 
         Args:
@@ -574,7 +576,7 @@ class OutlookProvider(EmailProvider):
             raise RuntimeError(f"Failed to send draft: {draft_id!r}")
         return {"message_id": draft_id, "status": "sent"}
 
-    def delete_draft(self, draft_id: str) -> dict:
+    def delete_draft(self, draft_id: str) -> dict[str, Any]:
         """Permanently delete a draft message.
 
         Args:
@@ -1044,8 +1046,8 @@ class OutlookProvider(EmailProvider):
                         message_ids.append(mid)
 
             # Check for next page or final delta link.
-            next_link = data.get("@odata.nextLink")
-            delta_link = data.get("@odata.deltaLink")
+            next_link: str | None = data.get("@odata.nextLink")
+            delta_link: str | None = data.get("@odata.deltaLink")
 
             if delta_link:
                 return delta_link

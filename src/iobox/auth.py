@@ -8,6 +8,7 @@ Supports multi-profile token storage with per-account, per-scope-tier token file
 import logging
 import os
 import shutil
+from typing import Any
 
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
@@ -112,7 +113,7 @@ def _maybe_migrate_legacy_token(account: str) -> None:
 
     # Read the legacy token to determine its scope tier
     try:
-        creds = Credentials.from_authorized_user_file(legacy_path)
+        creds = Credentials.from_authorized_user_file(legacy_path)  # type: ignore[no-untyped-call]
     except Exception:
         logger.warning("Could not read legacy token.json for migration; skipping.")
         return
@@ -156,7 +157,7 @@ def _resolve_token(account: str, mode: AccessMode) -> tuple[str | None, str]:
     return None, save_path
 
 
-def get_gmail_service():
+def get_gmail_service() -> Any:
     """
     Authenticate with Gmail API and return a service object.
 
@@ -181,7 +182,7 @@ def get_gmail_service():
     creds = None
     if load_path is not None:
         logger.info(f"Loading existing credentials from {load_path}")
-        creds = Credentials.from_authorized_user_file(load_path, scopes)
+        creds = Credentials.from_authorized_user_file(load_path, scopes)  # type: ignore[no-untyped-call]
 
         # Validate scopes — on mismatch, set creds to None (never delete the file).
         if creds and creds.valid and hasattr(creds, "scopes") and creds.scopes:
@@ -221,12 +222,12 @@ def get_gmail_service():
     return service
 
 
-def _get_service_legacy(scopes: list[str]):
+def _get_service_legacy(scopes: list[str]) -> Any:
     """Legacy single-file token behavior when GMAIL_TOKEN_FILE is explicitly set."""
     creds = None
     if os.path.exists(TOKEN_PATH):
         logger.info(f"Loading existing credentials from {TOKEN_PATH}")
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, scopes)
+        creds = Credentials.from_authorized_user_file(TOKEN_PATH, scopes)  # type: ignore[no-untyped-call]
 
         if creds and creds.valid and hasattr(creds, "scopes") and creds.scopes:
             required = set(scopes)
@@ -262,7 +263,7 @@ def _get_service_legacy(scopes: list[str]):
     return service
 
 
-def get_gmail_profile(service) -> dict:
+def get_gmail_profile(service: Any) -> dict[str, Any]:
     """
     Get Gmail profile info including email address and mailbox stats.
 
@@ -272,10 +273,11 @@ def get_gmail_profile(service) -> dict:
     Returns:
         dict: Profile data with emailAddress, messagesTotal, threadsTotal
     """
-    return service.users().getProfile(userId="me").execute()
+    result: dict[str, Any] = service.users().getProfile(userId="me").execute()
+    return result
 
 
-def check_auth_status():
+def check_auth_status() -> dict[str, Any]:
     """
     Check the status of Gmail API authentication.
 
@@ -294,7 +296,7 @@ def check_auth_status():
         account = get_active_account()
         _maybe_migrate_legacy_token(account)
         load_path, _ = _resolve_token(account, mode)
-        effective_token_path = load_path  # May be None
+        effective_token_path = load_path or ""  # _resolve_token may return None
 
     status = {
         "authenticated": False,
@@ -308,7 +310,8 @@ def check_auth_status():
 
     if status["token_file_exists"]:
         try:
-            creds = Credentials.from_authorized_user_file(effective_token_path, scopes)
+            assert effective_token_path is not None  # guaranteed by token_file_exists check above
+            creds = Credentials.from_authorized_user_file(effective_token_path, scopes)  # type: ignore[no-untyped-call]
             status["authenticated"] = creds.valid
             status["expired"] = creds.expired if hasattr(creds, "expired") else False
             status["has_refresh_token"] = (

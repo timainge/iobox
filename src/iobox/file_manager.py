@@ -362,8 +362,8 @@ def download_email_attachments(
         def download_fn(message_id: str, attachment_id: str) -> bytes:  # type: ignore[misc]
             return _dl(service, message_id, attachment_id)
 
-    message_id = email_data.get("message_id", "")
-    attachments = email_data.get("attachments", [])
+    message_id = email_data.get("message_id", "")  # type: ignore[union-attr]  # caller guarantees non-None at this point
+    attachments = email_data.get("attachments", [])  # type: ignore[union-attr]
 
     if not attachments:
         logging.info("No attachments found")

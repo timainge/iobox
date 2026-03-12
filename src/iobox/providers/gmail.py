@@ -140,7 +140,7 @@ class GmailProvider(EmailProvider):
         """Trigger the OAuth flow (or load cached credentials) immediately."""
         self._service = _auth.get_gmail_service()
 
-    def get_profile(self) -> dict:
+    def get_profile(self) -> dict[str, Any]:
         """Return Gmail profile info (emailAddress, messagesTotal, etc.)."""
         return _auth.get_gmail_profile(self._svc)
 
@@ -223,7 +223,7 @@ class GmailProvider(EmailProvider):
         bcc: str | None = None,
         content_type: str = "plain",
         attachments: list[str] | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Compose and immediately send an email."""
         message = _sender.compose_message(
             to=to,
@@ -236,7 +236,9 @@ class GmailProvider(EmailProvider):
         )
         return _sender.send_message(self._svc, message)
 
-    def forward_message(self, message_id: str, to: str, comment: str | None = None) -> dict:
+    def forward_message(
+        self, message_id: str, to: str, comment: str | None = None
+    ) -> dict[str, Any]:
         """Retrieve an existing email and forward it to ``to``."""
         return _sender.forward_email(
             self._svc,
@@ -253,7 +255,7 @@ class GmailProvider(EmailProvider):
         cc: str | None = None,
         bcc: str | None = None,
         content_type: str = "plain",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Compose a message and save it as a draft."""
         message = _sender.compose_message(
             to=to,
@@ -265,15 +267,15 @@ class GmailProvider(EmailProvider):
         )
         return _sender.create_draft(self._svc, message)
 
-    def list_drafts(self, max_results: int = 10) -> list[dict]:
+    def list_drafts(self, max_results: int = 10) -> list[dict[str, Any]]:
         """Return a list of draft summaries (id, subject, snippet)."""
         return _sender.list_drafts(self._svc, max_results=max_results)
 
-    def send_draft(self, draft_id: str) -> dict:
+    def send_draft(self, draft_id: str) -> dict[str, Any]:
         """Send an existing draft."""
         return _sender.send_draft(self._svc, draft_id)
 
-    def delete_draft(self, draft_id: str) -> dict:
+    def delete_draft(self, draft_id: str) -> dict[str, Any]:
         """Permanently delete a draft."""
         return _sender.delete_draft(self._svc, draft_id)
 

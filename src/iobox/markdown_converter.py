@@ -177,7 +177,7 @@ def convert_thread_to_markdown(messages: list[dict[str, Any]]) -> str:
 
     # Collect unique labels across all messages
     all_labels: list[str] = []
-    seen: set = set()
+    seen: set[str] = set()
     for msg in messages:
         for lbl in msg.get("labels", []):
             if lbl not in seen:

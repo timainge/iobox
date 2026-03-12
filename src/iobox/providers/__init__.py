@@ -8,6 +8,7 @@ the corresponding provider is actually requested.
 """
 
 import importlib
+from typing import Any
 
 from iobox.providers.base import AttachmentInfo, EmailData, EmailMetadata, EmailProvider, EmailQuery
 
@@ -30,7 +31,7 @@ _INSTALL_HINTS: dict[str, str] = {
 }
 
 
-def get_provider(name: str = "gmail", **kwargs) -> EmailProvider:
+def get_provider(name: str = "gmail", **kwargs: Any) -> EmailProvider:
     """Instantiate an email provider by name.
 
     Uses lazy importlib import so Outlook dependencies are never
@@ -62,4 +63,5 @@ def get_provider(name: str = "gmail", **kwargs) -> EmailProvider:
         raise
 
     cls = getattr(module, class_name)
-    return cls(**kwargs)
+    instance: EmailProvider = cls(**kwargs)
+    return instance

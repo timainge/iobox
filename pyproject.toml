@@ -88,8 +88,27 @@ ignore = ["B008"]
 
 [tool.mypy]
 python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+exclude = ["tests/live/", "tests/fixtures/"]
 warn_return_any = true
 warn_unused_configs = true
+
+# Legacy modules pre-date strict typing — relax per-module rather than suppress wholesale.
+# New code in src/iobox/providers/ is held to full strict mode.
+# Note: strict=false in overrides does NOT undo flags set by global strict=true;
+# each flag must be explicitly reset.
+[[tool.mypy.overrides]]
+module = ["iobox.cli", "iobox.mcp_server", "iobox.file_manager", "iobox.email_search", "iobox.auth", "iobox.markdown", "iobox.markdown_converter"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+disallow_any_generics = false
+warn_return_any = false
+warn_unused_ignores = false
+check_untyped_defs = false
+no_implicit_reexport = false
 
 [tool.uv]
 dev-dependencies = [
@@ -99,4 +118,5 @@ dev-dependencies = [
     "mypy",
     "ruff",
     "types-PyYAML",
+    "types-python-dateutil",
 ]

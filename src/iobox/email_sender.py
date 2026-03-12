@@ -48,6 +48,7 @@ def compose_message(
         dict: Message body with 'raw' base64url-encoded RFC 2822 payload
     """
     text_part = MIMEText(body, content_type)
+    message: MIMEMultipart | MIMEText
 
     if attachments:
         if content_type == "html":
@@ -140,7 +141,7 @@ def compose_forward_message(
     return compose_message(to=to, subject=subject, body=body, from_addr=from_addr)
 
 
-def send_message(service, message: dict[str, str]) -> dict[str, Any]:
+def send_message(service: Any, message: dict[str, str]) -> dict[str, Any]:
     """
     Send an email message via the Gmail API.
 
@@ -152,7 +153,9 @@ def send_message(service, message: dict[str, str]) -> dict[str, Any]:
         dict: Gmail API send response containing the message id and other metadata
     """
     try:
-        result = service.users().messages().send(userId="me", body=message).execute()
+        result: dict[str, Any] = (
+            service.users().messages().send(userId="me", body=message).execute()
+        )
         logging.info(f"Message sent successfully. Message Id: {result.get('id', '')}")
         return result
     except HttpError as error:
@@ -161,7 +164,7 @@ def send_message(service, message: dict[str, str]) -> dict[str, Any]:
 
 
 def forward_email(
-    service,
+    service: Any,
     message_id: str,
     to: str,
     from_addr: str | None = None,
@@ -190,7 +193,7 @@ def forward_email(
     return send_message(service, message)
 
 
-def create_draft(service, message: dict[str, str]) -> dict[str, Any]:
+def create_draft(service: Any, message: dict[str, str]) -> dict[str, Any]:
     """
     Create a Gmail draft.
 
@@ -201,11 +204,13 @@ def create_draft(service, message: dict[str, str]) -> dict[str, Any]:
     Returns:
         dict: The draft resource dict from the Gmail API
     """
-    draft = service.users().drafts().create(userId="me", body={"message": message}).execute()
+    draft: dict[str, Any] = (
+        service.users().drafts().create(userId="me", body={"message": message}).execute()
+    )
     return draft
 
 
-def list_drafts(service, max_results: int = 10) -> list[dict[str, Any]]:
+def list_drafts(service: Any, max_results: int = 10) -> list[dict[str, Any]]:
     """
     List Gmail drafts.
 
@@ -235,7 +240,7 @@ def list_drafts(service, max_results: int = 10) -> list[dict[str, Any]]:
     return draft_list
 
 
-def get_draft(service, draft_id: str) -> dict[str, Any]:
+def get_draft(service: Any, draft_id: str) -> dict[str, Any]:
     """
     Get a specific draft by ID.
 
@@ -246,10 +251,13 @@ def get_draft(service, draft_id: str) -> dict[str, Any]:
     Returns:
         dict: The full draft resource dict from the Gmail API
     """
-    return service.users().drafts().get(userId="me", id=draft_id, format="full").execute()
+    result: dict[str, Any] = (
+        service.users().drafts().get(userId="me", id=draft_id, format="full").execute()
+    )
+    return result
 
 
-def send_draft(service, draft_id: str) -> dict[str, Any]:
+def send_draft(service: Any, draft_id: str) -> dict[str, Any]:
     """
     Send an existing draft.
 
@@ -260,10 +268,13 @@ def send_draft(service, draft_id: str) -> dict[str, Any]:
     Returns:
         dict: Gmail API send response
     """
-    return service.users().drafts().send(userId="me", body={"id": draft_id}).execute()
+    result: dict[str, Any] = (
+        service.users().drafts().send(userId="me", body={"id": draft_id}).execute()
+    )
+    return result
 
 
-def delete_draft(service, draft_id: str) -> dict[str, Any]:
+def delete_draft(service: Any, draft_id: str) -> dict[str, Any]:
     """
     Permanently delete a draft.
 

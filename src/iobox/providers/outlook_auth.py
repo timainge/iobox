@@ -21,6 +21,7 @@ CREDENTIALS_DIR        Base directory for all iobox credential files.
 
 import logging
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -50,7 +51,7 @@ OUTLOOK_SCOPES: list[str] = ["Mail.ReadWrite", "Mail.Send"]
 # ---------------------------------------------------------------------------
 
 
-def _get_config() -> dict:
+def _get_config() -> dict[str, str]:
     """Return a dict of resolved configuration values.
 
     Reads environment variables at call time so that tests can patch
@@ -140,7 +141,7 @@ def get_outlook_account(*, device_code: bool = False) -> "Account":  # type: ign
     return account
 
 
-def check_outlook_auth_status() -> dict:
+def check_outlook_auth_status() -> dict[str, Any]:
     """Return Outlook authentication status without triggering an auth flow.
 
     Inspects the token file and, if present, instantiates ``Account`` to check
@@ -166,7 +167,7 @@ def check_outlook_auth_status() -> dict:
     cfg = _get_config()
     token_dir = cfg["token_dir"]
     token_path = os.path.join(token_dir, "o365_token.txt")
-    status: dict = {
+    status: dict[str, Any] = {
         "authenticated": False,
         "client_id_configured": bool(cfg["client_id"]),
         "tenant_id": cfg["tenant_id"],

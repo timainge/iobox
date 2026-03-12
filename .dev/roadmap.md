@@ -1,112 +1,57 @@
-# Iobox Roadmap
+# Roadmap: iobox
 
-Strategic direction for iobox, organized by implementation phase. Functional enhancements first, then integration and distribution work.
+- **Date**: 2026-03-07
+- **Target**: Publish library — release to PyPI, deploy docs site, promote MCP integration
+- **Effort**: 1–2 weeks
 
-Each phase has a dedicated spec doc in `docs/specs/` with detailed requirements, file changes, and acceptance criteria.
+## Why This Target
 
-## Current State
+All 9 development phases are complete — packaging, CI/CD, and docs are already scaffolded. The
+project is a `git tag` and a `twine upload` away from being a real PyPI package, and the MCP
+server is a timely differentiator worth promoting now.
 
-- **CLI commands**: `search`, `save`, `send`, `forward`, `label`, `trash`, `draft-create`, `draft-list`, `draft-send`, `draft-delete`, `auth-status`, `version`
-- **Gmail API coverage**: `messages.list`, `messages.get`, `messages.send`, `messages.modify`, `messages.batchModify`, `messages.trash`, `messages.untrash`, `messages.attachments.get`, `drafts.*`, `history.list`, `users.getProfile`
-- **OAuth scopes**: `gmail.modify` + `gmail.compose`
-- **Output**: Markdown + YAML frontmatter, optional attachment downloads, thread export
-- **Packaging**: `pyproject.toml` with hatchling, MkDocs documentation site
-- **Testing**: 170 unit tests, live CLI integration suite (21 scenarios)
+## Steps to Ship
 
-## Phase Overview
+### Phase 1: PyPI Release
+- [ ] Verify `pyproject.toml` version, classifiers, and `[project.urls]` (homepage, docs, changelog)
+- [ ] Dry-run: `uv build && twine check dist/*`
+- [ ] Configure PyPI Trusted Publishing (OIDC) in the PyPI project settings
+- [ ] Tag `v1.0.0`, push tag — confirm CI `release.yml` publishes successfully
+- [ ] Smoke-test: `pip install iobox` on a clean env, run `iobox --help` and `iobox auth-status`
 
-| # | Phase | Spec | Status |
-|---|---|---|---|
-| 1 | [Critical Bug Fixes](#phase-1-critical-bug-fixes) | [specs/01-critical-fixes.md](specs/01-critical-fixes.md) | Complete |
-| 2 | [Gmail Read Enhancements](#phase-2-gmail-read-enhancements) | [specs/02-read-enhancements.md](specs/02-read-enhancements.md) | Complete |
-| 3 | [Gmail Write Operations](#phase-3-gmail-write-operations) | [specs/03-write-operations.md](specs/03-write-operations.md) | Complete |
-| 4 | [Enhanced Send and Drafts](#phase-4-enhanced-send-and-drafts) | [specs/04-send-and-drafts.md](specs/04-send-and-drafts.md) | Complete |
-| 5 | [Performance](#phase-5-performance) | [specs/05-performance.md](specs/05-performance.md) | Complete |
-| 6 | [Packaging and Distribution](#phase-6-packaging-and-distribution) | [specs/06-packaging.md](specs/06-packaging.md) | Complete |
-| 7 | [MCP Server](#phase-7-mcp-server) | [specs/07-mcp-server.md](specs/07-mcp-server.md) | Complete |
-| 8 | [CI/CD](#phase-8-cicd) | [specs/08-cicd.md](specs/08-cicd.md) | Complete |
-| 9 | [Documentation Site](#phase-9-documentation-site) | [specs/09-docs-site.md](specs/09-docs-site.md) | Complete |
+### Phase 2: Docs & README
+- [ ] Deploy MkDocs site via `mkdocs gh-deploy` or add GitHub Pages step to CI
+- [ ] Update README: add PyPI badge, one-liner install, and MCP setup snippet for Claude Desktop
+- [ ] Add a Quickstart doc page: authenticate → search → save in under 5 minutes
+- [ ] Confirm `pip install iobox[mcp]` installs FastMCP and `mcp_server.py` is wired correctly
 
----
+### Phase 3: O365 Provider (v1.1)
+- [ ] Define `EmailProvider` abstract base class (search, fetch, send, label, trash, draft)
+- [ ] Refactor Gmail modules to implement the interface without breaking existing CLI behavior
+- [ ] Implement `OutlookProvider` using Microsoft Graph API per the O365 research in `.dev/`
+- [ ] Add `--provider gmail|outlook` CLI flag with separate OAuth flow per provider
+- [ ] Add mocked Graph API unit tests mirroring the Gmail test suite structure
 
-## Phase 1: Critical Bug Fixes
+## Claude Code Tooling
 
-Fix data-loss bugs and usability issues in the existing functionality.
+### Skills
+- **claude-api**: Relevant if adding an AI-summarize or MCP tool-description generation step
+  using the Anthropic SDK — this skill covers idiomatic SDK and agent patterns.
 
-- **Pagination**: `search_emails()` ignores `nextPageToken`, silently truncating results
-- **Label resolution**: Raw label IDs (`Label_12345`) in YAML frontmatter instead of human-readable names
+### Plugins / MCP Servers
+- **iobox MCP server (self)**: Register `mcp_server.py` in Claude Desktop to dogfood the tool
+  during development — the fastest way to find gaps in tool descriptions and error handling.
 
-## Phase 2: Gmail Read Enhancements
+### Reference Material
+- **`.dev/o365-research.md`** (or equivalent): The 6-enquiry, 42-source O365 analysis already
+  in this repo is the spec for Phase 3 — use it directly to drive `OutlookProvider` implementation.
+- **PyPI Trusted Publishing docs**: Covers the OIDC setup needed so the GitHub Actions release
+  workflow can publish without a stored API token.
+- **MkDocs Material + mkdocstrings**: Already in the project's doc dependencies — reference the
+  mkdocstrings `:::` directive syntax to auto-generate API docs from existing Google-style docstrings.
 
-Expand read capabilities using existing `gmail.readonly` scope.
+## Success Criteria
 
-- **Thread-level export**: Fetch all messages in a thread as a single markdown file
-- **Profile in auth-status**: Show authenticated email address and mailbox stats via `users.getProfile`
-- **Include spam/trash**: Expose `includeSpamTrash` as a CLI flag
-
-## Phase 3: Gmail Write Operations
-
-Add label management and message state changes. Requires scope upgrade to `gmail.modify`.
-
-- **Label management**: Mark read/unread, star/unstar, archive, apply custom labels via `messages.modify`
-- **Bulk label operations**: `messages.batchModify` for efficient batch tagging
-- **Trash/untrash**: Safe (reversible) message deletion
-
-## Phase 4: Enhanced Send and Drafts
-
-Upgrade email composition from plain text to full MIME support.
-
-- **HTML email sending**: Support HTML body and inline attachments in `compose_message()`
-- **Attachment sending**: Attach files to outgoing emails
-- **Draft management**: Create, list, and send drafts via `drafts.*` methods
-
-## Phase 5: Performance
-
-Reduce API round-trips and enable efficient repeated syncing.
-
-- **HTTP batch requests**: Combine multiple `messages.get` calls into single HTTP requests
-- **Incremental sync**: Use `history.list` to only fetch new/changed messages between runs
-- **Refactor `download_email_attachments`**: Move business logic from `cli.py` to `file_manager.py`
-
-## Phase 6: Packaging and Distribution
-
-Modernize packaging for PyPI publishing and library consumption.
-
-- **`pyproject.toml`**: Replace `setup.py` with hatchling-based config
-- **Version single source of truth**: `importlib.metadata` instead of hardcoded `__version__`
-- **Public API surface**: Expand `__init__.py` with `__all__` for library consumers
-- **`py.typed` marker**: PEP 561 support for downstream type checkers
-- **`__main__.py`**: Enable `python -m iobox`
-
-## Phase 7: MCP Server
-
-Expose iobox as an MCP tool server for Claude Desktop, Cursor, and VS Code.
-
-- **`src/iobox/mcp_server.py`**: FastMCP-based server with search, save, send, forward tools
-- **Optional dependency**: `pip install iobox[mcp]`
-- **stdio transport**: Standard for CLI-launched MCP servers
-
-## Phase 8: CI/CD
-
-Automate testing, linting, and publishing via GitHub Actions.
-
-- **CI workflow**: Lint (ruff) + test (pytest matrix) on push/PR
-- **Release workflow**: Build and publish to PyPI on tag push via Trusted Publishing (OIDC)
-- **Pre-commit hooks**: ruff-check + ruff-format
-
-## Phase 9: Documentation Site
-
-User-facing documentation site with auto-generated API reference.
-
-- **mkdocs-material**: Markdown-native static site with search
-- **mkdocstrings**: Auto-generate API docs from Google-style docstrings
-- **GitHub Pages**: Deploy via `mkdocs gh-deploy` or CI
-
----
-
-## OAuth Scope Progression
-
-| Phase | Scopes | Enables |
-|---|---|---|
-| v0.1.0 | `readonly` + `send` | Search, save, send, forward |
-| v0.2.0 | `modify` + `compose` | + labels, trash, drafts, batch operations, sync |
+- `pip install iobox` works on a clean machine and `iobox search -q "from:me" -m 5` returns results
+- MkDocs documentation site is live at a public URL (GitHub Pages or equivalent)
+- MCP server is listed in at least one public MCP registry or directory
