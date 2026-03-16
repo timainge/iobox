@@ -263,6 +263,75 @@ def _get_service_legacy(scopes: list[str]) -> Any:
     return service
 
 
+def get_gmail_credentials(
+    account: str = "default",
+    mode: str = "standard",
+    credentials_dir: str | None = None,
+) -> Credentials:
+    """Return valid Gmail OAuth credentials via ``GoogleAuth``.
+
+    Convenience wrapper for code that needs ``Credentials`` directly (e.g.
+    building a service with custom options).  Most callers should use
+    :func:`get_authenticated_service` or :func:`get_gmail_service` instead.
+
+    Args:
+        account: Account identifier for token namespacing.
+        mode: Access mode string — ``"readonly"``, ``"standard"``, or
+            ``"dangerous"``.
+        credentials_dir: Base directory for credential files.  Defaults to
+            ``CREDENTIALS_DIR`` env var.
+
+    Returns:
+        Valid :class:`google.oauth2.credentials.Credentials` instance.
+    """
+    from iobox.modes import _tier_for_mode, get_google_scopes
+    from iobox.providers.google_auth import GoogleAuth
+
+    scopes = get_google_scopes(["messages"], mode)
+    tier = _tier_for_mode(mode)
+    auth = GoogleAuth(
+        account=account,
+        scopes=scopes,
+        credentials_dir=credentials_dir or CREDENTIALS_DIR,
+        tier=tier,
+    )
+    return auth.get_credentials()
+
+
+def get_authenticated_service(
+    account: str = "default",
+    mode: str = "standard",
+    credentials_dir: str | None = None,
+) -> Any:
+    """Return an authenticated Gmail API service via ``GoogleAuth``.
+
+    Thin wrapper around :class:`~iobox.providers.google_auth.GoogleAuth` that
+    mirrors the signature of :func:`get_gmail_service` but accepts explicit
+    ``account`` and ``mode`` parameters.
+
+    Args:
+        account: Account identifier for token namespacing.
+        mode: Access mode string — ``"readonly"``, ``"standard"``, or
+            ``"dangerous"``.
+        credentials_dir: Base directory for credential files.
+
+    Returns:
+        Authenticated ``googleapiclient`` Gmail service object.
+    """
+    from iobox.modes import _tier_for_mode, get_google_scopes
+    from iobox.providers.google_auth import GoogleAuth
+
+    scopes = get_google_scopes(["messages"], mode)
+    tier = _tier_for_mode(mode)
+    auth = GoogleAuth(
+        account=account,
+        scopes=scopes,
+        credentials_dir=credentials_dir or CREDENTIALS_DIR,
+        tier=tier,
+    )
+    return auth.get_service("gmail", "v1")
+
+
 def get_gmail_profile(service: Any) -> dict[str, Any]:
     """
     Get Gmail profile info including email address and mailbox stats.

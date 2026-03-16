@@ -104,7 +104,11 @@ def version():
 
 @app.command()
 def auth_status(ctx: typer.Context):
-    """Check the status of email provider authentication."""
+    """Check the status of email provider authentication.
+
+    Deprecated: Use ``iobox space status`` instead.
+    """
+    typer.echo("Note: `auth-status` is deprecated. Use `iobox space status` instead.\n")
     current_mode = ctx.obj.get("mode", AccessMode.standard) if ctx.obj else AccessMode.standard
     current_account = ctx.obj.get("account", "default") if ctx.obj else "default"
     provider_name = ctx.obj.get("provider_name", "gmail") if ctx.obj else "gmail"
@@ -916,6 +920,746 @@ def trash(
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
+
+
+# ── Space command group ────────────────────────────────────────────────────────
+
+space_app = typer.Typer(help="Manage iobox spaces and service sessions.")
+app.add_typer(space_app, name="space")
+
+
+# ── Space helpers ─────────────────────────────────────────────────────────────
+
+
+def _resolve_slot(config: Any, ref: str) -> Any:
+    """Resolve a service session by number string, id, or slug.
+
+    Raises :class:`typer.Exit` with code 1 on failure.
+    """
+    if ref.isdigit():
+        n = int(ref)
+        for svc in config.services:
+            if svc.number == n:
+                return svc
+        typer.echo(
+            f"No service session #{n}. Space has {len(config.services)} session(s).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    for svc in config.services:
+        if svc.id == ref or svc.slug == ref:
+            return svc
+
+    typer.echo(f"No service session matching '{ref}'.", err=True)
+    raise typer.Exit(1)
+
+
+def _authenticate_service_entry(entry: Any) -> None:
+    """Trigger OAuth for a service session entry."""
+    import iobox.space_config as sc
+    from iobox.modes import _tier_for_mode, get_google_scopes
+
+    creds_dir = str(sc.IOBOX_HOME)
+
+    if entry.service == "gmail":
+        from iobox.providers.google_auth import GoogleAuth
+
+        scopes = get_google_scopes(entry.scopes, entry.mode)
+        tier = _tier_for_mode(entry.mode)
+        auth = GoogleAuth(
+            account=entry.account,
+            scopes=scopes,
+            credentials_dir=creds_dir,
+            tier=tier,
+        )
+        auth.get_credentials()
+    elif entry.service == "outlook":
+        from iobox.providers.outlook_auth import get_outlook_account
+
+        get_outlook_account(account=entry.account)
+
+
+def _delete_token_files(entry: Any) -> bool:
+    """Delete token files for a service session.
+
+    Returns ``True`` if at least one file was deleted.
+    """
+    import iobox.space_config as sc
+    from iobox.modes import _tier_for_mode
+
+    deleted = False
+    token_base = sc.IOBOX_HOME / "tokens" / entry.account
+
+    if entry.service == "gmail":
+        tier = _tier_for_mode(entry.mode)
+        token_file = token_base / f"token_{tier}.json"
+        if token_file.exists():
+            token_file.unlink()
+            deleted = True
+    elif entry.service == "outlook":
+        token_file = token_base / "o365_token.txt"
+        if token_file.exists():
+            token_file.unlink()
+            deleted = True
+
+    return deleted
+
+
+# ── Space subcommands ─────────────────────────────────────────────────────────
+
+
+@space_app.command("create")
+def space_create(
+    name: str = typer.Argument(..., help="Space name (e.g. 'personal', 'work')"),
+) -> None:
+    """Create a new space."""
+    from iobox.space_config import (
+        SpaceConfig,
+        get_active_space,
+        list_spaces,
+        save_space,
+        set_active_space,
+    )
+
+    if name in list_spaces():
+        typer.echo(f"Space '{name}' already exists.", err=True)
+        raise typer.Exit(1)
+
+    config = SpaceConfig(name=name, services=[])
+    save_space(config)
+
+    if get_active_space() is None:
+        set_active_space(name)
+        typer.echo(f"Created space '{name}' and set as active.")
+    else:
+        typer.echo(f"Created space '{name}'. Use `iobox space use {name}` to switch to it.")
+
+
+@space_app.command("list")
+def space_list() -> None:
+    """List all available spaces."""
+    from iobox.space_config import get_active_space, list_spaces
+
+    spaces = list_spaces()
+    if not spaces:
+        typer.echo("No spaces found. Run `iobox space create NAME` to create one.")
+        return
+
+    active = get_active_space()
+    for name in spaces:
+        marker = " (active)" if name == active else ""
+        typer.echo(f"  {name}{marker}")
+
+
+@space_app.command("use")
+def space_use(
+    name: str = typer.Argument(..., help="Space name to switch to"),
+) -> None:
+    """Set the active space."""
+    from iobox.space_config import list_spaces, set_active_space
+
+    available = list_spaces()
+    if name not in available:
+        avail_str = ", ".join(available) if available else "(none)"
+        typer.echo(
+            f"Space '{name}' not found. Available: {avail_str}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    set_active_space(name)
+    typer.echo(f"Active space set to '{name}'.")
+
+
+@space_app.command("status")
+def space_status() -> None:
+    """Show service sessions in the active space with auth status."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from iobox.space_config import get_active_space, load_session, load_space
+
+    active = get_active_space()
+    if not active:
+        typer.echo("No active space. Run `iobox space create NAME` to create one.")
+        return
+
+    config = load_space(active)
+    session = load_session(active)
+
+    console = Console()
+    table = Table(title=f"Space: {active} (active)")
+    table.add_column("#", style="dim")
+    table.add_column("Service")
+    table.add_column("Account")
+    table.add_column("Scopes")
+    table.add_column("Mode")
+    table.add_column("Status")
+
+    for svc in config.services:
+        state = session.services.get(svc.id)
+        if state and state.authenticated:
+            status_str = "✓ authenticated"
+        elif state and state.error:
+            status_str = f"✗ {state.error[:40]}"
+        else:
+            status_str = "✗ not authenticated"
+
+        table.add_row(
+            str(svc.number),
+            svc.service,
+            svc.account,
+            ",".join(svc.scopes),
+            svc.mode,
+            status_str,
+        )
+
+    console.print(table)
+
+
+@space_app.command("add")
+def space_add(
+    service: str = typer.Argument(..., help="Service type: 'gmail' or 'outlook'"),
+    account: str = typer.Argument(..., help="Account email address"),
+    messages: bool = typer.Option(False, "--messages", help="Enable messages/email scope"),
+    calendar: bool = typer.Option(False, "--calendar", help="Enable calendar scope"),
+    drive: bool = typer.Option(False, "--drive", help="Enable drive/storage scope (Gmail only)"),
+    read: bool = typer.Option(False, "--read", help="Use read-only mode (default: standard)"),
+) -> None:
+    """Add a service session to the active space (triggers OAuth immediately)."""
+    from iobox.space_config import (
+        ServiceEntry,
+        get_active_space,
+        load_space,
+        save_space,
+    )
+
+    service = service.lower().strip()
+    if service not in ("gmail", "outlook"):
+        typer.echo(f"Unknown service '{service}'. Must be 'gmail' or 'outlook'.", err=True)
+        raise typer.Exit(1)
+
+    scopes: list[str] = []
+    if messages:
+        scopes.append("messages")
+    if calendar:
+        scopes.append("calendar")
+    if drive:
+        scopes.append("drive")
+
+    if not scopes:
+        typer.echo("Specify at least one scope: --messages, --calendar, --drive", err=True)
+        raise typer.Exit(1)
+
+    if drive and service == "outlook":
+        typer.echo(
+            "Drive is not supported for Outlook service sessions. "
+            "Remove --drive or use --service gmail.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    active = get_active_space()
+    if not active:
+        typer.echo("No active space. Run `iobox space create NAME` first.", err=True)
+        raise typer.Exit(1)
+
+    config = load_space(active)
+    mode = "readonly" if read else "standard"
+    number = max((s.number for s in config.services), default=0) + 1
+    entry = ServiceEntry(
+        number=number,
+        service=service,  # type: ignore[arg-type]
+        account=account,
+        scopes=scopes,
+        mode=mode,  # type: ignore[arg-type]
+    )
+
+    typer.echo(f"Opening browser for OAuth... (service: {service}, account: {account})")
+    try:
+        _authenticate_service_entry(entry)
+    except Exception as exc:
+        typer.echo(f"Authentication failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    config.services.append(entry)
+    save_space(config)
+
+    typer.echo(f"Added service session #{number} ({service}/{account}) — authenticated ✓")
+    typer.echo(f"  id:     {entry.id}")
+    typer.echo(f"  slug:   {entry.slug}")
+    typer.echo(f"  mode:   {mode}")
+    typer.echo(f"  scopes: {', '.join(scopes)}")
+
+
+@space_app.command("login")
+def space_login(
+    ref: str = typer.Argument(..., help="Session reference: number, id, or slug"),
+) -> None:
+    """Re-authenticate a service session."""
+    from iobox.space_config import get_active_space, load_space
+
+    active = get_active_space()
+    if not active:
+        typer.echo("No active space.", err=True)
+        raise typer.Exit(1)
+
+    config = load_space(active)
+    entry = _resolve_slot(config, ref)
+
+    typer.echo(f"Re-authenticating #{entry.number} ({entry.service}/{entry.account})...")
+    try:
+        _authenticate_service_entry(entry)
+    except Exception as exc:
+        typer.echo(f"Authentication failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo("Authenticated ✓")
+
+
+@space_app.command("logout")
+def space_logout(
+    ref: str = typer.Argument(..., help="Session reference: number, id, or slug"),
+) -> None:
+    """Revoke the token for a service session (keeps the config)."""
+    from iobox.space_config import get_active_space, load_space
+
+    active = get_active_space()
+    if not active:
+        typer.echo("No active space.", err=True)
+        raise typer.Exit(1)
+
+    config = load_space(active)
+    entry = _resolve_slot(config, ref)
+
+    deleted = _delete_token_files(entry)
+    if deleted:
+        typer.echo(
+            f"Token deleted for #{entry.number} ({entry.service}/{entry.account}). "
+            "Run `iobox space login` to re-authenticate."
+        )
+    else:
+        typer.echo(f"No token found for #{entry.number} ({entry.service}/{entry.account}).")
+
+
+@space_app.command("remove")
+def space_remove(
+    ref: str = typer.Argument(..., help="Session reference: number, id, or slug"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Remove a service session from the active space."""
+    from iobox.space_config import get_active_space, load_space, save_space
+
+    active = get_active_space()
+    if not active:
+        typer.echo("No active space.", err=True)
+        raise typer.Exit(1)
+
+    config = load_space(active)
+    entry = _resolve_slot(config, ref)
+
+    if not yes:
+        confirmed = typer.confirm(
+            f"Remove service session #{entry.number} ({entry.service}/{entry.account})?"
+        )
+        if not confirmed:
+            typer.echo("Aborted.")
+            raise typer.Exit()
+
+    config.services = [s for s in config.services if s.number != entry.number]
+    save_space(config)
+    typer.echo(f"Removed #{entry.number} ({entry.service}/{entry.account}).")
+
+
+# ── Workspace helpers ──────────────────────────────────────────────────────────
+
+
+def _get_workspace(workspace_name: str | None = None) -> Any:
+    """Load and return a Workspace from the active (or named) space config."""
+    from iobox.space_config import IOBOX_HOME, get_active_space, load_space
+    from iobox.workspace import Workspace
+
+    name = workspace_name or get_active_space()
+    if not name:
+        typer.echo("No active space. Run `iobox space create NAME` first.", err=True)
+        raise typer.Exit(1)
+
+    config = load_space(name)
+    return Workspace.from_config(config, credentials_dir=str(IOBOX_HOME))
+
+
+def _format_datetime(iso_str: str | None) -> str:
+    """Format an ISO 8601 datetime string for display."""
+    if not iso_str:
+        return ""
+    try:
+        from datetime import datetime as _dt
+
+        dt = _dt.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return iso_str[:16]
+
+
+def _find_calendar_slot(ws: Any, provider_name: str | None) -> Any:
+    """Return the first calendar ProviderSlot matching provider_name (or the first slot)."""
+    if not ws.calendar_providers:
+        typer.echo("No calendar providers configured in this workspace.", err=True)
+        raise typer.Exit(1)
+    if provider_name:
+        for slot in ws.calendar_providers:
+            if slot.name == provider_name:
+                return slot
+        typer.echo(
+            f"Calendar provider '{provider_name}' not found. "
+            f"Available: {', '.join(s.name for s in ws.calendar_providers)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return ws.calendar_providers[0]
+
+
+def _find_file_slot(ws: Any, provider_name: str | None) -> Any:
+    """Return the first file ProviderSlot matching provider_name (or the first slot)."""
+    if not ws.file_providers:
+        typer.echo("No file providers configured in this workspace.", err=True)
+        raise typer.Exit(1)
+    if provider_name:
+        for slot in ws.file_providers:
+            if slot.name == provider_name:
+                return slot
+        typer.echo(
+            f"File provider '{provider_name}' not found. "
+            f"Available: {', '.join(s.name for s in ws.file_providers)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return ws.file_providers[0]
+
+
+# ── Events command group ───────────────────────────────────────────────────────
+
+events_app = typer.Typer(help="Calendar event operations.")
+app.add_typer(events_app, name="events")
+
+
+@events_app.command("list")
+def events_list(
+    after: str | None = typer.Option(
+        None, "--after", help="Start date (YYYY-MM-DD); defaults to 30 days ago"
+    ),
+    before: str | None = typer.Option(None, "--before", help="End date (YYYY-MM-DD)"),
+    provider: str | None = typer.Option(None, "--provider", help="Provider slot name"),
+    max_results: int = typer.Option(25, "--max", "-m", help="Maximum results"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """List calendar events from the active workspace."""
+    from datetime import date as _date
+    from datetime import timedelta
+
+    from iobox.providers.base import EventQuery
+
+    ws = _get_workspace(workspace_name)
+
+    # Default: last 30 days
+    effective_after = after or str(_date.today() - timedelta(days=30))
+    query = EventQuery(after=effective_after, before=before, max_results=max_results)
+    providers = [provider] if provider else None
+    events = ws.list_events(query, providers=providers)
+
+    if not events:
+        typer.echo("No events found.")
+        return
+
+    typer.echo(f"{'Title':<40} {'Start':<18} {'End':<18} {'Provider'}")
+    typer.echo("-" * 90)
+    for ev in events:
+        typer.echo(
+            f"{ev['title'][:40]:<40} "
+            f"{_format_datetime(ev.get('start')):<18} "
+            f"{_format_datetime(ev.get('end')):<18} "
+            f"{ev.get('provider_id', '')}"
+        )
+
+
+@events_app.command("get")
+def events_get(
+    event_id: str = typer.Argument(..., help="Event ID"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Print a calendar event as Markdown."""
+    from iobox.processing.markdown import convert_event_to_markdown
+
+    ws = _get_workspace(workspace_name)
+    slot = _find_calendar_slot(ws, provider)
+    event = slot.provider.get_event(event_id)
+    typer.echo(convert_event_to_markdown(event))
+
+
+@events_app.command("save")
+def events_save(
+    event_id: str = typer.Argument(..., help="Event ID"),
+    output: str = typer.Option(".", "--output", "-o", help="Output directory"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Save a calendar event as a Markdown file."""
+    from iobox.processing.markdown import convert_event_to_markdown
+    from iobox.utils import slugify_text
+
+    ws = _get_workspace(workspace_name)
+    slot = _find_calendar_slot(ws, provider)
+    event = slot.provider.get_event(event_id)
+    md = convert_event_to_markdown(event)
+
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = slugify_text(event["title"]) + ".md"
+    (out_dir / filename).write_text(md)
+    typer.echo(f"Saved to {out_dir / filename}")
+
+
+@events_app.command("create")
+def events_create(
+    title: str = typer.Option(..., "--title", "-t", help="Event title"),
+    start: str = typer.Option(..., "--start", help="Start datetime (ISO 8601)"),
+    end: str = typer.Option(..., "--end", help="End datetime (ISO 8601)"),
+    attendee: list[str] = typer.Option([], "--attendee", "-a", help="Attendee email (repeatable)"),
+    description: str | None = typer.Option(None, "--description", "-d"),
+    location: str | None = typer.Option(None, "--location", "-l"),
+    all_day: bool = typer.Option(False, "--all-day"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Create a new calendar event (requires --mode standard)."""
+    ws = _get_workspace(workspace_name)
+    slot = _find_calendar_slot(ws, provider)
+    event = slot.provider.create_event(
+        title,
+        start,
+        end,
+        all_day=all_day,
+        description=description,
+        location=location,
+        attendees=attendee or None,
+    )
+    typer.echo(f"Created event '{event['title']}' (id: {event['id']})")
+
+
+@events_app.command("delete")
+def events_delete(
+    event_id: str = typer.Argument(..., help="Event ID to delete"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """Delete a calendar event (requires --mode standard)."""
+    if not yes:
+        typer.confirm(f"Delete event '{event_id}'?", abort=True)
+    ws = _get_workspace(workspace_name)
+    slot = _find_calendar_slot(ws, provider)
+    slot.provider.delete_event(event_id)
+    typer.echo(f"Deleted event '{event_id}'.")
+
+
+@events_app.command("rsvp")
+def events_rsvp(
+    event_id: str = typer.Argument(..., help="Event ID"),
+    response: str = typer.Option(..., "--response", "-r", help="accepted | declined | tentative"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Respond to a calendar event invite (requires --mode standard)."""
+    valid = {"accepted", "declined", "tentative"}
+    if response not in valid:
+        choices = ", ".join(sorted(valid))
+        typer.echo(f"Invalid response '{response}'. Choose from: {choices}", err=True)
+        raise typer.Exit(1)
+    ws = _get_workspace(workspace_name)
+    slot = _find_calendar_slot(ws, provider)
+    event = slot.provider.rsvp(event_id, response)
+    typer.echo(f"RSVP '{response}' sent for event '{event['title']}'.")
+
+
+# ── Files command group ────────────────────────────────────────────────────────
+
+files_app = typer.Typer(help="Cloud file operations.")
+app.add_typer(files_app, name="files")
+
+
+@files_app.command("list")
+def files_list(
+    query: str | None = typer.Option(None, "--query", "-q", help="Search text (required)"),
+    provider: str | None = typer.Option(None, "--provider", help="Provider slot name"),
+    max_results: int = typer.Option(20, "--max", "-m", help="Maximum results"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """List files from the active workspace."""
+    from iobox.providers.base import FileQuery
+
+    if not query:
+        typer.echo(
+            "Error: Specify a search query with --query to avoid listing all files.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    ws = _get_workspace(workspace_name)
+    fq = FileQuery(text=query, max_results=max_results)
+    providers = [provider] if provider else None
+    files = ws.list_files(fq, providers=providers)
+
+    if not files:
+        typer.echo("No files found.")
+        return
+
+    typer.echo(f"{'Name':<40} {'Modified':<22} {'MIME':<30} {'Provider'}")
+    typer.echo("-" * 100)
+    for f in files:
+        typer.echo(
+            f"{f['name'][:40]:<40} "
+            f"{f.get('modified_at', '')[:19]:<22} "
+            f"{f.get('mime_type', '')[:30]:<30} "
+            f"{f.get('provider_id', '')}"
+        )
+
+
+@files_app.command("get")
+def files_get(
+    file_id: str = typer.Argument(..., help="File ID"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Print file metadata as Markdown."""
+    from iobox.processing.markdown import convert_file_to_markdown
+
+    ws = _get_workspace(workspace_name)
+    slot = _find_file_slot(ws, provider)
+    file = slot.provider.get_file(file_id)
+    typer.echo(convert_file_to_markdown(file))
+
+
+@files_app.command("save")
+def files_save(
+    file_id: str = typer.Argument(..., help="File ID"),
+    output: str = typer.Option(".", "--output", "-o", help="Output directory"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Save file metadata as a Markdown file."""
+    from iobox.processing.markdown import convert_file_to_markdown
+    from iobox.utils import slugify_text
+
+    ws = _get_workspace(workspace_name)
+    slot = _find_file_slot(ws, provider)
+    file = slot.provider.get_file(file_id)
+    md = convert_file_to_markdown(file)
+
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = slugify_text(file["name"]) + ".md"
+    (out_dir / filename).write_text(md)
+    typer.echo(f"Saved to {out_dir / filename}")
+
+
+@files_app.command("upload")
+def files_upload(
+    local_path: str = typer.Argument(..., help="Path to local file to upload"),
+    parent_id: str | None = typer.Option(None, "--parent-id", help="Parent folder ID"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Override filename"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Upload a local file to cloud storage (requires --mode standard)."""
+    ws = _get_workspace(workspace_name)
+    slot = _find_file_slot(ws, provider)
+    file = slot.provider.upload_file(local_path, parent_id=parent_id, name=name)
+    typer.echo(f"Uploaded '{file['name']}' (id: {file['id']})")
+
+
+@files_app.command("delete")
+def files_delete(
+    file_id: str = typer.Argument(..., help="File ID to delete"),
+    permanent: bool = typer.Option(False, "--permanent", help="Permanently delete (skip trash)"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+) -> None:
+    """Delete a file (moves to trash by default; requires --mode standard).
+
+    WARNING: OneDrive does not support trash — deletion is always permanent.
+    """
+    if not yes:
+        action = "permanently delete" if permanent else "trash"
+        typer.confirm(f"Are you sure you want to {action} file '{file_id}'?", abort=True)
+    ws = _get_workspace(workspace_name)
+    slot = _find_file_slot(ws, provider)
+    slot.provider.delete_file(file_id, permanent=permanent)
+    action_done = "Permanently deleted" if permanent else "Moved to trash"
+    typer.echo(f"{action_done}: '{file_id}'.")
+
+
+@files_app.command("mkdir")
+def files_mkdir(
+    name: str = typer.Argument(..., help="Folder name"),
+    parent_id: str | None = typer.Option(None, "--parent-id", help="Parent folder ID"),
+    provider: str | None = typer.Option(None, "--provider"),
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Create a new folder in cloud storage (requires --mode standard)."""
+    ws = _get_workspace(workspace_name)
+    slot = _find_file_slot(ws, provider)
+    folder = slot.provider.create_folder(name, parent_id=parent_id)
+    typer.echo(f"Created folder '{folder['name']}' (id: {folder['id']})")
+
+
+# ── Workspace command group ────────────────────────────────────────────────────
+
+workspace_app = typer.Typer(help="Workspace management shortcuts.")
+app.add_typer(workspace_app, name="workspace")
+
+
+@workspace_app.command("use")
+def workspace_use(
+    name: str = typer.Argument(..., help="Space name to activate"),
+) -> None:
+    """Switch the active workspace."""
+    from iobox.space_config import list_spaces, set_active_space
+
+    available = list_spaces()
+    if name not in available:
+        msg = f"Space '{name}' not found."
+        if available:
+            msg += f" Available: {', '.join(available)}"
+        typer.echo(msg, err=True)
+        raise typer.Exit(1)
+    set_active_space(name)
+    typer.echo(f"Active workspace set to '{name}'.")
+
+
+@workspace_app.command("status")
+def workspace_status(
+    workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
+) -> None:
+    """Show provider status for the active workspace."""
+    from iobox.space_config import get_active_space, load_space
+
+    name = workspace_name or get_active_space()
+    if not name:
+        typer.echo("No active space. Run `iobox space create NAME` first.", err=True)
+        raise typer.Exit(1)
+
+    config = load_space(name)
+    typer.echo(f"Workspace: {config.name}")
+    typer.echo(f"{'#':<4} {'Service':<10} {'Account':<30} {'Scopes':<30} {'Mode'}")
+    typer.echo("-" * 80)
+    for svc in config.services:
+        typer.echo(
+            f"{svc.number:<4} {svc.service:<10} {svc.account:<30} "
+            f"{','.join(svc.scopes):<30} {svc.mode}"
+        )
 
 
 @app.callback()

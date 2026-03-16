@@ -66,7 +66,11 @@ _IMMUTABLE_ID_HEADER: dict[str, str] = {"Prefer": 'IdType="ImmutableId"'}
 class OutlookProvider(EmailProvider):
     """EmailProvider backed by Microsoft 365 via python-o365 / Graph API."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        auth: Any | None = None,
+    ) -> None:
+        self._microsoft_auth: Any | None = auth  # MicrosoftAuth (optional)
         self._account: Any | None = None  # O365.Account instance
         self._mailbox: Any | None = None  # O365.MailBox instance
 
@@ -272,9 +276,12 @@ class OutlookProvider(EmailProvider):
         device-code depending on the ``outlook_auth`` configuration).
         Subsequent calls reuse the cached token transparently.
         """
-        from iobox.providers.outlook_auth import get_outlook_account
+        if self._microsoft_auth is not None:
+            self._account = self._microsoft_auth.get_account()
+        else:
+            from iobox.providers.outlook_auth import get_outlook_account
 
-        self._account = get_outlook_account()
+            self._account = get_outlook_account()
         self._mailbox = self._account.mailbox()
         self._set_immutable_id_header()
 

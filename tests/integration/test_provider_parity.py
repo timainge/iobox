@@ -23,7 +23,13 @@ from tests.fixtures.mock_outlook_responses import (
 
 # Required keys that must appear in every full-retrieval EmailData
 REQUIRED_METADATA_KEYS = {
-    "message_id", "subject", "from_", "date", "snippet", "labels", "thread_id"
+    "message_id",
+    "subject",
+    "from_",
+    "date",
+    "snippet",
+    "labels",
+    "thread_id",
 }
 REQUIRED_FULL_KEYS = REQUIRED_METADATA_KEYS | {"body", "content_type", "attachments"}
 
@@ -213,17 +219,11 @@ class TestMarkdownOutputParity:
         outlook_md = convert_email_to_markdown(
             self._normalize_email_data_for_markdown(outlook_data)
         )
-        gmail_md = convert_email_to_markdown(
-            self._normalize_email_data_for_markdown(gmail_data)
-        )
+        gmail_md = convert_email_to_markdown(self._normalize_email_data_for_markdown(gmail_data))
 
         # Strip saved_date lines since they contain timestamps
-        outlook_lines = [
-            ln for ln in outlook_md.splitlines() if not ln.startswith("saved_date:")
-        ]
-        gmail_lines = [
-            ln for ln in gmail_md.splitlines() if not ln.startswith("saved_date:")
-        ]
+        outlook_lines = [ln for ln in outlook_md.splitlines() if not ln.startswith("saved_date:")]
+        gmail_lines = [ln for ln in gmail_md.splitlines() if not ln.startswith("saved_date:")]
         assert outlook_lines == gmail_lines
 
     def test_html_markdown_identical(self, outlook_provider):
@@ -246,16 +246,10 @@ class TestMarkdownOutputParity:
         outlook_md = convert_email_to_markdown(
             self._normalize_email_data_for_markdown(outlook_data)
         )
-        gmail_md = convert_email_to_markdown(
-            self._normalize_email_data_for_markdown(gmail_data)
-        )
+        gmail_md = convert_email_to_markdown(self._normalize_email_data_for_markdown(gmail_data))
 
-        outlook_lines = [
-            ln for ln in outlook_md.splitlines() if not ln.startswith("saved_date:")
-        ]
-        gmail_lines = [
-            ln for ln in gmail_md.splitlines() if not ln.startswith("saved_date:")
-        ]
+        outlook_lines = [ln for ln in outlook_md.splitlines() if not ln.startswith("saved_date:")]
+        gmail_lines = [ln for ln in gmail_md.splitlines() if not ln.startswith("saved_date:")]
         assert outlook_lines == gmail_lines
 
     def test_html_conversion_is_deterministic(self):
@@ -285,24 +279,16 @@ class TestMarkdownOutputParity:
         outlook_md = convert_email_to_markdown(
             self._normalize_email_data_for_markdown(outlook_data)
         )
-        gmail_md = convert_email_to_markdown(
-            self._normalize_email_data_for_markdown(gmail_data)
-        )
+        gmail_md = convert_email_to_markdown(self._normalize_email_data_for_markdown(gmail_data))
 
-        outlook_lines = [
-            ln for ln in outlook_md.splitlines() if not ln.startswith("saved_date:")
-        ]
-        gmail_lines = [
-            ln for ln in gmail_md.splitlines() if not ln.startswith("saved_date:")
-        ]
+        outlook_lines = [ln for ln in outlook_md.splitlines() if not ln.startswith("saved_date:")]
+        gmail_lines = [ln for ln in gmail_md.splitlines() if not ln.startswith("saved_date:")]
         assert outlook_lines == gmail_lines
 
     def test_frontmatter_contains_expected_fields(self, outlook_provider):
         """Markdown frontmatter includes all key metadata fields."""
         data = outlook_provider.get_email_content("outlook-msg-id-1")
-        md = convert_email_to_markdown(
-            self._normalize_email_data_for_markdown(data)
-        )
+        md = convert_email_to_markdown(self._normalize_email_data_for_markdown(data))
 
         assert md.startswith("---\n")
         assert "message_id:" in md
@@ -315,7 +301,5 @@ class TestMarkdownOutputParity:
     def test_subject_becomes_h1_heading(self, outlook_provider):
         """The email subject appears as a level-1 heading in the markdown body."""
         data = outlook_provider.get_email_content("outlook-msg-id-1")
-        md = convert_email_to_markdown(
-            self._normalize_email_data_for_markdown(data)
-        )
+        md = convert_email_to_markdown(self._normalize_email_data_for_markdown(data))
         assert f"# {data['subject']}" in md

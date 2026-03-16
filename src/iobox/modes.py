@@ -3,6 +3,9 @@ Access mode definitions for iobox.
 
 Defines readonly, standard, and dangerous modes that control which Gmail API
 scopes are requested and which CLI commands / MCP tools are available.
+
+Also provides scope constants and aggregation helpers for Google Calendar and
+Drive, used by GoogleCalendarProvider and GoogleDriveProvider (tasks 005/006).
 """
 
 import os
@@ -37,8 +40,80 @@ SCOPE_IMPLIES: dict[str, set[str]] = {
     },
 }
 
+# ── Per-service scope constants ────────────────────────────────────────────────
+
+GMAIL_SCOPES_READONLY: list[str] = ["https://www.googleapis.com/auth/gmail.readonly"]
+GMAIL_SCOPES_STANDARD: list[str] = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.compose",
+]
+
+CALENDAR_SCOPES_READONLY: list[str] = ["https://www.googleapis.com/auth/calendar.readonly"]
+CALENDAR_SCOPES_STANDARD: list[str] = ["https://www.googleapis.com/auth/calendar"]
+
+DRIVE_SCOPES_READONLY: list[str] = ["https://www.googleapis.com/auth/drive.readonly"]
+DRIVE_SCOPES_STANDARD: list[str] = ["https://www.googleapis.com/auth/drive"]
+
+
+def get_google_scopes(services: list[str], mode: str) -> list[str]:
+    """Build combined Google OAuth scope list for the given services and mode.
+
+    Args:
+        services: Subset of ``["messages", "calendar", "drive"]``.
+        mode: ``"readonly"`` or ``"standard"`` (dangerous treated as standard).
+
+    Returns:
+        Deduplicated list of OAuth scope strings suitable for passing to
+        ``InstalledAppFlow`` or ``GoogleAuth``.
+    """
+    scopes: list[str] = []
+    if "messages" in services:
+        if mode == "readonly":
+            scopes.extend(GMAIL_SCOPES_READONLY)
+        else:
+            scopes.extend(GMAIL_SCOPES_STANDARD)
+    if "calendar" in services:
+        if mode == "readonly":
+            scopes.extend(CALENDAR_SCOPES_READONLY)
+        else:
+            scopes.extend(CALENDAR_SCOPES_STANDARD)
+    if "drive" in services:
+        if mode == "readonly":
+            scopes.extend(DRIVE_SCOPES_READONLY)
+        else:
+            scopes.extend(DRIVE_SCOPES_STANDARD)
+    # Preserve order, remove exact duplicates.
+    seen: set[str] = set()
+    result: list[str] = []
+    for s in scopes:
+        if s not in seen:
+            seen.add(s)
+            result.append(s)
+    return result
+
+
+def _tier_for_mode(mode: str) -> str:
+    """Return the token-file tier name for a mode string.
+
+    Maps ``"readonly"`` → ``"readonly"`` and everything else →
+    ``"standard"``.  Dangerous mode reuses standard-tier tokens.
+    """
+    return "readonly" if mode == "readonly" else "standard"
+
+
 # CLI command names allowed per mode (typer subcommand names).
-_READONLY_CLI = {"search", "save", "auth-status", "version", "draft-list"}
+# "space" is always allowed — space management doesn't require an active mode.
+_READONLY_CLI = {
+    "search",
+    "save",
+    "auth-status",
+    "version",
+    "draft-list",
+    "space",
+    "events",
+    "files",
+    "workspace",
+}
 _STANDARD_CLI = _READONLY_CLI | {"draft-create", "draft-send", "draft-delete", "label"}
 _DANGEROUS_CLI = _STANDARD_CLI | {"send", "forward", "trash"}
 
@@ -57,6 +132,15 @@ _READONLY_MCP = {
     "save_emails_by_query",
     "list_gmail_drafts",
     "check_auth",
+    # Workspace tools
+    "search_workspace",
+    "list_events",
+    "get_event",
+    "list_files",
+    "get_file",
+    "get_file_content",
+    # Semantic search
+    "semantic_search_workspace",
 }
 _STANDARD_MCP = _READONLY_MCP | {
     "create_gmail_draft",

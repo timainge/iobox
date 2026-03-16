@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iobox"
-version = "0.2.0"
-description = "Gmail to Markdown converter — extract, search and save emails as Markdown files"
+version = "1.0.0"
+description = "Personal workspace context tool — search, retrieve and export email, calendar events and files across Gmail and Microsoft 365"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -38,11 +38,15 @@ dependencies = [
     "python-dateutil>=2.8",
     "PyYAML>=6.0",
     "rich>=13.0",
+    "tomli-w>=1.0",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 outlook = ["O365>=2.1.8"]
 mcp = ["mcp>=1.2"]
+ai = ["anthropic>=0.40"]
+semantic = ["sqlite-vec>=0.1", "openai>=1.0"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=6.0",
@@ -58,6 +62,8 @@ docs = [
 [project.urls]
 Homepage = "https://github.com/timainge/iobox"
 Repository = "https://github.com/timainge/iobox"
+Documentation = "https://timainge.github.io/iobox"
+Changelog = "https://github.com/timainge/iobox/releases"
 Issues = "https://github.com/timainge/iobox/issues"
 
 [project.scripts]
@@ -98,6 +104,12 @@ warn_unused_configs = true
 # New code in src/iobox/providers/ is held to full strict mode.
 # Note: strict=false in overrides does NOT undo flags set by global strict=true;
 # each flag must be explicitly reset.
+[[tool.mypy.overrides]]
+# space_config uses try/except ImportError for tomllib/tomli compat — the inner
+# branch is unreachable on Python 3.11+ so the type: ignore comment appears unused.
+module = ["iobox.space_config"]
+warn_unused_ignores = false
+
 [[tool.mypy.overrides]]
 module = ["iobox.cli", "iobox.mcp_server", "iobox.file_manager", "iobox.email_search", "iobox.auth", "iobox.markdown", "iobox.markdown_converter"]
 disallow_untyped_defs = false

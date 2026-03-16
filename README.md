@@ -1,34 +1,43 @@
 # Iobox
 
-A Gmail to Markdown converter. Extract emails from Gmail and save them as structured markdown files with YAML frontmatter.
+[![PyPI](https://img.shields.io/pypi/v/iobox)](https://pypi.org/project/iobox/)
+[![Python](https://img.shields.io/pypi/pyversions/iobox)](https://pypi.org/project/iobox/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A personal workspace context tool — search, retrieve, and export **email, calendar events, and files** across Gmail, Google Calendar, Google Drive, and Microsoft 365, all from one CLI.
 
 ## Why
 
-Email inboxes are full of valuable content — newsletters, reports, project updates — but it's trapped in a format that's hard to search, process, or archive. Iobox pulls emails out of Gmail and turns them into clean markdown files you can version-control, feed into LLMs, or drop into your note-taking system.
+Email inboxes, calendars, and file drives are full of valuable content but it's trapped in silos. Iobox unifies them under a single interface: search across all three resource types at once, save results as structured Markdown files, and expose everything to AI assistants via an MCP server.
 
 ## Features
 
-- **Gmail API integration** with OAuth 2.0 authentication
-- **Flexible search** using Gmail's native query syntax
-- **HTML to Markdown conversion** — preserves formatting, links, tables, and lists
-- **YAML frontmatter** with full email metadata (from, to, subject, date, labels, message ID)
-- **Attachment downloads** with optional type filtering
-- **Duplicate prevention** — won't re-download emails you already have
-- **Send, forward, and draft** emails from the CLI
-- **Label and trash management** — star, archive, mark read/unread, trash/restore
-- **Incremental sync** — only fetch new emails since last run
-- **Access modes** — readonly, standard, and dangerous modes to control what the CLI can do
-- **Multi-account support** — use `--account` to manage multiple Gmail accounts with separate tokens
+- **Unified workspace** — configure multiple accounts (Gmail + Outlook) and search across all of them in one command
+- **Email**: search, retrieve, send, forward, draft management, label, trash — Gmail and Outlook/Microsoft 365
+- **Calendar**: list and retrieve events — Google Calendar and Outlook Calendar
+- **Files**: search, list, and retrieve file content — Google Drive and OneDrive
+- **HTML to Markdown conversion** with YAML frontmatter for email, events, and files
+- **MCP server** — expose all workspace capabilities to Claude Desktop and other MCP clients
+- **AI summarization** — summarize any resource using Claude (optional)
+- **Access modes** — readonly, standard, and dangerous to control what the CLI can do
+- **Incremental sync** — only fetch new content since last run
 
 ## Installation
 
-### Prerequisites
+```bash
+pip install iobox
+```
 
-- Python 3.10+
-- A Google Cloud project with the Gmail API enabled
-- OAuth 2.0 credentials (Desktop app type)
+### Optional extras
 
-### Install with uv
+```bash
+pip install 'iobox[outlook]'   # Microsoft 365 / Outlook support
+pip install 'iobox[mcp]'       # MCP server for Claude Desktop
+pip install 'iobox[ai]'        # AI summarization via Claude
+pip install 'iobox[semantic]'  # Semantic search (OpenAI embeddings + sqlite-vec)
+```
+
+### Install from source
 
 ```bash
 git clone https://github.com/timainge/iobox.git
@@ -36,274 +45,214 @@ cd iobox
 uv sync
 ```
 
-### Install with pip
+## Quick Start
+
+### Gmail setup
+
+1. Create a Google Cloud project with **Gmail API**, **Google Calendar API**, and **Google Drive API** enabled
+2. Download OAuth credentials (Desktop app type) as `credentials.json` in the project root
+3. Run your first command — a browser window opens for OAuth consent:
 
 ```bash
-git clone https://github.com/timainge/iobox.git
-cd iobox
-pip install -e .
+iobox search -q "from:boss@example.com" -d 7
 ```
 
-### Set up Google OAuth credentials
-
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or select an existing one)
-3. Enable the **Gmail API**
-4. Go to **APIs & Services > Credentials**
-5. Click **Create Credentials > OAuth client ID** (Desktop app type)
-6. Download the JSON file and save it as `credentials.json` in the project root
-7. Optionally configure paths via `.env` (see `.env.example`)
-
-The first time you run a command, a browser window will open for OAuth consent. After that, credentials are cached in `tokens/default/` (or `token.json` for legacy setups).
-
-## Usage
+### Workspace setup (multi-account)
 
 ```bash
-# Check authentication status
-iobox auth-status
+# Create a workspace
+iobox space create personal
 
-# Search for emails from the last 3 days
+# Add Gmail with messages, calendar, and drive access
+iobox space add gmail you@gmail.com --messages --calendar --drive --read
+
+# Check status
+iobox space status
+
+# Search across all resource types
+iobox events list --after 2026-01-01
+iobox files list --query "Q4 report"
+```
+
+### Outlook / Microsoft 365 setup
+
+```bash
+pip install 'iobox[outlook]'
+export OUTLOOK_CLIENT_ID=<your Azure app client ID>
+export OUTLOOK_TENANT_ID=<your tenant ID or "common">
+
+iobox space add outlook you@company.com --messages --calendar --read
+```
+
+### MCP server (Claude Desktop)
+
+```bash
+pip install 'iobox[mcp]'
+```
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "iobox": {
+      "command": "iobox-mcp",
+      "env": {
+        "IOBOX_MODE": "readonly"
+      }
+    }
+  }
+}
+```
+
+## CLI Reference
+
+### Email commands
+
+```bash
+# Search
 iobox search -q "from:newsletter@example.com" -d 3
 
-# Save a specific email by message ID
-iobox save --message-id MESSAGE_ID -o ./output
-
-# Batch save emails matching a query
+# Save emails
 iobox save -q "label:important" --max 50 -d 14 -o ./emails
 
-# Save emails with attachments (only PDFs and spreadsheets)
-iobox save -q "has:attachment" --download-attachments --attachment-types pdf,xlsx -o ./reports
+# Send
+iobox send --to recipient@example.com --subject "Hello" --body "Message"
 
-# Show version
-iobox version
-```
-
-### Search options
-
-| Flag | Description |
-|---|---|
-| `-q, --query` | Gmail search query (required) |
-| `-m, --max-results` | Max results to return (default: 10) |
-| `-d, --days` | Days back to search (default: 7) |
-| `-s, --start-date` | Start date in `YYYY/MM/DD` format |
-| `-e, --end-date` | End date in `YYYY/MM/DD` format |
-| `-v, --verbose` | Show detailed info per result |
-| `--debug` | Show raw API response fields |
-
-### Save options
-
-| Flag | Description |
-|---|---|
-| `-m, --message-id` | Save a single email by ID |
-| `-q, --query` | Save emails matching a search query |
-| `--max` | Max emails to save in batch mode (default: 10) |
-| `-d, --days` | Days back to search (default: 7) |
-| `-s, --start-date` | Start date in `YYYY/MM/DD` format |
-| `-e, --end-date` | End date in `YYYY/MM/DD` format |
-| `-o, --output-dir` | Output directory (default: `.`) |
-| `--html-preferred` | Prefer HTML content (default: true) |
-| `--download-attachments` | Download attachments |
-| `--attachment-types` | Filter by extension, e.g. `pdf,docx` |
-| `--sync` | Incremental sync — only fetch new emails |
-
-### Send command
-
-```bash
-# Send with inline body
-iobox send --to recipient@example.com --subject "Hello" --body "Message body"
-
-# Send with body from file
-iobox send --to recipient@example.com --subject "Report" --body-file ./report.txt
-
-# Send with CC and BCC
-iobox send --to recipient@example.com --subject "Update" --body "Content" --cc team@example.com --bcc manager@example.com
-```
-
-### Forward command
-
-```bash
-# Forward a single email
+# Forward
 iobox forward --message-id MESSAGE_ID --to recipient@example.com
 
-# Forward with a note
-iobox forward --message-id MESSAGE_ID --to recipient@example.com --note "FYI - see below"
-
-# Forward multiple emails matching a query
-iobox forward --query "from:reports@example.com" --to team@example.com --days 7
-```
-
-### Draft commands
-
-```bash
-# Create a draft
-iobox draft-create --to recipient@example.com -s "Subject" -b "Draft body"
-
-# List drafts
+# Drafts
+iobox draft-create --to recipient@example.com -s "Subject" -b "Body"
 iobox draft-list --max 10
-
-# Send a draft
 iobox draft-send --draft-id DRAFT_ID
-
-# Delete a draft
 iobox draft-delete --draft-id DRAFT_ID
-```
 
-### Label command
-
-```bash
-# Star a message
-iobox label --message-id MSG_ID --star
-
-# Mark as read
-iobox label --message-id MSG_ID --mark-read
-
-# Batch archive messages matching a query
-iobox label -q "from:notifications@example.com" --archive
-```
-
-Options: `--mark-read`, `--mark-unread`, `--star`, `--unstar`, `--archive`, `--add LABEL`, `--remove LABEL`
-
-### Trash command
-
-```bash
-# Trash a message
+# Label / Trash
+iobox label --message-id MSG_ID --star --mark-read
 iobox trash --message-id MSG_ID
+```
 
-# Restore from trash
-iobox trash --message-id MSG_ID --untrash
+### Calendar commands
 
-# Batch trash with confirmation
-iobox trash -q "from:spam@example.com" -d 30
+```bash
+# List events
+iobox events list --after 2026-01-01 --before 2026-04-01
+
+# Get a single event
+iobox events get EVENT_ID
+
+# Save event as Markdown
+iobox events save EVENT_ID -o ./events
+
+# Create event (requires --mode standard)
+iobox events create --title "Team meeting" --start "2026-04-01T10:00:00" \
+    --end "2026-04-01T11:00:00" --attendee alice@company.com
+
+# RSVP (requires --mode standard)
+iobox events rsvp EVENT_ID --response accepted
+
+# Delete (requires --mode standard)
+iobox events delete EVENT_ID
+```
+
+### File commands
+
+```bash
+# List files
+iobox files list --query "Q4 report"
+
+# Get file metadata
+iobox files get FILE_ID
+
+# Save file info as Markdown
+iobox files save FILE_ID -o ./files
+
+# Upload (requires --mode standard)
+iobox files upload ./report.pdf --name "Q4 Report.pdf"
+
+# Delete to trash (requires --mode standard)
+iobox files delete FILE_ID
+
+# Create folder
+iobox files mkdir "Q4 Reports"
+```
+
+### Workspace commands
+
+```bash
+# Create and manage workspaces
+iobox space create NAME
+iobox space list
+iobox space use NAME
+iobox space status
+
+# Manage service sessions
+iobox space add gmail you@gmail.com --messages --calendar --drive --read
+iobox space add outlook you@company.com --messages --calendar
+iobox space login 1        # re-authenticate by slot number
+iobox space logout 1       # revoke token, keep config
+iobox space remove 1       # remove slot entirely
 ```
 
 ### Access modes
 
-Iobox supports three access modes that control which commands are available and which Gmail API scopes are requested:
-
 ```bash
-# Readonly mode — search, save, auth-status, version, draft-list only
+# Readonly — search and retrieve only
 iobox --mode readonly search -q "test"
 
-# Standard mode (default) — adds draft management and label operations
-iobox --mode standard label --message-id MSG_ID --mark-read
+# Standard — adds drafts, labels, calendar/file writes
+iobox --mode standard events create --title "Meeting" ...
 
-# Dangerous mode — adds send, forward, and trash
+# Dangerous — adds send, forward, trash
 iobox --mode dangerous send --to recipient@example.com --subject "Hi" --body "Hello"
 ```
 
 Set via `--mode` flag or `IOBOX_MODE` environment variable.
 
-### Multi-account support
+## Output Format
 
-Use `--account` to manage multiple Gmail accounts. Each account gets its own token directory:
-
-```bash
-# Default account
-iobox search -q "test"
-
-# Work account (separate OAuth token)
-iobox --account work search -q "test"
-
-# Personal account
-iobox --account personal --mode readonly search -q "test"
-```
-
-Set via `--account` flag or `IOBOX_ACCOUNT` environment variable.
-
-Tokens are stored per account and per scope tier:
-```
-$CREDENTIALS_DIR/
-  tokens/
-    default/
-      token_readonly.json
-      token_standard.json
-    work/
-      token_standard.json
-```
-
-Switching between modes never destroys an existing token — a broader token (standard) is automatically accepted when running in readonly mode.
-
-## Output format
-
-Each email is saved as a markdown file with YAML frontmatter:
+Emails saved as Markdown with YAML frontmatter:
 
 ```markdown
 ---
-date: Mon, 23 Mar 2025 10:00:00 +1100
+date: Mon, 23 Mar 2026 10:00:00 +1100
 from: sender@example.com
-labels:
-  - INBOX
-  - CATEGORY_UPDATES
+labels: [INBOX]
 message_id: 123456789abcdef
-saved_date: 2025-03-24T21:30:00.123456
+saved_date: 2026-03-24T21:30:00.123456
 subject: Your Newsletter Subject
-thread_id: thread123456
 to: recipient@example.com
-attachments:
-  - filename: report.pdf
-    mime_type: application/pdf
 ---
 
 # Your Newsletter Subject
 
-[Email content in Markdown format]
+[Email content in Markdown]
 ```
-
-Attachments are saved to `attachments/{email_id}/` within the output directory.
 
 ## Configuration
 
-Environment variables (set in `.env` or your shell):
-
 | Variable | Default | Description |
 |---|---|---|
-| `CREDENTIALS_DIR` | `.` | Directory containing credential files |
-| `GOOGLE_APPLICATION_CREDENTIALS` | `credentials.json` | Path to OAuth credentials |
-| `GMAIL_TOKEN_FILE` | `token.json` | Path to cached token (overrides multi-profile storage when set) |
-| `IOBOX_MODE` | `standard` | Access mode: `readonly`, `standard`, or `dangerous` |
-| `IOBOX_ACCOUNT` | `default` | Account profile name for multi-account token storage |
-
-## Project Structure
-
-```
-iobox/
-├── src/iobox/                  # Source code
-│   ├── __init__.py
-│   ├── accounts.py             # Multi-account profile management
-│   ├── auth.py                 # OAuth 2.0 with multi-profile token storage
-│   ├── cli.py                  # Typer CLI (search, save, send, forward, label, trash, drafts)
-│   ├── modes.py                # Access mode definitions and command gating
-│   ├── email_search.py         # Email search with date filtering
-│   ├── email_retrieval.py      # Full email content, labels, trash/untrash
-│   ├── email_sender.py         # Compose, send, forward, and draft management
-│   ├── markdown.py             # Markdown module re-exports
-│   ├── markdown_converter.py   # HTML-to-Markdown and YAML frontmatter
-│   ├── file_manager.py         # File save, deduplication, attachments, sync state
-│   └── utils.py                # Filename generation and text utilities
-├── tests/                      # Test files
-│   ├── unit/                   # Unit tests for all modules
-│   ├── integration/            # End-to-end workflow tests
-│   ├── live/                   # Live CLI tests against a real Gmail account
-│   └── fixtures/               # Mock API responses
-├── credentials.json            # OAuth credentials (not committed)
-├── token.json                  # OAuth token (not committed)
-├── .env                        # Environment variables (not committed)
-├── pyproject.toml              # Package configuration (hatchling)
-└── README.md                   # This file
-```
+| `IOBOX_PROVIDER` | `gmail` | Active provider: `gmail` or `outlook` |
+| `IOBOX_MODE` | `standard` | Access mode: `readonly`, `standard`, `dangerous` |
+| `IOBOX_ACCOUNT` | `default` | Account profile for token storage |
+| `CREDENTIALS_DIR` | `.` | Directory for credential and token files |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `credentials.json` | Google OAuth credentials path |
+| `OUTLOOK_CLIENT_ID` | — | Azure app client ID (required for Outlook) |
+| `OUTLOOK_TENANT_ID` | `common` | Azure tenant ID |
 
 ## Development
 
 ```bash
-# Install with dev dependencies
 uv sync
-
-# Run tests
-uv run pytest
-
-# Run tests with coverage
-uv run pytest --cov=src --cov-report=html
+make check   # lint + type-check + tests
+make test    # tests only
 ```
+
+## Documentation
+
+Full documentation: [timainge.github.io/iobox](https://timainge.github.io/iobox)
 
 ## License
 
