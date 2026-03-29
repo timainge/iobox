@@ -108,7 +108,7 @@ def _ws_with_messages(*providers: Any, tags: list[str] | None = None) -> Workspa
     ]
     return Workspace(
         name="test",
-        message_providers=slots,
+        email_providers=slots,
         session=WorkspaceSession(workspace_name="test"),
     )
 
@@ -139,7 +139,7 @@ class TestFanOut:
         p1 = _mock_email_provider([_email("e1")])
         p2 = _mock_email_provider([_email("e2")])
         ws = _ws_with_messages(p1, p2)
-        results = ws.search_messages(EmailQuery(text="x"))
+        results = ws.search_emails(EmailQuery(text="x"))
         assert len(results) == 2
         p1.search_emails.assert_called_once()
         p2.search_emails.assert_called_once()
@@ -149,7 +149,7 @@ class TestFanOut:
         bad = MagicMock()
         bad.search_emails.side_effect = RuntimeError("API error")
         ws = _ws_with_messages(good, bad)
-        results = ws.search_messages(EmailQuery(text="x"))
+        results = ws.search_emails(EmailQuery(text="x"))
         # One result from good provider, bad provider error is swallowed
         assert len(results) == 1
         assert results[0]["message_id"] == "ok"
@@ -159,11 +159,11 @@ class TestFanOut:
         bad = MagicMock()
         bad.search_emails.side_effect = RuntimeError("network timeout")
         ws = _ws_with_messages(good, bad)
-        ws.search_messages(EmailQuery())
+        ws.search_emails(EmailQuery())
         # Find the slot that errored
         errored = [
             s
-            for s in ws.message_providers
+            for s in ws.email_providers
             if ws.session.providers.get(s.name, ProviderSession("x")).error
         ]
         assert len(errored) == 1
@@ -173,13 +173,13 @@ class TestFanOut:
         p2 = _mock_email_provider([_email("e2")])
         ws = Workspace(
             name="test",
-            message_providers=[
+            email_providers=[
                 ProviderSlot(name="primary", provider=p1),
                 ProviderSlot(name="secondary", provider=p2),
             ],
             session=WorkspaceSession(workspace_name="test"),
         )
-        results = ws.search_messages(EmailQuery(), providers=["primary"])
+        results = ws.search_emails(EmailQuery(), providers=["primary"])
         assert len(results) == 1
         p2.search_emails.assert_not_called()
 
@@ -188,29 +188,29 @@ class TestFanOut:
         p2 = _mock_email_provider([_email("e2")])
         ws = Workspace(
             name="test",
-            message_providers=[
+            email_providers=[
                 ProviderSlot(name="work", provider=p1, tags=["work"]),
                 ProviderSlot(name="personal", provider=p2, tags=["personal"]),
             ],
             session=WorkspaceSession(workspace_name="test"),
         )
-        results = ws.search_messages(EmailQuery(), tags=["work"])
+        results = ws.search_emails(EmailQuery(), tags=["work"])
         assert len(results) == 1
         p2.search_emails.assert_not_called()
 
     def test_empty_slots_returns_empty(self) -> None:
         ws = Workspace(name="test", session=WorkspaceSession(workspace_name="test"))
-        results = ws.search_messages(EmailQuery())
+        results = ws.search_emails(EmailQuery())
         assert results == []
 
     def test_no_matching_provider_filter_returns_empty(self) -> None:
         p = _mock_email_provider([_email("e1")])
         ws = Workspace(
             name="test",
-            message_providers=[ProviderSlot(name="slot_0", provider=p)],
+            email_providers=[ProviderSlot(name="slot_0", provider=p)],
             session=WorkspaceSession(workspace_name="test"),
         )
-        results = ws.search_messages(EmailQuery(), providers=["nonexistent"])
+        results = ws.search_emails(EmailQuery(), providers=["nonexistent"])
         assert results == []
         p.search_emails.assert_not_called()
 
@@ -218,20 +218,20 @@ class TestFanOut:
         p = _mock_email_provider([_email("e1")])
         ws = Workspace(
             name="test",
-            message_providers=[ProviderSlot(name="slot_0", provider=p)],
+            email_providers=[ProviderSlot(name="slot_0", provider=p)],
             session=WorkspaceSession(workspace_name="test"),
         )
         ws.session.providers["slot_0"] = ProviderSession(
             provider_name="slot_0", error="previous error"
         )
-        ws.search_messages(EmailQuery())
+        ws.search_emails(EmailQuery())
         assert ws.session.providers["slot_0"].error is None
 
 
 # ── TestSearchMessages ────────────────────────────────────────────────────────
 
 
-class TestSearchMessages:
+class TestSearchEmails:
     def test_sorted_by_date_descending(self) -> None:
         emails = [
             _email("e1", date="2026-01-01"),
@@ -240,7 +240,7 @@ class TestSearchMessages:
         ]
         p = _mock_email_provider(emails)
         ws = _ws_with_messages(p)
-        results = ws.search_messages(EmailQuery())
+        results = ws.search_emails(EmailQuery())
         dates = [r["date"] for r in results]
         assert dates == sorted(dates, reverse=True)
 
@@ -248,12 +248,12 @@ class TestSearchMessages:
         p1 = _mock_email_provider([_email("e1"), _email("e2")])
         p2 = _mock_email_provider([_email("e3")])
         ws = _ws_with_messages(p1, p2)
-        results = ws.search_messages(EmailQuery())
+        results = ws.search_emails(EmailQuery())
         assert len(results) == 3
 
     def test_returns_list(self) -> None:
         ws = Workspace(name="test", session=WorkspaceSession(workspace_name="test"))
-        assert isinstance(ws.search_messages(EmailQuery()), list)
+        assert isinstance(ws.search_emails(EmailQuery()), list)
 
 
 # ── TestListEvents ────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ class TestSearch:
         file_p = _mock_file_provider([_file("f1")])
         ws = Workspace(
             name="test",
-            message_providers=[ProviderSlot(name="msg", provider=email_p)],
+            email_providers=[ProviderSlot(name="msg", provider=email_p)],
             calendar_providers=[ProviderSlot(name="cal", provider=cal_p)],
             file_providers=[ProviderSlot(name="drv", provider=file_p)],
             session=WorkspaceSession(workspace_name="test"),
@@ -328,7 +328,7 @@ class TestSearch:
         cal_p = _mock_calendar_provider([_event("ev1")])
         ws = Workspace(
             name="test",
-            message_providers=[ProviderSlot(name="msg", provider=email_p)],
+            email_providers=[ProviderSlot(name="msg", provider=email_p)],
             calendar_providers=[ProviderSlot(name="cal", provider=cal_p)],
             session=WorkspaceSession(workspace_name="test"),
         )
@@ -342,7 +342,7 @@ class TestSearch:
         cal_p.list_events.side_effect = RuntimeError("calendar down")
         ws = Workspace(
             name="test",
-            message_providers=[ProviderSlot(name="msg", provider=email_p)],
+            email_providers=[ProviderSlot(name="msg", provider=email_p)],
             calendar_providers=[ProviderSlot(name="cal", provider=cal_p)],
             session=WorkspaceSession(workspace_name="test"),
         )
@@ -360,7 +360,7 @@ class TestSearch:
         )
         ws = Workspace(
             name="test",
-            message_providers=[ProviderSlot(name="msg", provider=email_p)],
+            email_providers=[ProviderSlot(name="msg", provider=email_p)],
             session=WorkspaceSession(workspace_name="test"),
         )
         results = ws.search("x", types=["email"])
@@ -422,24 +422,24 @@ class TestFromConfig:
             services=[
                 ServiceEntry(
                     number=1,
-                    service="gmail",
+                    service="google",
                     account="tim@gmail.com",
-                    scopes=["messages"],
+                    scopes=["email"],
                     mode="readonly",
                 )
             ],
         )
         with (
-            patch("iobox.providers.gmail.GmailProvider.__init__", return_value=None),
-            patch("iobox.providers.google_auth.GoogleAuth.__init__", return_value=None),
+            patch("iobox.providers.google.email.GmailProvider.__init__", return_value=None),
+            patch("iobox.providers.google.auth.GoogleAuth.__init__", return_value=None),
             patch(
-                "iobox.providers.google_auth.GoogleAuth.get_service",
+                "iobox.providers.google.auth.GoogleAuth.get_service",
                 return_value=MagicMock(),
             ),
         ):
             ws = Workspace.from_config(config)
-        assert len(ws.message_providers) == 1
-        assert ws.message_providers[0].name == "tim-gmail"
+        assert len(ws.email_providers) == 1
+        assert ws.email_providers[0].name == "tim-gmail"
 
     def test_creates_calendar_slot_when_calendar_in_scopes(self) -> None:
         from iobox.space_config import ServiceEntry, SpaceConfig
@@ -449,7 +449,7 @@ class TestFromConfig:
             services=[
                 ServiceEntry(
                     number=1,
-                    service="gmail",
+                    service="google",
                     account="tim@gmail.com",
                     scopes=["calendar"],
                     mode="readonly",
@@ -457,9 +457,9 @@ class TestFromConfig:
             ],
         )
         with (
-            patch("iobox.providers.google_auth.GoogleAuth.__init__", return_value=None),
+            patch("iobox.providers.google.auth.GoogleAuth.__init__", return_value=None),
             patch(
-                "iobox.providers.google_calendar.GoogleCalendarProvider.__init__",
+                "iobox.providers.google.calendar.GoogleCalendarProvider.__init__",
                 return_value=None,
             ),
         ):
@@ -474,7 +474,7 @@ class TestFromConfig:
             services=[
                 ServiceEntry(
                     number=1,
-                    service="gmail",
+                    service="google",
                     account="tim@gmail.com",
                     scopes=["drive"],
                     mode="readonly",
@@ -482,9 +482,9 @@ class TestFromConfig:
             ],
         )
         with (
-            patch("iobox.providers.google_auth.GoogleAuth.__init__", return_value=None),
+            patch("iobox.providers.google.auth.GoogleAuth.__init__", return_value=None),
             patch(
-                "iobox.providers.google_drive.GoogleDriveProvider.__init__",
+                "iobox.providers.google.files.GoogleDriveProvider.__init__",
                 return_value=None,
             ),
         ):
@@ -503,6 +503,6 @@ class TestFromConfig:
 
         config = SpaceConfig(name="empty", services=[])
         ws = Workspace.from_config(config)
-        assert ws.message_providers == []
+        assert ws.email_providers == []
         assert ws.calendar_providers == []
         assert ws.file_providers == []

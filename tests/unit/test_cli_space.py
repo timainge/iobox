@@ -176,15 +176,15 @@ class TestSpaceStatus:
         _invoke(
             "space",
             "add",
-            "gmail",
+            "google",
             "tim@gmail.com",
-            "--messages",
+            "--email",
             "--calendar",
             "--read",
         )
         result = _invoke("space", "status")
         assert result.exit_code == 0
-        assert "gmail" in result.output
+        assert "google" in result.output
         assert "tim@gmail.com" in result.output
 
 
@@ -196,7 +196,7 @@ class TestSpaceStatus:
 class TestSpaceAdd:
     def test_add_gmail_messages_only(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        result = _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        result = _invoke("space", "add", "google", "tim@gmail.com", "--email")
         assert result.exit_code == 0
         assert "authenticated" in result.output
         mock_google_auth.assert_called_once()
@@ -206,9 +206,9 @@ class TestSpaceAdd:
         result = _invoke(
             "space",
             "add",
-            "gmail",
+            "google",
             "tim@gmail.com",
-            "--messages",
+            "--email",
             "--calendar",
             "--drive",
         )
@@ -218,7 +218,7 @@ class TestSpaceAdd:
 
     def test_add_outlook_messages_only(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        result = _invoke("space", "add", "outlook", "corp@company.com", "--messages")
+        result = _invoke("space", "add", "o365", "corp@company.com", "--email")
         assert result.exit_code == 0
         assert "authenticated" in result.output
 
@@ -227,9 +227,9 @@ class TestSpaceAdd:
         result = _invoke(
             "space",
             "add",
-            "outlook",
+            "o365",
             "corp@company.com",
-            "--messages",
+            "--email",
             "--drive",
         )
         assert result.exit_code != 0
@@ -237,33 +237,33 @@ class TestSpaceAdd:
 
     def test_add_no_scopes_fails(self) -> None:
         _invoke("space", "create", "personal")
-        result = _invoke("space", "add", "gmail", "tim@gmail.com")
+        result = _invoke("space", "add", "google", "tim@gmail.com")
         assert result.exit_code != 0
         assert "scope" in result.output.lower()
 
     def test_add_unknown_service_fails(self) -> None:
         _invoke("space", "create", "personal")
-        result = _invoke("space", "add", "yahoo", "tim@yahoo.com", "--messages")
+        result = _invoke("space", "add", "yahoo", "tim@yahoo.com", "--email")
         assert result.exit_code != 0
 
     def test_add_without_active_space_fails(self) -> None:
-        result = _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        result = _invoke("space", "add", "google", "tim@gmail.com", "--email")
         assert result.exit_code != 0
 
     def test_add_saves_slot_to_toml(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
 
         from iobox.space_config import load_space
 
         config = load_space("personal")
         assert len(config.services) == 1
-        assert config.services[0].service == "gmail"
+        assert config.services[0].service == "google"
         assert config.services[0].account == "tim@gmail.com"
 
     def test_add_readonly_mode(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages", "--read")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email", "--read")
 
         from iobox.space_config import load_space
 
@@ -272,7 +272,7 @@ class TestSpaceAdd:
 
     def test_add_standard_mode_by_default(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
 
         from iobox.space_config import load_space
 
@@ -281,8 +281,8 @@ class TestSpaceAdd:
 
     def test_add_assigns_incrementing_numbers(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
-        _invoke("space", "add", "gmail", "work@company.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
+        _invoke("space", "add", "google", "work@company.com", "--email")
 
         from iobox.space_config import load_space
 
@@ -293,7 +293,7 @@ class TestSpaceAdd:
     def test_add_auth_failure_does_not_save(self) -> None:
         _invoke("space", "create", "personal")
         with patch("iobox.cli._authenticate_service_entry", side_effect=Exception("auth error")):
-            result = _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+            result = _invoke("space", "add", "google", "tim@gmail.com", "--email")
 
         assert result.exit_code != 0
 
@@ -311,7 +311,7 @@ class TestSpaceAdd:
 class TestSpaceLogin:
     def test_login_by_number(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
         mock_google_auth.reset_mock()
 
         result = _invoke("space", "login", "1")
@@ -321,7 +321,7 @@ class TestSpaceLogin:
 
     def test_login_by_slug(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
         mock_google_auth.reset_mock()
 
         result = _invoke("space", "login", "tim-gmail")
@@ -344,7 +344,7 @@ class TestSpaceLogout:
         import iobox.space_config as sc
 
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
 
         # Create a fake token file
         token_dir = sc.IOBOX_HOME / "tokens" / "tim@gmail.com"
@@ -358,7 +358,7 @@ class TestSpaceLogout:
 
     def test_logout_no_token_is_graceful(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
         result = _invoke("space", "logout", "1")
         assert result.exit_code == 0
 
@@ -371,7 +371,7 @@ class TestSpaceLogout:
 class TestSpaceRemove:
     def test_remove_by_number_with_yes(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
-        _invoke("space", "add", "gmail", "tim@gmail.com", "--messages")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
 
         result = _invoke("space", "remove", "1", "--yes")
         assert result.exit_code == 0
@@ -402,15 +402,15 @@ class TestSlotResolution:
             services=[
                 ServiceEntry(
                     number=1,
-                    service="gmail",
+                    service="google",
                     account="tim@gmail.com",
-                    scopes=["messages"],
+                    scopes=["email"],
                 ),
                 ServiceEntry(
                     number=2,
-                    service="outlook",
+                    service="o365",
                     account="corp@company.com",
-                    scopes=["messages"],
+                    scopes=["email"],
                 ),
             ],
         )
@@ -422,8 +422,8 @@ class TestSlotResolution:
 
     def test_resolve_by_id(self) -> None:
         config = self._make_config()
-        entry = _resolve_slot(config, "gmail-timgmailcom")
-        assert entry.service == "gmail"
+        entry = _resolve_slot(config, "google-timgmailcom")
+        assert entry.service == "google"
 
     def test_resolve_by_slug(self) -> None:
         config = self._make_config()
@@ -455,7 +455,7 @@ class TestAuthStatusDeprecation:
         with (
             patch("iobox.cli.get_provider") as mock_prov,
             patch(
-                "iobox.auth.check_auth_status",
+                "iobox.providers.google.auth.check_auth_status",
                 return_value={
                     "authenticated": False,
                     "credentials_file_exists": False,
@@ -464,7 +464,7 @@ class TestAuthStatusDeprecation:
                     "token_path": "/tmp/token.json",
                 },
             ),
-            patch("iobox.auth.get_gmail_service", side_effect=Exception("no auth")),
+            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("no auth")),
         ):
             mock_prov.return_value = MagicMock()
             result = runner.invoke(app, ["auth-status"])

@@ -8,8 +8,9 @@ combining multiple modules to verify the full workflow.
 import os
 from unittest.mock import MagicMock, patch
 
-from iobox.email_search import get_email_content, search_emails
-from iobox.file_manager import save_email_to_markdown
+from iobox.providers.google._retrieval import get_email_content
+from iobox.providers.google._search import search_emails
+from iobox.processing.file_manager import save_email_to_markdown
 from iobox.markdown import convert_email_to_markdown
 from tests.fixtures.mock_responses import MOCK_PLAIN_TEXT_MESSAGE
 
@@ -91,7 +92,7 @@ class TestEmailToMarkdownWorkflow:
         with (
             patch("builtins.open", mock_open),
             patch("iobox.markdown.create_markdown_filename", return_value=mock_filename),
-            patch("iobox.file_manager.create_markdown_filename", return_value=mock_filename),
+            patch("iobox.processing.file_manager.create_markdown_filename", return_value=mock_filename),
         ):
             search_results = search_emails(
                 service=mock_service, query="from:example.com", max_results=1

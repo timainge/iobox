@@ -104,7 +104,7 @@ def convert_file_to_markdown(file: File) -> str:
 
 def convert_message_to_markdown(msg: EmailData) -> str:
     """Thin adapter: delegates to existing markdown_converter for backward compat."""
-    from iobox.markdown_converter import convert_email_to_markdown
+    from iobox.processing.markdown_converter import convert_email_to_markdown
 
     return convert_email_to_markdown(msg)  # type: ignore[arg-type]
 

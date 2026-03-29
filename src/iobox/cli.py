@@ -14,8 +14,8 @@ import typer
 
 from iobox import __version__
 from iobox.accounts import set_active_account
-from iobox.auth import set_active_mode
-from iobox.file_manager import (
+from iobox.providers.google.auth import set_active_mode
+from iobox.processing.file_manager import (
     SyncState,
     check_for_duplicates,
     create_output_directory,
@@ -23,7 +23,7 @@ from iobox.file_manager import (
     save_email_to_markdown,
 )
 from iobox.markdown import convert_email_to_markdown
-from iobox.markdown_converter import convert_thread_to_markdown
+from iobox.processing.markdown_converter import convert_thread_to_markdown
 from iobox.modes import CLI_COMMANDS_BY_MODE, AccessMode, get_mode_from_env
 from iobox.providers import EmailData, EmailProvider, EmailQuery, get_provider
 
@@ -120,7 +120,7 @@ def auth_status(ctx: typer.Context):
     typer.echo(f"Account: {current_account}")
 
     if provider_name == "outlook":
-        from iobox.providers.outlook_auth import check_outlook_auth_status
+        from iobox.providers.o365.auth import check_outlook_auth_status
 
         status = check_outlook_auth_status()
         typer.echo(f"Authenticated: {status['authenticated']}")
@@ -151,7 +151,7 @@ def auth_status(ctx: typer.Context):
                 pass
     else:
         # Gmail auth status
-        from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service
+        from iobox.providers.google.auth import check_auth_status, get_gmail_profile, get_gmail_service
 
         status = check_auth_status()
         typer.echo(f"Authenticated: {status['authenticated']}")
@@ -181,7 +181,7 @@ def auth_status(ctx: typer.Context):
             typer.echo("\nGmail Profile")
             typer.echo("-------------------")
             typer.echo(f"Email: {profile.get('emailAddress', 'Unknown')}")
-            typer.echo(f"Messages: {profile.get('messagesTotal', 0):,}")
+            typer.echo(f"Emails: {profile.get('messagesTotal', 0):,}")
             typer.echo(f"Threads: {profile.get('threadsTotal', 0):,}")
         except Exception:
             pass
@@ -208,7 +208,7 @@ def search(
     ),
     debug: bool = typer.Option(False, "--debug", help="Show debug information about API responses"),
     include_spam_trash: bool = typer.Option(
-        False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
+        False, "--include-spam-trash", help="Include emails from SPAM and TRASH"
     ),
     ctx: typer.Context = typer.Option(None, hidden=True),
 ):
@@ -334,7 +334,7 @@ def save(
         help="Filter attachments by file extension (comma-separated, e.g., 'pdf,docx,xlsx')",
     ),
     include_spam_trash: bool = typer.Option(
-        False, "--include-spam-trash", help="Include messages from SPAM and TRASH"
+        False, "--include-spam-trash", help="Include emails from SPAM and TRASH"
     ),
     sync: bool = typer.Option(
         False, "--sync", help="Enable incremental sync: only fetch new emails since last run"
@@ -427,7 +427,7 @@ def save(
                     )
                     new_ids = provider.get_new_messages(sync_state.last_history_id)
                     if new_ids is not None:
-                        typer.echo(f"Found {len(new_ids)} new message(s) since last sync.")
+                        typer.echo(f"Found {len(new_ids)} new email(s) since last sync.")
                         message_ids_to_fetch = new_ids
                     else:
                         typer.echo("Sync history expired. Falling back to full query.")
@@ -791,7 +791,7 @@ def label(
     message_id: str = typer.Option(None, "--message-id", help="Message ID for single message mode"),
     query: str = typer.Option(None, "-q", "--query", help="Search query for batch mode"),
     max_results: int = typer.Option(
-        10, "-m", "--max-results", help="Maximum number of messages in batch mode"
+        10, "-m", "--max-results", help="Maximum number of emails in batch mode"
     ),
     days: int = typer.Option(7, "-d", "--days", help="Number of days back to search"),
     mark_read: bool = typer.Option(False, "--mark-read", help="Mark as read"),
@@ -804,7 +804,7 @@ def label(
     ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
-    Add or remove labels on one or more messages.
+    Add or remove labels on one or more emails.
 
     Supports single message mode (--message-id) and batch mode (--query).
     """
@@ -850,7 +850,7 @@ def label(
             for r in results:
                 _apply_label_ops(r["message_id"])
 
-            typer.echo(f"Labels updated for {len(results)} message(s)")
+            typer.echo(f"Labels updated for {len(results)} email(s)")
 
     except Exception as e:
         typer.echo(f"Error updating labels: {e}", err=True)
@@ -864,14 +864,14 @@ def trash(
     untrash: bool = typer.Option(False, "--untrash", help="Restore from trash instead of trashing"),
     days: int = typer.Option(7, "-d", "--days", help="Number of days back to search"),
     max_results: int = typer.Option(
-        10, "-m", "--max-results", help="Maximum number of messages in batch mode"
+        10, "-m", "--max-results", help="Maximum number of emails in batch mode"
     ),
     ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
-    Move messages to trash or restore them from trash.
+    Move emails to trash or restore them from trash.
 
-    Supports single message mode (--message-id) and batch mode (--query).
+    Supports single email mode (--message-id) and batch mode (--query).
     Batch trash requires confirmation before proceeding.
     """
     try:
@@ -901,7 +901,7 @@ def trash(
                 typer.echo("No emails found matching the query.")
                 return
 
-            confirmed = typer.confirm(f"Are you sure you want to {verb} {len(results)} message(s)?")
+            confirmed = typer.confirm(f"Are you sure you want to {verb} {len(results)} email(s)?")
             if not confirmed:
                 typer.echo("Aborted.")
                 raise typer.Exit()
@@ -913,7 +913,7 @@ def trash(
                 else:
                     provider.trash(mid)
 
-            typer.echo(f"{past_tense} {len(results)} message(s)")
+            typer.echo(f"{past_tense} {len(results)} email(s)")
 
     except typer.Exit:
         raise
@@ -962,8 +962,8 @@ def _authenticate_service_entry(entry: Any) -> None:
 
     creds_dir = str(sc.IOBOX_HOME)
 
-    if entry.service == "gmail":
-        from iobox.providers.google_auth import GoogleAuth
+    if entry.service == "google":
+        from iobox.providers.google.auth import GoogleAuth
 
         scopes = get_google_scopes(entry.scopes, entry.mode)
         tier = _tier_for_mode(entry.mode)
@@ -974,8 +974,8 @@ def _authenticate_service_entry(entry: Any) -> None:
             tier=tier,
         )
         auth.get_credentials()
-    elif entry.service == "outlook":
-        from iobox.providers.outlook_auth import get_outlook_account
+    elif entry.service == "o365":
+        from iobox.providers.o365.auth import get_outlook_account
 
         get_outlook_account(account=entry.account)
 
@@ -991,13 +991,13 @@ def _delete_token_files(entry: Any) -> bool:
     deleted = False
     token_base = sc.IOBOX_HOME / "tokens" / entry.account
 
-    if entry.service == "gmail":
+    if entry.service == "google":
         tier = _tier_for_mode(entry.mode)
         token_file = token_base / f"token_{tier}.json"
         if token_file.exists():
             token_file.unlink()
             deleted = True
-    elif entry.service == "outlook":
+    elif entry.service == "o365":
         token_file = token_base / "o365_token.txt"
         if token_file.exists():
             token_file.unlink()
@@ -1120,9 +1120,9 @@ def space_status() -> None:
 
 @space_app.command("add")
 def space_add(
-    service: str = typer.Argument(..., help="Service type: 'gmail' or 'outlook'"),
+    service: str = typer.Argument(..., help="Service type: 'google' or 'o365'"),
     account: str = typer.Argument(..., help="Account email address"),
-    messages: bool = typer.Option(False, "--messages", help="Enable messages/email scope"),
+    email: bool = typer.Option(False, "--email", help="Enable email scope"),
     calendar: bool = typer.Option(False, "--calendar", help="Enable calendar scope"),
     drive: bool = typer.Option(False, "--drive", help="Enable drive/storage scope (Gmail only)"),
     read: bool = typer.Option(False, "--read", help="Use read-only mode (default: standard)"),
@@ -1136,26 +1136,26 @@ def space_add(
     )
 
     service = service.lower().strip()
-    if service not in ("gmail", "outlook"):
-        typer.echo(f"Unknown service '{service}'. Must be 'gmail' or 'outlook'.", err=True)
+    if service not in ("google", "o365"):
+        typer.echo(f"Unknown service '{service}'. Must be 'google' or 'o365'.", err=True)
         raise typer.Exit(1)
 
     scopes: list[str] = []
-    if messages:
-        scopes.append("messages")
+    if email:
+        scopes.append("email")
     if calendar:
         scopes.append("calendar")
     if drive:
         scopes.append("drive")
 
     if not scopes:
-        typer.echo("Specify at least one scope: --messages, --calendar, --drive", err=True)
+        typer.echo("Specify at least one scope: --email, --calendar, --drive", err=True)
         raise typer.Exit(1)
 
-    if drive and service == "outlook":
+    if drive and service == "o365":
         typer.echo(
-            "Drive is not supported for Outlook service sessions. "
-            "Remove --drive or use --service gmail.",
+            "Drive scope is not yet supported for o365. "
+            "Remove --drive or use --service google.",
             err=True,
         )
         raise typer.Exit(1)

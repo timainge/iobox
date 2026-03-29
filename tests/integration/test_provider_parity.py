@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from iobox.markdown_converter import convert_email_to_markdown, convert_html_to_markdown
+from iobox.processing.markdown_converter import convert_email_to_markdown, convert_html_to_markdown
 from iobox.providers.base import EmailData, EmailQuery
-from iobox.providers.outlook import OutlookProvider
+from iobox.providers.o365.email import OutlookProvider
 from tests.fixtures.mock_outlook_responses import (
     make_full_mock_account,
 )

@@ -59,7 +59,7 @@ def get_google_scopes(services: list[str], mode: str) -> list[str]:
     """Build combined Google OAuth scope list for the given services and mode.
 
     Args:
-        services: Subset of ``["messages", "calendar", "drive"]``.
+        services: Subset of ``["email", "calendar", "drive"]``.
         mode: ``"readonly"`` or ``"standard"`` (dangerous treated as standard).
 
     Returns:
@@ -67,7 +67,7 @@ def get_google_scopes(services: list[str], mode: str) -> list[str]:
         ``InstalledAppFlow`` or ``GoogleAuth``.
     """
     scopes: list[str] = []
-    if "messages" in services:
+    if "email" in services:
         if mode == "readonly":
             scopes.extend(GMAIL_SCOPES_READONLY)
         else:

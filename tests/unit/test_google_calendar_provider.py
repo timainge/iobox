@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from iobox.providers.base import EventQuery
-from iobox.providers.google_calendar import GoogleCalendarProvider, _to_rfc3339
+from iobox.providers.google.calendar import GoogleCalendarProvider, _to_rfc3339
 from tests.fixtures.mock_calendar_responses import (
     MOCK_EVENT_ALL_DAY,
     MOCK_EVENT_CONFERENCE_DATA,
@@ -66,7 +66,7 @@ class TestGoogleCalendarProviderInit:
 
     def test_creates_auth_from_account_params(self, tmp_path: object) -> None:
 
-        from iobox.providers.google_auth import GoogleAuth
+        from iobox.providers.google.auth import GoogleAuth
 
         p = GoogleCalendarProvider(
             account="test@gmail.com",

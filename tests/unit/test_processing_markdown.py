@@ -352,7 +352,7 @@ class TestConvertMessageToMarkdown:
         from unittest.mock import patch
 
         # The import is lazy, so patch at the source module
-        with patch("iobox.markdown_converter.convert_email_to_markdown") as mock_conv:
+        with patch("iobox.processing.markdown_converter.convert_email_to_markdown") as mock_conv:
             mock_conv.return_value = "# Subject\n\nbody"
             msg: dict = {
                 "message_id": "m1",

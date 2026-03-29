@@ -13,12 +13,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.providers.google_drive import FOLDER_MIME_TYPE, GoogleDriveProvider
+from iobox.providers.google.files import FOLDER_MIME_TYPE, GoogleDriveProvider
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-_GDrive_MODULE = "iobox.providers.google_drive"
-_OneDrive_MODULE = "iobox.providers.onedrive"
+_GDrive_MODULE = "iobox.providers.google.files"
+_OneDrive_MODULE = "iobox.providers.o365.files"
 _MEDIA_UPLOAD = "googleapiclient.http.MediaFileUpload"
 
 
@@ -191,7 +191,7 @@ class TestOneDriveWriteOps:
     """Smoke tests for OneDriveProvider write methods using HAS_O365 patch."""
 
     def _make_provider(self, mode: str = "standard") -> Any:  # type: ignore[name-defined]
-        from iobox.providers.onedrive import OneDriveProvider
+        from iobox.providers.o365.files import OneDriveProvider
 
         auth = MagicMock()
         account = MagicMock()
@@ -219,7 +219,7 @@ class TestOneDriveWriteOps:
         return item
 
     def test_check_write_mode_raises_in_readonly(self) -> None:
-        from iobox.providers.onedrive import OneDriveProvider
+        from iobox.providers.o365.files import OneDriveProvider
 
         with patch(f"{_OneDrive_MODULE}.HAS_O365", True):
             provider = OneDriveProvider.__new__(OneDriveProvider)

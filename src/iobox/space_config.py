@@ -1,7 +1,7 @@
 """
 Space configuration — schema, I/O, and path constants for ~/.iobox/.
 
-A *space* is a named collection of service sessions (gmail, outlook) that
+A *space* is a named collection of service sessions (google, o365) that
 form a user's workspace. This module owns the TOML config schema and the
 JSON session-state schema, but knows nothing about providers or OAuth.
 """
@@ -38,12 +38,12 @@ ACTIVE_SPACE_FILE: Path = IOBOX_HOME / "active_space"
 
 @dataclass
 class ServiceEntry:
-    """One service session within a space (e.g. gmail/tim@gmail.com)."""
+    """One service session within a space (e.g. google/tim@gmail.com)."""
 
     number: int
-    service: Literal["gmail", "outlook"]
+    service: Literal["google", "o365"]
     account: str
-    scopes: list[str]  # ["messages", "calendar", "drive"]
+    scopes: list[str]  # ["email", "calendar", "drive"]
     mode: Literal["readonly", "standard", "dangerous"] = "standard"
     slug: str = ""  # auto-derived from account if empty
     id: str = ""  # auto-derived from service+account if empty
@@ -182,12 +182,17 @@ def _parse_space_config(data: dict) -> SpaceConfig:  # type: ignore[type-arg]
     name = data["workspace"]["name"]
     services = []
     for s in data.get("services", []):
+        # Migrate legacy scope value "messages" → "email"
+        scopes = ["email" if sc == "messages" else sc for sc in s["scopes"]]
+        # Migrate legacy service type names: "gmail" → "google", "outlook" → "o365"
+        _SERVICE_MIGRATION = {"gmail": "google", "outlook": "o365"}
+        service_type = _SERVICE_MIGRATION.get(s["service"], s["service"])
         services.append(
             ServiceEntry(
                 number=s["number"],
-                service=s["service"],
+                service=service_type,
                 account=s["account"],
-                scopes=list(s["scopes"]),
+                scopes=scopes,
                 mode=s.get("mode", "standard"),
                 slug=s.get("slug", ""),
                 id=s.get("id", ""),

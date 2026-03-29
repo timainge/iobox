@@ -177,14 +177,119 @@ iobox trash --message-id <MSG_ID> --untrash
 
 ---
 
-## Section C: Cleanup
+## Section C: Space Management (local config, no OAuth required)
 
-### 22. Run cleanup script
+These tests exercise the `iobox space` command group against the local filesystem.
+No live API calls are made; OAuth is not triggered.
+
+### 22. Space — create a test space
+```bash
+iobox space create live-test-space
+```
+- [ ] Exit code 0
+- [ ] Output confirms space created
+
+### 23. Space — list spaces
+```bash
+iobox space list
+```
+- [ ] Exit code 0
+- [ ] `live-test-space` appears in the list
+
+### 24. Space — switch active space
+```bash
+iobox space use live-test-space
+```
+- [ ] Exit code 0
+- [ ] Output confirms active space changed
+
+### 25. Space — status (no services configured yet)
+```bash
+iobox space status
+```
+- [ ] Exit code 0
+- [ ] Output shows empty or zero service sessions (not an error)
+
+---
+
+## Section D: Calendar Events (requires workspace with calendar configured)
+
+These tests require an active workspace with at least one calendar provider configured
+(`iobox space add gmail you@gmail.com --calendar --read`). If no calendar provider is
+available the runner skips and marks SKIP rather than FAIL.
+
+### 26. Events — list upcoming events
+```bash
+iobox events list --after <TODAY> --max 5
+```
+- [ ] Exit code 0
+- [ ] Output contains event titles or `No events found`
+
+### 27. Events — list with before/after range
+```bash
+iobox events list --after <TODAY> --before <TODAY+30D> --max 10
+```
+- [ ] Exit code 0
+- [ ] All returned events fall within the date range
+
+### 28. Events — get a single event by ID
+Requires an event ID from a prior `events list` result.
+```bash
+iobox events get <EVENT_ID>
+```
+- [ ] Exit code 0
+- [ ] Output contains `Title:` and `Start:`
+
+### 29. Events — save an event to Markdown
+```bash
+iobox events save <EVENT_ID> -o /tmp/iobox-test-events
+```
+- [ ] Exit code 0
+- [ ] A `.md` file is created in the output dir
+- [ ] File contains YAML frontmatter with `start:` field
+
+---
+
+## Section E: Files (requires workspace with drive configured)
+
+These tests require an active workspace with at least one file provider configured
+(`iobox space add gmail you@gmail.com --drive --read`). The runner skips if no file
+provider is available.
+
+### 30. Files — list by query
+```bash
+iobox files list --query "report" --max 5
+```
+- [ ] Exit code 0
+- [ ] Output contains file names or `No files found`
+
+### 31. Files — get a single file by ID
+Requires a file ID from a prior `files list` result.
+```bash
+iobox files get <FILE_ID>
+```
+- [ ] Exit code 0
+- [ ] Output contains `Name:` and `Type:`
+
+### 32. Files — save file metadata to Markdown
+```bash
+iobox files save <FILE_ID> -o /tmp/iobox-test-files
+```
+- [ ] Exit code 0
+- [ ] A `.md` file is created in the output dir
+- [ ] File contains YAML frontmatter with `mime_type:` field
+
+---
+
+## Section F: Cleanup
+
+### 33. Run cleanup script
 ```bash
 python tests/live/cleanup.py
 ```
 - [ ] All emails with `[iobox-test-` in subject are trashed
 - [ ] All drafts with `[iobox-test-` in subject are deleted
+- [ ] Test space `live-test-space` removed from `~/.iobox/workspaces/`
 - [ ] Summary printed
 
 ---

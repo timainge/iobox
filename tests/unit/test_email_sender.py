@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.email_sender import (
+from iobox.providers.google._sender import (
     compose_forward_message,
     compose_message,
     create_draft,
@@ -161,8 +161,8 @@ class TestSendMessage:
 class TestForwardEmail:
     """Test cases for forward_email convenience function."""
 
-    @patch("iobox.email_sender.send_message")
-    @patch("iobox.email_sender.get_email_content")
+    @patch("iobox.providers.google._sender.send_message")
+    @patch("iobox.providers.google._sender.get_email_content")
     def test_forward_email(self, mock_get, mock_send):
         mock_get.return_value = {
             "message_id": "orig-1",
@@ -180,8 +180,8 @@ class TestForwardEmail:
         mock_send.assert_called_once()
         assert result["id"] == "fwd-1"
 
-    @patch("iobox.email_sender.send_message")
-    @patch("iobox.email_sender.get_email_content")
+    @patch("iobox.providers.google._sender.send_message")
+    @patch("iobox.providers.google._sender.get_email_content")
     def test_forward_with_note(self, mock_get, mock_send):
         mock_get.return_value = {
             "message_id": "orig-1",

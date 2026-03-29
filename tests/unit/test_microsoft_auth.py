@@ -12,11 +12,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.providers.microsoft_auth import MicrosoftAuth, get_microsoft_scopes
+from iobox.providers.o365.auth import MicrosoftAuth, get_microsoft_scopes
 
 # HAS_O365 is False in CI (O365 not installed). Tests that construct MicrosoftAuth
 # patch it to True so the __init__ guard doesn't block them.
-_MODULE = "iobox.providers.microsoft_auth"
+_MODULE = "iobox.providers.o365.auth"
 
 
 def _make_auth(
@@ -39,13 +39,13 @@ def _make_auth(
 
 class TestGetMicrosoftScopes:
     def test_messages_readonly(self):
-        scopes = get_microsoft_scopes(["messages"], "readonly")
+        scopes = get_microsoft_scopes(["email"], "readonly")
         assert "Mail.Read" in scopes
         assert "Mail.ReadWrite" not in scopes
         assert "Mail.Send" not in scopes
 
     def test_messages_standard(self):
-        scopes = get_microsoft_scopes(["messages"], "standard")
+        scopes = get_microsoft_scopes(["email"], "standard")
         assert "Mail.ReadWrite" in scopes
         assert "Mail.Send" in scopes
         assert "Mail.Read" not in scopes
@@ -69,7 +69,7 @@ class TestGetMicrosoftScopes:
         assert "Files.ReadWrite.All" in scopes
 
     def test_all_services_readonly(self):
-        scopes = get_microsoft_scopes(["messages", "calendar", "drive"], "readonly")
+        scopes = get_microsoft_scopes(["email", "calendar", "drive"], "readonly")
         assert "Mail.Read" in scopes
         assert "Calendars.Read" in scopes
         assert "Files.Read.All" in scopes
@@ -77,7 +77,7 @@ class TestGetMicrosoftScopes:
         assert "basic" in scopes
 
     def test_all_services_standard(self):
-        scopes = get_microsoft_scopes(["messages", "calendar", "drive"], "standard")
+        scopes = get_microsoft_scopes(["email", "calendar", "drive"], "standard")
         assert "Mail.ReadWrite" in scopes
         assert "Calendars.ReadWrite" in scopes
         assert "Files.ReadWrite.All" in scopes
@@ -87,7 +87,7 @@ class TestGetMicrosoftScopes:
         assert scopes == ["basic"]
 
     def test_no_duplicates(self):
-        scopes = get_microsoft_scopes(["messages", "messages"], "readonly")
+        scopes = get_microsoft_scopes(["email", "email"], "readonly")
         assert scopes.count("Mail.Read") == 1
 
 

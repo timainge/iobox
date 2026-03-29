@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.providers.google_auth import GoogleAuth
+from iobox.providers.google.auth import GoogleAuth
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -103,7 +103,7 @@ class TestGoogleAuth:
         auth = GoogleAuth(account="default", scopes=[], credentials_dir=str(tmp_path))
         auth._credentials = mock_creds
 
-        with patch("iobox.providers.google_auth.Credentials") as MockCreds:
+        with patch("iobox.providers.google.auth.Credentials") as MockCreds:
             result = auth.get_credentials()
 
         assert result is mock_creds
@@ -117,7 +117,7 @@ class TestGoogleAuth:
         mock_creds.valid = True
 
         with patch(
-            "iobox.providers.google_auth.Credentials.from_authorized_user_file",
+            "iobox.providers.google.auth.Credentials.from_authorized_user_file",
             return_value=mock_creds,
         ):
             auth = GoogleAuth(
@@ -141,10 +141,10 @@ class TestGoogleAuth:
         mock_creds.to_json.return_value = "{}"
 
         with patch(
-            "iobox.providers.google_auth.Credentials.from_authorized_user_file",
+            "iobox.providers.google.auth.Credentials.from_authorized_user_file",
             return_value=mock_creds,
         ):
-            with patch("iobox.providers.google_auth.Request"):
+            with patch("iobox.providers.google.auth.Request"):
                 auth = GoogleAuth(
                     account="default",
                     scopes=["scope"],
@@ -165,7 +165,7 @@ class TestGoogleAuth:
         mock_creds.to_json.return_value = "{}"
 
         with patch(
-            "iobox.providers.google_auth.InstalledAppFlow.from_client_secrets_file"
+            "iobox.providers.google.auth.InstalledAppFlow.from_client_secrets_file"
         ) as mock_flow_cls:
             mock_flow = MagicMock()
             mock_flow.run_local_server.return_value = mock_creds
@@ -202,7 +202,7 @@ class TestGoogleAuth:
         auth = GoogleAuth(account="default", scopes=[], credentials_dir=str(tmp_path))
         auth._credentials = mock_creds
 
-        with patch("iobox.providers.google_auth.build") as mock_build:
+        with patch("iobox.providers.google.auth.build") as mock_build:
             mock_service = MagicMock()
             mock_build.return_value = mock_service
 
@@ -215,7 +215,7 @@ class TestGoogleAuth:
         auth = GoogleAuth(account="default", scopes=[], credentials_dir=str(tmp_path))
         auth._credentials = mock_creds
 
-        with patch("iobox.providers.google_auth.build") as mock_build:
+        with patch("iobox.providers.google.auth.build") as mock_build:
             auth.get_service("gmail", "v1")
 
         mock_build.assert_called_once_with("gmail", "v1", credentials=mock_creds)
@@ -224,7 +224,7 @@ class TestGoogleAuth:
         auth = GoogleAuth(account="default", scopes=[], credentials_dir=str(tmp_path))
         auth._credentials = mock_creds
 
-        with patch("iobox.providers.google_auth.build") as mock_build:
+        with patch("iobox.providers.google.auth.build") as mock_build:
             auth.get_service("drive", "v3")
 
         mock_build.assert_called_once_with("drive", "v3", credentials=mock_creds)
@@ -237,7 +237,7 @@ class TestGetGoogleScopes:
     def test_messages_only_readonly(self) -> None:
         from iobox.modes import get_google_scopes
 
-        scopes = get_google_scopes(["messages"], "readonly")
+        scopes = get_google_scopes(["email"], "readonly")
         assert "https://www.googleapis.com/auth/gmail.readonly" in scopes
         assert not any("calendar" in s for s in scopes)
         assert not any("drive" in s for s in scopes)
@@ -245,7 +245,7 @@ class TestGetGoogleScopes:
     def test_messages_only_standard(self) -> None:
         from iobox.modes import get_google_scopes
 
-        scopes = get_google_scopes(["messages"], "standard")
+        scopes = get_google_scopes(["email"], "standard")
         assert "https://www.googleapis.com/auth/gmail.modify" in scopes
         assert "https://www.googleapis.com/auth/gmail.compose" in scopes
 
@@ -277,7 +277,7 @@ class TestGetGoogleScopes:
     def test_messages_calendar_drive_readonly(self) -> None:
         from iobox.modes import get_google_scopes
 
-        scopes = get_google_scopes(["messages", "calendar", "drive"], "readonly")
+        scopes = get_google_scopes(["email", "calendar", "drive"], "readonly")
         assert "https://www.googleapis.com/auth/gmail.readonly" in scopes
         assert "https://www.googleapis.com/auth/calendar.readonly" in scopes
         assert "https://www.googleapis.com/auth/drive.readonly" in scopes
@@ -285,7 +285,7 @@ class TestGetGoogleScopes:
     def test_messages_calendar_standard(self) -> None:
         from iobox.modes import get_google_scopes
 
-        scopes = get_google_scopes(["messages", "calendar"], "standard")
+        scopes = get_google_scopes(["email", "calendar"], "standard")
         assert "https://www.googleapis.com/auth/gmail.modify" in scopes
         assert "https://www.googleapis.com/auth/calendar" in scopes
 
@@ -297,7 +297,7 @@ class TestGetGoogleScopes:
     def test_no_duplicates(self) -> None:
         from iobox.modes import get_google_scopes
 
-        scopes = get_google_scopes(["messages", "messages", "calendar"], "readonly")
+        scopes = get_google_scopes(["email", "email", "calendar"], "readonly")
         assert len(scopes) == len(set(scopes))
 
 

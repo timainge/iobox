@@ -1,10 +1,10 @@
 """
 Markdown Conversion Module.
 
-Re-exports from markdown_converter.py and utils.py for backward compatibility.
+Re-exports from processing/markdown_converter.py and utils.py for backward compatibility.
 """
 
-from iobox.markdown_converter import (  # noqa: F401
+from iobox.processing.markdown_converter import (  # noqa: F401
     _clean_email_markdown,
     convert_email_to_markdown,
     convert_html_to_markdown,

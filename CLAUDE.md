@@ -180,8 +180,8 @@ Environment variables (`.env` or shell):
 ```bash
 # Workspace / Space management
 iobox space create personal
-iobox space add gmail you@gmail.com --messages --calendar --drive --read
-iobox space add outlook corp@company.com --messages --calendar
+iobox space add google you@gmail.com --email --calendar --drive --read
+iobox space add o365 corp@company.com --email --calendar
 iobox space list
 iobox space status
 iobox space use NAME

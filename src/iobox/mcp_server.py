@@ -14,15 +14,15 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service, set_active_mode
-from iobox.file_manager import (
+from iobox.providers.google.auth import check_auth_status, get_gmail_profile, get_gmail_service, set_active_mode
+from iobox.processing.file_manager import (
     SyncState,
     check_for_duplicates,
     create_output_directory,
     download_email_attachments,
     save_email_to_markdown,
 )
-from iobox.markdown_converter import convert_email_to_markdown, convert_thread_to_markdown
+from iobox.processing.markdown_converter import convert_email_to_markdown, convert_thread_to_markdown
 from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode, get_mode_from_env
 from iobox.utils import slugify_text
 
@@ -57,7 +57,7 @@ def register_tools(mode: AccessMode) -> None:
 
 def _get_gmail_provider() -> Any:
     """Return a GmailProvider instance. Override in tests by patching."""
-    from iobox.providers.gmail import GmailProvider
+    from iobox.providers.google.email import GmailProvider
 
     return GmailProvider()
 
@@ -618,7 +618,7 @@ def modify_labels(
     Returns:
         Updated message resource.
     """
-    from iobox.email_retrieval import (
+    from iobox.providers.google._retrieval import (
         modify_message_labels,
         resolve_label_name,
     )
@@ -677,7 +677,7 @@ def batch_modify_gmail_labels(
     """
     from datetime import date, timedelta
 
-    from iobox.email_retrieval import (
+    from iobox.providers.google._retrieval import (
         batch_modify_labels,
         modify_message_labels,
         resolve_label_name,

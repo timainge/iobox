@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from iobox.providers.base import FileQuery
-from iobox.providers.google_drive import (
+from iobox.providers.google.files import (
     FOLDER_MIME_TYPE,
     GOOGLE_WORKSPACE_EXPORT_TYPES,
     GoogleDriveProvider,
@@ -59,7 +59,7 @@ class TestGoogleDriveProviderInit:
         assert p._auth is mock_auth
 
     def test_creates_auth_from_account_params(self, tmp_path: object) -> None:
-        from iobox.providers.google_auth import GoogleAuth
+        from iobox.providers.google.auth import GoogleAuth
 
         p = GoogleDriveProvider(
             account="test@gmail.com",
@@ -288,7 +288,7 @@ class TestGetFile:
         assert f["id"] == "pdf_002"
 
     def test_get_file_calls_correct_api(self, provider: GoogleDriveProvider) -> None:
-        from iobox.providers.google_drive import FILE_FIELDS
+        from iobox.providers.google.files import FILE_FIELDS
 
         svc = MagicMock()
         svc.files().get().execute.return_value = MOCK_PDF_FILE

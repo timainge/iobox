@@ -16,7 +16,7 @@ from iobox.markdown import (
     generate_yaml_frontmatter,
     strip_html_tags,
 )
-from iobox.markdown_converter import convert_thread_to_markdown
+from iobox.processing.markdown_converter import convert_thread_to_markdown
 
 
 class TestMarkdownConversion:

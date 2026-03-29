@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iobox.providers.base import EmailQuery
-from iobox.providers.outlook import OutlookProvider
+from iobox.providers.o365.email import OutlookProvider
 from tests.fixtures.mock_outlook_responses import (
     MOCK_ATTACHMENT_MESSAGE,
     MOCK_HTML_MESSAGE,
@@ -125,7 +125,7 @@ class TestMessageToEmailData:
 
 
 class TestAuthenticate:
-    @patch("iobox.providers.outlook_auth.get_outlook_account")
+    @patch("iobox.providers.o365.auth.get_outlook_account")
     def test_authenticate_sets_account_and_mailbox(self, mock_get_acct):
         mock_account = make_mock_account()
         mock_get_acct.return_value = mock_account
@@ -137,7 +137,7 @@ class TestAuthenticate:
         assert p._account is mock_account
         assert p._mailbox is not None
 
-    @patch("iobox.providers.outlook_auth.get_outlook_account")
+    @patch("iobox.providers.o365.auth.get_outlook_account")
     def test_authenticate_sets_immutable_id_header(self, mock_get_acct):
         mock_account = make_mock_account()
         mock_get_acct.return_value = mock_account
@@ -934,7 +934,7 @@ class TestSync:
 
 
 class TestLazyInit:
-    @patch("iobox.providers.outlook_auth.get_outlook_account")
+    @patch("iobox.providers.o365.auth.get_outlook_account")
     def test_acct_lazy_authenticates(self, mock_get_acct):
         mock_account = make_mock_account()
         mock_get_acct.return_value = mock_account
@@ -946,7 +946,7 @@ class TestLazyInit:
         assert acct is mock_account
         mock_get_acct.assert_called_once()
 
-    @patch("iobox.providers.outlook_auth.get_outlook_account")
+    @patch("iobox.providers.o365.auth.get_outlook_account")
     def test_mb_lazy_initializes(self, mock_get_acct):
         mock_account = make_mock_account()
         mock_get_acct.return_value = mock_account

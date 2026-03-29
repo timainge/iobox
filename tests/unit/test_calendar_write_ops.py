@@ -12,12 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.providers.google_calendar import GoogleCalendarProvider
+from iobox.providers.google.calendar import GoogleCalendarProvider
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-_GCal_MODULE = "iobox.providers.google_calendar"
-_OutlookCal_MODULE = "iobox.providers.outlook_calendar"
+_GCal_MODULE = "iobox.providers.google.calendar"
+_OutlookCal_MODULE = "iobox.providers.o365.calendar"
 
 
 def _make_google_event_raw(
@@ -235,10 +235,10 @@ class TestGoogleCalendarRsvp:
 class TestOutlookCalendarWriteOps:
     """Smoke tests for OutlookCalendarProvider write methods using HAS_O365 patch."""
 
-    _MODULE = "iobox.providers.outlook_calendar"
+    _MODULE = "iobox.providers.o365.calendar"
 
     def _make_provider(self, mode: str = "standard") -> Any:  # type: ignore[name-defined]
-        from iobox.providers.outlook_calendar import OutlookCalendarProvider
+        from iobox.providers.o365.calendar import OutlookCalendarProvider
 
         auth = MagicMock()
         account = MagicMock()
@@ -273,7 +273,7 @@ class TestOutlookCalendarWriteOps:
         return ev
 
     def test_check_write_mode_raises_in_readonly(self) -> None:
-        from iobox.providers.outlook_calendar import OutlookCalendarProvider
+        from iobox.providers.o365.calendar import OutlookCalendarProvider
 
         with patch(f"{self._MODULE}.HAS_O365", True):
             provider = OutlookCalendarProvider.__new__(OutlookCalendarProvider)

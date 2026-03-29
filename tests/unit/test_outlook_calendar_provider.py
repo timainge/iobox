@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iobox.providers.base import EventQuery
-from iobox.providers.outlook_calendar import OutlookCalendarProvider, _strip_html
+from iobox.providers.o365.calendar import OutlookCalendarProvider, _strip_html
 
 # ── Mock O365 helpers ─────────────────────────────────────────────────────────
 
@@ -133,7 +133,7 @@ class TestOutlookCalendarProviderInit:
         assert OutlookCalendarProvider.PROVIDER_ID == "outlook_calendar"
 
     def test_raises_import_error_without_o365(self) -> None:
-        with patch("iobox.providers.outlook_calendar.HAS_O365", False):
+        with patch("iobox.providers.o365.calendar.HAS_O365", False):
             with pytest.raises(ImportError, match="pip install 'iobox\\[outlook\\]'"):
                 OutlookCalendarProvider()
 

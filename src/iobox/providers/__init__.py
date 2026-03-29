@@ -55,12 +55,12 @@ __all__ = [
 ]
 
 _PROVIDERS: dict[str, str] = {
-    "gmail": "iobox.providers.gmail.GmailProvider",
-    "outlook": "iobox.providers.outlook.OutlookProvider",
-    "google_calendar": "iobox.providers.google_calendar.GoogleCalendarProvider",
-    "google_drive": "iobox.providers.google_drive.GoogleDriveProvider",
-    "outlook_calendar": "iobox.providers.outlook_calendar.OutlookCalendarProvider",
-    "onedrive": "iobox.providers.onedrive.OneDriveProvider",
+    "gmail": "iobox.providers.google.email.GmailProvider",
+    "outlook": "iobox.providers.o365.email.OutlookProvider",
+    "google_calendar": "iobox.providers.google.calendar.GoogleCalendarProvider",
+    "google_drive": "iobox.providers.google.files.GoogleDriveProvider",
+    "outlook_calendar": "iobox.providers.o365.calendar.OutlookCalendarProvider",
+    "onedrive": "iobox.providers.o365.files.OneDriveProvider",
 }
 
 _INSTALL_HINTS: dict[str, str] = {

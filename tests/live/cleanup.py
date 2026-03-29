@@ -11,7 +11,7 @@ Usage:
 
 import sys
 
-from iobox.auth import get_gmail_service
+from iobox.providers.google.auth import get_gmail_service
 
 TAG_PATTERN = "iobox-test-"
 QUERY = f"subject:{TAG_PATTERN}"

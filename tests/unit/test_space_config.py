@@ -47,17 +47,17 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestDeriveHelpers:
-    def test_derive_id_gmail(self) -> None:
-        assert _derive_id("gmail", "tim@gmail.com") == "gmail-timgmailcom"
+    def test_derive_id_google(self) -> None:
+        assert _derive_id("google", "tim@gmail.com") == "google-timgmailcom"
 
-    def test_derive_id_outlook(self) -> None:
-        assert _derive_id("outlook", "corp@megacorp.com") == "outlook-corpmegacorpcom"
+    def test_derive_id_o365(self) -> None:
+        assert _derive_id("o365", "corp@megacorp.com") == "o365-corpmegacorpcom"
 
     def test_derive_id_strips_special_chars(self) -> None:
-        result = _derive_id("gmail", "my.name+tag@example.co.uk")
+        result = _derive_id("google", "my.name+tag@example.co.uk")
         assert "@" not in result
         assert "." not in result
-        assert result.startswith("gmail-")
+        assert result.startswith("google-")
 
     def test_derive_slug_gmail(self) -> None:
         assert _derive_slug("tim@gmail.com") == "tim-gmail"
@@ -79,30 +79,30 @@ class TestDeriveHelpers:
 class TestServiceEntry:
     def test_id_auto_derived_when_empty(self) -> None:
         entry = ServiceEntry(
-            number=1, service="gmail", account="tim@gmail.com", scopes=["messages"]
+            number=1, service="google", account="tim@gmail.com", scopes=["email"]
         )
-        assert entry.id == "gmail-timgmailcom"
+        assert entry.id == "google-timgmailcom"
 
     def test_slug_auto_derived_when_empty(self) -> None:
         entry = ServiceEntry(
-            number=1, service="gmail", account="tim@gmail.com", scopes=["messages"]
+            number=1, service="google", account="tim@gmail.com", scopes=["email"]
         )
         assert entry.slug == "tim-gmail"
 
     def test_explicit_id_preserved(self) -> None:
         entry = ServiceEntry(
-            number=1, service="gmail", account="tim@gmail.com", scopes=["messages"], id="custom-id"
+            number=1, service="google", account="tim@gmail.com", scopes=["email"], id="custom-id"
         )
         assert entry.id == "custom-id"
 
     def test_explicit_slug_preserved(self) -> None:
         entry = ServiceEntry(
-            number=1, service="gmail", account="tim@gmail.com", scopes=["messages"], slug="my-work"
+            number=1, service="google", account="tim@gmail.com", scopes=["email"], slug="my-work"
         )
         assert entry.slug == "my-work"
 
     def test_default_mode_is_standard(self) -> None:
-        entry = ServiceEntry(number=1, service="gmail", account="a@b.com", scopes=["messages"])
+        entry = ServiceEntry(number=1, service="google", account="a@b.com", scopes=["email"])
         assert entry.mode == "standard"
 
 
@@ -132,16 +132,16 @@ class TestSpaceConfigIO:
             services=[
                 ServiceEntry(
                     number=1,
-                    service="gmail",
+                    service="google",
                     account="tim@gmail.com",
-                    scopes=["messages", "calendar", "drive"],
+                    scopes=["email", "calendar", "drive"],
                     mode="readonly",
                 ),
                 ServiceEntry(
                     number=2,
-                    service="outlook",
+                    service="o365",
                     account="corp@megacorp.com",
-                    scopes=["messages"],
+                    scopes=["email"],
                     mode="standard",
                 ),
             ],
@@ -167,9 +167,9 @@ class TestSpaceConfigIO:
         save_space(self._make_config())
         loaded = load_space("personal")
         svc = loaded.services[0]
-        assert svc.service == "gmail"
+        assert svc.service == "google"
         assert svc.account == "tim@gmail.com"
-        assert svc.scopes == ["messages", "calendar", "drive"]
+        assert svc.scopes == ["email", "calendar", "drive"]
         assert svc.mode == "readonly"
         assert svc.number == 1
 
@@ -177,7 +177,7 @@ class TestSpaceConfigIO:
         save_space(self._make_config())
         loaded = load_space("personal")
         svc = loaded.services[0]
-        assert svc.id == "gmail-timgmailcom"
+        assert svc.id == "google-timgmailcom"
         assert svc.slug == "tim-gmail"
 
     def test_load_missing_space_raises(self) -> None:
@@ -252,14 +252,14 @@ class TestSessionIO:
             services={
                 "gmail-timgmailcom": ServiceSessionState(
                     authenticated=True,
-                    scopes=["messages", "calendar"],
+                    scopes=["email", "calendar"],
                     token_path="~/.iobox/tokens/tim@gmail.com/token_readonly.json",
                     last_sync="2026-03-16T09:55:00Z",
                     error=None,
                 ),
                 "outlook-corpmegacorpcom": ServiceSessionState(
                     authenticated=False,
-                    scopes=["messages"],
+                    scopes=["email"],
                     token_path="~/.iobox/tokens/corp/microsoft_token.txt",
                     last_sync=None,
                     error="TokenExpiredError",
@@ -297,7 +297,7 @@ class TestSessionIO:
     def test_roundtrip_scopes(self) -> None:
         save_session(self._make_session())
         loaded = load_session("personal")
-        assert loaded.services["gmail-timgmailcom"].scopes == ["messages", "calendar"]
+        assert loaded.services["gmail-timgmailcom"].scopes == ["email", "calendar"]
 
     def test_roundtrip_none_last_sync(self) -> None:
         save_session(self._make_session())

@@ -85,7 +85,7 @@ class Workspace:
     """Compositor that fans out queries across multiple provider slots."""
 
     name: str
-    message_providers: list[ProviderSlot] = field(default_factory=list)
+    email_providers: list[ProviderSlot] = field(default_factory=list)
     calendar_providers: list[ProviderSlot] = field(default_factory=list)
     file_providers: list[ProviderSlot] = field(default_factory=list)
     session: WorkspaceSession = field(default_factory=lambda: WorkspaceSession(workspace_name=""))
@@ -140,15 +140,15 @@ class Workspace:
 
     # ── Query methods ─────────────────────────────────────────────────────────
 
-    def search_messages(
+    def search_emails(
         self,
         query: EmailQuery,
         providers: list[str] | None = None,
         tags: list[str] | None = None,
     ) -> list[EmailData]:
-        """Fan out email search across message provider slots."""
+        """Fan out email search across email provider slots."""
         results: list[EmailData] = self._fan_out(
-            self.message_providers, "search_emails", query, providers, tags
+            self.email_providers, "search_emails", query, providers, tags
         )
         return sorted(results, key=lambda m: m.get("date", ""), reverse=True)
 
@@ -200,7 +200,7 @@ class Workspace:
         with ThreadPoolExecutor(max_workers=3) as ex:
             if "email" in types:
                 q: EmailQuery = EmailQuery(text=text, max_results=max_results_per_type)
-                future_map["email"] = ex.submit(self.search_messages, q)
+                future_map["email"] = ex.submit(self.search_emails, q)
             if "event" in types:
                 eq: EventQuery = EventQuery(text=text, max_results=max_results_per_type)
                 future_map["event"] = ex.submit(self.list_events, eq)
@@ -226,36 +226,36 @@ class Workspace:
 
     # ── Write operations ──────────────────────────────────────────────────────
 
-    def get_message_provider(self, slot_name: str | None = None) -> Any:
-        """Return a specific message provider slot for write operations.
+    def get_email_provider(self, slot_name: str | None = None) -> Any:
+        """Return a specific email provider slot for write operations.
 
         Args:
             slot_name: Provider slot name. Defaults to the first slot.
 
         Raises:
-            ValueError: If no message providers are configured, or the named
+            ValueError: If no email providers are configured, or the named
                 slot does not exist.
         """
-        if not self.message_providers:
-            raise ValueError("No message providers in workspace.")
+        if not self.email_providers:
+            raise ValueError("No email providers in workspace.")
         if slot_name is None:
-            return self.message_providers[0].provider
-        for slot in self.message_providers:
+            return self.email_providers[0].provider
+        for slot in self.email_providers:
             if slot.name == slot_name:
                 return slot.provider
         raise ValueError(
-            f"No message provider slot '{slot_name}'. "
-            f"Available: {[s.name for s in self.message_providers]}"
+            f"No email provider slot '{slot_name}'. "
+            f"Available: {[s.name for s in self.email_providers]}"
         )
 
     def _check_write_mode(self, slot_name: str | None = None) -> None:
         """Raise PermissionError if the targeted slot is in readonly mode.
 
         Checks the first matching slot; if no slot is found, does nothing
-        (``get_message_provider`` will raise a clearer error later).
+        (``get_email_provider`` will raise a clearer error later).
         """
         target_slot = None
-        for slot in self.message_providers:
+        for slot in self.email_providers:
             if slot_name is None or slot.name == slot_name:
                 target_slot = slot
                 break
@@ -282,11 +282,11 @@ class Workspace:
         on first API call, not at construction time.
         """
         from iobox.modes import _tier_for_mode, get_google_scopes
-        from iobox.providers.google_auth import GoogleAuth
+        from iobox.providers.google.auth import GoogleAuth
 
         creds_dir = credentials_dir or str(Path.home() / ".iobox")
 
-        message_slots: list[ProviderSlot] = []
+        email_slots: list[ProviderSlot] = []
         calendar_slots: list[ProviderSlot] = []
         file_slots: list[ProviderSlot] = []
 
@@ -296,7 +296,7 @@ class Workspace:
         for entry in config.services:
             cache_key = f"{entry.service}:{entry.account}:{entry.mode}"
 
-            if entry.service == "gmail":
+            if entry.service == "google":
                 scopes = get_google_scopes(entry.scopes, entry.mode)
                 tier = _tier_for_mode(entry.mode)
                 auth = google_auth_cache.get(cache_key)
@@ -309,26 +309,26 @@ class Workspace:
                     )
                     google_auth_cache[cache_key] = auth
 
-                if "messages" in entry.scopes:
-                    from iobox.providers.gmail import GmailProvider
+                if "email" in entry.scopes:
+                    from iobox.providers.google.email import GmailProvider
 
                     g_msg: Any = GmailProvider()
-                    message_slots.append(ProviderSlot(name=entry.slug, provider=g_msg))
+                    email_slots.append(ProviderSlot(name=entry.slug, provider=g_msg))
 
                 if "calendar" in entry.scopes:
-                    from iobox.providers.google_calendar import GoogleCalendarProvider
+                    from iobox.providers.google.calendar import GoogleCalendarProvider
 
                     g_cal: Any = GoogleCalendarProvider(auth=auth)
                     calendar_slots.append(ProviderSlot(name=f"{entry.slug}-cal", provider=g_cal))
 
                 if "drive" in entry.scopes:
-                    from iobox.providers.google_drive import GoogleDriveProvider
+                    from iobox.providers.google.files import GoogleDriveProvider
 
                     g_drv: Any = GoogleDriveProvider(auth=auth)
                     file_slots.append(ProviderSlot(name=f"{entry.slug}-drive", provider=g_drv))
 
-            elif entry.service == "outlook":
-                from iobox.providers.microsoft_auth import MicrosoftAuth, get_microsoft_scopes
+            elif entry.service == "o365":
+                from iobox.providers.o365.auth import MicrosoftAuth, get_microsoft_scopes
 
                 ms_cache_key = f"outlook:{entry.account}:{entry.mode}"
                 ms_auth: Any = google_auth_cache.get(ms_cache_key)  # reuse same dict
@@ -341,14 +341,14 @@ class Workspace:
                     )
                     google_auth_cache[ms_cache_key] = ms_auth
 
-                if "messages" in entry.scopes:
-                    from iobox.providers.outlook import OutlookProvider
+                if "email" in entry.scopes:
+                    from iobox.providers.o365.email import OutlookProvider
 
                     o_msg: Any = OutlookProvider(auth=ms_auth)
-                    message_slots.append(ProviderSlot(name=entry.slug, provider=o_msg))
+                    email_slots.append(ProviderSlot(name=entry.slug, provider=o_msg))
 
                 if "calendar" in entry.scopes:
-                    from iobox.providers.outlook_calendar import OutlookCalendarProvider
+                    from iobox.providers.o365.calendar import OutlookCalendarProvider
 
                     o_cal: Any = OutlookCalendarProvider(
                         account_email=entry.account,
@@ -359,7 +359,7 @@ class Workspace:
                     calendar_slots.append(ProviderSlot(name=f"{entry.slug}-cal", provider=o_cal))
 
                 if "drive" in entry.scopes:
-                    from iobox.providers.onedrive import OneDriveProvider
+                    from iobox.providers.o365.files import OneDriveProvider
 
                     o_drv: Any = OneDriveProvider(
                         account_email=entry.account,
@@ -372,7 +372,7 @@ class Workspace:
         session = WorkspaceSession(workspace_name=config.name)
         return cls(
             name=config.name,
-            message_providers=message_slots,
+            email_providers=email_slots,
             calendar_providers=calendar_slots,
             file_providers=file_slots,
             session=session,

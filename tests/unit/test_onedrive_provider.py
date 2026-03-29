@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iobox.providers.base import FileQuery
-from iobox.providers.onedrive import OneDriveProvider
+from iobox.providers.o365.files import OneDriveProvider
 
 # ── Mock O365 helpers ─────────────────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ class TestOneDriveProviderInit:
         assert OneDriveProvider.PROVIDER_ID == "onedrive"
 
     def test_raises_import_error_without_o365(self) -> None:
-        with patch("iobox.providers.onedrive.HAS_O365", False):
+        with patch("iobox.providers.o365.files.HAS_O365", False):
             with pytest.raises(ImportError, match="pip install 'iobox\\[outlook\\]'"):
                 OneDriveProvider()
 

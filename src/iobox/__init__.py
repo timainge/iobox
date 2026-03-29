@@ -13,17 +13,17 @@ except PackageNotFoundError:
     __version__ = "0.1.0"  # fallback for uninstalled dev
 
 try:
-    from iobox.auth import check_auth_status, get_gmail_service
-    from iobox.email_retrieval import download_attachment, get_email_content
-    from iobox.email_search import search_emails, validate_date_format
-    from iobox.email_sender import compose_message, forward_email, send_message
-    from iobox.file_manager import (
+    from iobox.providers.google.auth import check_auth_status, get_gmail_service
+    from iobox.providers.google._retrieval import download_attachment, get_email_content
+    from iobox.providers.google._search import search_emails, validate_date_format
+    from iobox.providers.google._sender import compose_message, forward_email, send_message
+    from iobox.processing.file_manager import (
         check_for_duplicates,
         create_output_directory,
         save_attachment,
         save_email_to_markdown,
     )
-    from iobox.markdown_converter import convert_email_to_markdown, convert_html_to_markdown
+    from iobox.processing.markdown_converter import convert_email_to_markdown, convert_html_to_markdown
 except Exception:
     pass
 
