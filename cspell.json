@@ -19,6 +19,7 @@
     "frontmatter",
     "mypy",
     "ruff",
-    "uv"
+    "uv",
+    "shadcn"
   ]
 }

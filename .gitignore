@@ -53,3 +53,7 @@ htmlcov/
 # Fan-out scratchpad
 .fan-out-scratchpad
 
+# MkDocs build output
+site/
+docs/site/
+
