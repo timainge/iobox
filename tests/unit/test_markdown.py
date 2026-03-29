@@ -8,15 +8,15 @@ for converting email content to markdown with YAML frontmatter.
 from datetime import datetime
 from unittest.mock import patch
 
-from iobox.markdown import (
+from iobox.processing.markdown_converter import (
     _clean_email_markdown,
     convert_email_to_markdown,
     convert_html_to_markdown,
-    create_markdown_filename,
+    convert_thread_to_markdown,
     generate_yaml_frontmatter,
     strip_html_tags,
 )
-from iobox.processing.markdown_converter import convert_thread_to_markdown
+from iobox.utils import create_markdown_filename
 
 
 class TestMarkdownConversion:

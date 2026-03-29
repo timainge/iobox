@@ -335,7 +335,7 @@ class SyncState:
 
 
 def download_email_attachments(
-    service=None,
+    service: Any = None,
     email_data: dict[str, Any] | None = None,
     output_dir: str = "",
     attachment_filters: list[str] | None = None,
@@ -359,7 +359,7 @@ def download_email_attachments(
     if download_fn is None:
         from iobox.providers.google._retrieval import download_attachment as _dl
 
-        def download_fn(message_id: str, attachment_id: str) -> bytes:  # type: ignore[misc]
+        def download_fn(message_id: str, attachment_id: str) -> bytes:
             return _dl(service, message_id, attachment_id)
 
     message_id = email_data.get("message_id", "")  # type: ignore[union-attr]  # caller guarantees non-None at this point

@@ -155,7 +155,9 @@ This is the test email body.
         with (
             patch("iobox.processing.file_manager.open", mock_open()) as mock_file,
             patch("iobox.processing.file_manager.create_markdown_filename") as mock_filename,
-            patch("iobox.processing.file_manager.handle_duplicate_filename") as mock_handle_duplicate,
+            patch(
+                "iobox.processing.file_manager.handle_duplicate_filename"
+            ) as mock_handle_duplicate,
         ):
             # Set up mocks
             test_filename = "2025-03-23-test-email-subject.md"
@@ -297,7 +299,9 @@ This is the test email body.
         # and False after (for the renamed file)
         check_side_effect = [True, False]
 
-        with patch("iobox.processing.file_manager.check_file_exists", side_effect=check_side_effect):
+        with patch(
+            "iobox.processing.file_manager.check_file_exists", side_effect=check_side_effect
+        ):
             # Call function to save attachment
             filepath = save_attachment(
                 attachment_data=attachment_data,
@@ -408,7 +412,10 @@ class TestDownloadEmailAttachments:
             patch(
                 "iobox.providers.google._retrieval.download_attachment", return_value=b"pdf-content"
             ) as mock_dl,
-            patch("iobox.processing.file_manager.save_attachment", return_value=str(tmp_path / "report.pdf")),
+            patch(
+                "iobox.processing.file_manager.save_attachment",
+                return_value=str(tmp_path / "report.pdf"),
+            ),
         ):
             result = download_email_attachments(mock_service, email_data, str(tmp_path))
 
@@ -433,8 +440,13 @@ class TestDownloadEmailAttachments:
         )
 
         with (
-            patch("iobox.providers.google._retrieval.download_attachment", return_value=b"data") as mock_dl,
-            patch("iobox.processing.file_manager.save_attachment", return_value=str(tmp_path / "report.pdf")),
+            patch(
+                "iobox.providers.google._retrieval.download_attachment", return_value=b"data"
+            ) as mock_dl,
+            patch(
+                "iobox.processing.file_manager.save_attachment",
+                return_value=str(tmp_path / "report.pdf"),
+            ),
         ):
             result = download_email_attachments(
                 mock_service, email_data, str(tmp_path), attachment_filters=["pdf"]
@@ -453,7 +465,8 @@ class TestDownloadEmailAttachments:
         )
 
         with patch(
-            "iobox.providers.google._retrieval.download_attachment", side_effect=Exception("network error")
+            "iobox.providers.google._retrieval.download_attachment",
+            side_effect=Exception("network error"),
         ):
             result = download_email_attachments(mock_service, email_data, str(tmp_path))
 

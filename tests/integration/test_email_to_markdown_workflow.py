@@ -8,10 +8,10 @@ combining multiple modules to verify the full workflow.
 import os
 from unittest.mock import MagicMock, patch
 
+from iobox.processing.file_manager import save_email_to_markdown
+from iobox.processing.markdown_converter import convert_email_to_markdown
 from iobox.providers.google._retrieval import get_email_content
 from iobox.providers.google._search import search_emails
-from iobox.processing.file_manager import save_email_to_markdown
-from iobox.markdown import convert_email_to_markdown
 from tests.fixtures.mock_responses import MOCK_PLAIN_TEXT_MESSAGE
 
 
@@ -89,10 +89,10 @@ class TestEmailToMarkdownWorkflow:
 
         mock_open = mocker.mock_open()
 
+        fm_patch = "iobox.processing.file_manager.create_markdown_filename"
         with (
             patch("builtins.open", mock_open),
-            patch("iobox.markdown.create_markdown_filename", return_value=mock_filename),
-            patch("iobox.processing.file_manager.create_markdown_filename", return_value=mock_filename),
+            patch(fm_patch, return_value=mock_filename),
         ):
             search_results = search_emails(
                 service=mock_service, query="from:example.com", max_results=1
@@ -195,14 +195,17 @@ class TestEmailToMarkdownWorkflow:
 
         filename_calls = 0
 
-        def get_filename():
+        def get_filename(*args, **kwargs):
             nonlocal filename_calls
             filename_calls += 1
             return f"test-email-{filename_calls}.md"
 
         with (
             patch("builtins.open", mocker.mock_open()) as mock_file,
-            patch("iobox.markdown.create_markdown_filename", side_effect=get_filename),
+            patch(
+                "iobox.processing.file_manager.create_markdown_filename",
+                side_effect=get_filename,
+            ),
         ):
             search_results = search_emails(
                 service=mock_service, query="from:example.com", max_results=2

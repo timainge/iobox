@@ -10,17 +10,43 @@ A personal workspace context tool — search, retrieve, and export **email, cale
 
 Email inboxes, calendars, and file drives are full of valuable content but it's trapped in silos. Iobox unifies them under a single interface: search across all three resource types at once, save results as structured Markdown files, and expose everything to AI assistants via an MCP server.
 
-## Features
+## What's implemented
 
-- **Unified workspace** — configure multiple accounts (Gmail + Outlook) and search across all of them in one command
-- **Email**: search, retrieve, send, forward, draft management, label, trash — Gmail and Outlook/Microsoft 365
-- **Calendar**: list and retrieve events — Google Calendar and Outlook Calendar
-- **Files**: search, list, and retrieve file content — Google Drive and OneDrive
-- **HTML to Markdown conversion** with YAML frontmatter for email, events, and files
-- **MCP server** — expose all workspace capabilities to Claude Desktop and other MCP clients
-- **AI summarization** — summarize any resource using Claude (optional)
-- **Access modes** — readonly, standard, and dangerous to control what the CLI can do
-- **Incremental sync** — only fetch new content since last run
+Iobox covers the full read + write surface for email, calendar, and files across Google and Microsoft 365.
+
+### Providers
+
+| Provider | Type | Read | Write |
+|---|---|---|---|
+| `GmailProvider` | Email | search, list, get, attachments | send, forward, draft, label, trash, sync |
+| `OutlookProvider` | Email | search, list, get, attachments | send, forward, draft, label, trash |
+| `GoogleCalendarProvider` | Calendar | list, get | create, update, delete, RSVP |
+| `OutlookCalendarProvider` | Calendar | list, get | create, update, delete, RSVP |
+| `GoogleDriveProvider` | Files | search, list, get, download | upload, delete, mkdir |
+| `OneDriveProvider` | Files | search, list, get, download | upload, delete, mkdir |
+
+### Workspace layer
+
+- **Named workspaces** — configure multiple accounts in a `~/.iobox/workspaces/NAME.toml` file
+- **Fan-out queries** — one search command queries all registered providers simultaneously; partial failures are logged and skipped
+- **`iobox space`** command group — create, add, list, status, use, login, logout
+
+### Processing layer
+
+- **Markdown conversion** — any Email, Event, or File resource exports as structured Markdown with YAML frontmatter
+- **File manager** — save resources to disk with deduplication and attachment handling
+- **AI summarization** — Claude-powered summaries (`pip install 'iobox[ai]'`)
+- **Semantic search** — embedding backends (OpenAI, Voyage, local) + sqlite-vec index (`pip install 'iobox[semantic]'`)
+
+### Access modes
+
+- **readonly** — search and retrieve only; no writes
+- **standard** — adds draft creation, labels, calendar and file writes
+- **dangerous** — adds send, forward, and trash
+
+### MCP server
+
+Exposes all workspace tools to Claude Desktop and other MCP clients via FastMCP.
 
 ## Installation
 

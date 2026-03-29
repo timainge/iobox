@@ -10,7 +10,8 @@ import os
 from unittest.mock import MagicMock, patch
 
 from iobox.accounts import set_active_account
-from iobox.auth import (
+from iobox.modes import AccessMode
+from iobox.providers.google.auth import (
     SCOPES,
     _resolve_token,
     _scope_tier_for_mode,
@@ -20,7 +21,8 @@ from iobox.auth import (
     get_gmail_service,
     set_active_mode,
 )
-from iobox.modes import AccessMode
+
+_GA = "iobox.providers.google.auth"
 
 
 class TestAuthentication:
@@ -30,11 +32,11 @@ class TestAuthentication:
         """Test auth status when no credential files exist."""
         nonexistent_creds = tmp_path / "nonexistent_creds.json"
 
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(nonexistent_creds))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(nonexistent_creds))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         # Use custom token file to trigger legacy path
         monkeypatch.setenv("GMAIL_TOKEN_FILE", "nonexistent.json")
-        monkeypatch.setattr("iobox.auth.TOKEN_PATH", str(tmp_path / "nonexistent.json"))
+        monkeypatch.setattr(_GA + ".TOKEN_PATH", str(tmp_path / "nonexistent.json"))
 
         status = check_auth_status()
 
@@ -46,12 +48,12 @@ class TestAuthentication:
         self, monkeypatch, mock_credentials_file, mock_token_file
     ):
         """Test auth status when credential files exist (legacy mode)."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.TOKEN_PATH", str(mock_token_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".TOKEN_PATH", str(mock_token_file))
         # Force legacy path
         monkeypatch.setenv("GMAIL_TOKEN_FILE", "custom.json")
 
-        with patch("iobox.auth.Credentials.from_authorized_user_file") as mock_creds:
+        with patch(_GA + ".Credentials.from_authorized_user_file") as mock_creds:
             mock_creds.return_value = MagicMock(
                 valid=True, expired=False, refresh_token="mock-refresh-token"
             )
@@ -68,11 +70,11 @@ class TestAuthentication:
         self, monkeypatch, mock_credentials_file, mock_token_file
     ):
         """Test auth status with expired token (legacy mode)."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.TOKEN_PATH", str(mock_token_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".TOKEN_PATH", str(mock_token_file))
         monkeypatch.setenv("GMAIL_TOKEN_FILE", "custom.json")
 
-        with patch("iobox.auth.Credentials.from_authorized_user_file") as mock_creds:
+        with patch(_GA + ".Credentials.from_authorized_user_file") as mock_creds:
             mock_creds.return_value = MagicMock(
                 valid=False, expired=True, refresh_token="mock-refresh-token"
             )
@@ -85,8 +87,8 @@ class TestAuthentication:
 
     def test_get_gmail_service_new_credentials(self, monkeypatch, mock_credentials_file, tmp_path):
         """Test creating new credentials when none exist (multi-profile)."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_mode(AccessMode.standard)
@@ -98,8 +100,8 @@ class TestAuthentication:
         mock_service = MagicMock()
 
         with (
-            patch("iobox.auth.InstalledAppFlow.from_client_secrets_file", return_value=mock_flow),
-            patch("iobox.auth.build", return_value=mock_service),
+            patch(_GA + ".InstalledAppFlow.from_client_secrets_file", return_value=mock_flow),
+            patch(_GA + ".build", return_value=mock_service),
         ):
             service = get_gmail_service()
 
@@ -111,8 +113,8 @@ class TestAuthentication:
 
     def test_get_gmail_service_refresh_token(self, monkeypatch, mock_credentials_file, tmp_path):
         """Test refreshing an expired token (multi-profile)."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_mode(AccessMode.standard)
@@ -136,8 +138,8 @@ class TestAuthentication:
         mock_service = MagicMock()
 
         with (
-            patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds),
-            patch("iobox.auth.build", return_value=mock_service),
+            patch(_GA + ".Credentials.from_authorized_user_file", return_value=mock_creds),
+            patch(_GA + ".build", return_value=mock_service),
         ):
             service = get_gmail_service()
 
@@ -147,8 +149,8 @@ class TestAuthentication:
 
     def test_get_gmail_service_valid_token(self, monkeypatch, mock_credentials_file, tmp_path):
         """Test using an existing valid token (multi-profile)."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_mode(AccessMode.standard)
@@ -164,8 +166,8 @@ class TestAuthentication:
         mock_service = MagicMock()
 
         with (
-            patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds),
-            patch("iobox.auth.build", return_value=mock_service),
+            patch(_GA + ".Credentials.from_authorized_user_file", return_value=mock_creds),
+            patch(_GA + ".build", return_value=mock_service),
         ):
             service = get_gmail_service()
             mock_creds.refresh.assert_not_called()
@@ -201,8 +203,8 @@ class TestScopeMismatch:
         self, monkeypatch, mock_credentials_file, tmp_path
     ):
         """If token has old scopes, a new token file is created (old one is NOT deleted)."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_mode(AccessMode.standard)
@@ -223,8 +225,8 @@ class TestScopeMismatch:
         mock_service = MagicMock()
 
         with (
-            patch("iobox.auth.InstalledAppFlow.from_client_secrets_file", return_value=mock_flow),
-            patch("iobox.auth.build", return_value=mock_service),
+            patch(_GA + ".InstalledAppFlow.from_client_secrets_file", return_value=mock_flow),
+            patch(_GA + ".build", return_value=mock_service),
         ):
             service = get_gmail_service()
 
@@ -237,8 +239,8 @@ class TestScopeMismatch:
 
     def test_scope_upgrade_keeps_old_token(self, monkeypatch, mock_credentials_file, tmp_path):
         """Upgrading from readonly to standard never deletes the readonly token."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_account("default")
@@ -267,8 +269,8 @@ class TestScopeMismatch:
         self, monkeypatch, mock_credentials_file, tmp_path
     ):
         """A token with gmail.modify scopes should be accepted in readonly mode."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(mock_credentials_file))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_mode(AccessMode.readonly)
@@ -287,8 +289,8 @@ class TestScopeMismatch:
         mock_service = MagicMock()
 
         with (
-            patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds),
-            patch("iobox.auth.build", return_value=mock_service),
+            patch(_GA + ".Credentials.from_authorized_user_file", return_value=mock_creds),
+            patch(_GA + ".build", return_value=mock_service),
         ):
             service = get_gmail_service()
             mock_creds.refresh.assert_not_called()
@@ -316,7 +318,7 @@ class TestTokenResolution:
 
     def test_exact_match_readonly(self, tmp_path, monkeypatch):
         """Exact match: readonly mode finds token_readonly.json."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         token_dir = tmp_path / "tokens" / "default"
         token_dir.mkdir(parents=True)
         (token_dir / "token_readonly.json").write_text("{}")
@@ -327,7 +329,7 @@ class TestTokenResolution:
 
     def test_exact_match_standard(self, tmp_path, monkeypatch):
         """Exact match: standard mode finds token_standard.json."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         token_dir = tmp_path / "tokens" / "default"
         token_dir.mkdir(parents=True)
         (token_dir / "token_standard.json").write_text("{}")
@@ -337,7 +339,7 @@ class TestTokenResolution:
 
     def test_readonly_falls_back_to_standard(self, tmp_path, monkeypatch):
         """Readonly mode falls back to standard token when no readonly token exists."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         token_dir = tmp_path / "tokens" / "default"
         token_dir.mkdir(parents=True)
         (token_dir / "token_standard.json").write_text("{}")
@@ -349,7 +351,7 @@ class TestTokenResolution:
 
     def test_no_tokens_returns_none(self, tmp_path, monkeypatch):
         """No tokens at all returns None for load_path."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
 
         load_path, save_path = _resolve_token("default", AccessMode.standard)
         assert load_path is None
@@ -357,7 +359,7 @@ class TestTokenResolution:
 
     def test_standard_does_not_fall_back_to_readonly(self, tmp_path, monkeypatch):
         """Standard mode does NOT fall back to readonly token."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         token_dir = tmp_path / "tokens" / "default"
         token_dir.mkdir(parents=True)
         (token_dir / "token_readonly.json").write_text("{}")
@@ -367,7 +369,7 @@ class TestTokenResolution:
 
     def test_dangerous_uses_standard_tier(self, tmp_path, monkeypatch):
         """Dangerous mode maps to the standard scope tier."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         token_dir = tmp_path / "tokens" / "default"
         token_dir.mkdir(parents=True)
         (token_dir / "token_standard.json").write_text("{}")
@@ -377,7 +379,7 @@ class TestTokenResolution:
 
     def test_different_account(self, tmp_path, monkeypatch):
         """Tokens are namespaced per account."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
 
         # Create token for 'work' account only
         work_dir = tmp_path / "tokens" / "work"
@@ -411,7 +413,7 @@ class TestLegacyMigration:
 
     def test_migrates_legacy_token(self, monkeypatch, tmp_path):
         """Legacy token.json is copied to tokens/default/ on first use."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_mode(AccessMode.standard)
@@ -436,8 +438,8 @@ class TestLegacyMigration:
         mock_creds = MagicMock()
         mock_creds.scopes = legacy_data["scopes"]
 
-        with patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds):
-            from iobox.auth import _maybe_migrate_legacy_token
+        with patch(_GA + ".Credentials.from_authorized_user_file", return_value=mock_creds):
+            from iobox.providers.google.auth import _maybe_migrate_legacy_token
 
             _maybe_migrate_legacy_token("default")
 
@@ -450,7 +452,7 @@ class TestLegacyMigration:
 
     def test_migrates_readonly_legacy_token(self, monkeypatch, tmp_path):
         """Legacy readonly token is migrated to token_readonly.json."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
 
         legacy_token = tmp_path / "token.json"
         legacy_data = {
@@ -462,8 +464,8 @@ class TestLegacyMigration:
         mock_creds = MagicMock()
         mock_creds.scopes = legacy_data["scopes"]
 
-        with patch("iobox.auth.Credentials.from_authorized_user_file", return_value=mock_creds):
-            from iobox.auth import _maybe_migrate_legacy_token
+        with patch(_GA + ".Credentials.from_authorized_user_file", return_value=mock_creds):
+            from iobox.providers.google.auth import _maybe_migrate_legacy_token
 
             _maybe_migrate_legacy_token("default")
 
@@ -472,12 +474,12 @@ class TestLegacyMigration:
 
     def test_skips_migration_for_non_default_account(self, monkeypatch, tmp_path):
         """Migration only runs for the 'default' account."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
 
         legacy_token = tmp_path / "token.json"
         legacy_token.write_text('{"token": "x"}')
 
-        from iobox.auth import _maybe_migrate_legacy_token
+        from iobox.providers.google.auth import _maybe_migrate_legacy_token
 
         _maybe_migrate_legacy_token("work")
 
@@ -486,7 +488,7 @@ class TestLegacyMigration:
 
     def test_skips_migration_if_tokens_exist(self, monkeypatch, tmp_path):
         """Migration is skipped if token files already exist in the directory."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
 
         legacy_token = tmp_path / "token.json"
         legacy_token.write_text('{"token": "old"}')
@@ -496,7 +498,7 @@ class TestLegacyMigration:
         token_dir.mkdir(parents=True)
         (token_dir / "token_standard.json").write_text('{"token": "existing"}')
 
-        from iobox.auth import _maybe_migrate_legacy_token
+        from iobox.providers.google.auth import _maybe_migrate_legacy_token
 
         _maybe_migrate_legacy_token("default")
 
@@ -509,8 +511,8 @@ class TestMultiProfileAuthStatus:
 
     def test_auth_status_finds_multiprofile_token(self, monkeypatch, tmp_path):
         """check_auth_status uses multi-profile token resolution."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(tmp_path / "credentials.json"))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(tmp_path / "credentials.json"))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
         (tmp_path / "credentials.json").write_text("{}")
 
@@ -521,7 +523,7 @@ class TestMultiProfileAuthStatus:
         token_dir.mkdir(parents=True)
         (token_dir / "token_standard.json").write_text('{"token": "t"}')
 
-        with patch("iobox.auth.Credentials.from_authorized_user_file") as mock_creds:
+        with patch(_GA + ".Credentials.from_authorized_user_file") as mock_creds:
             mock_creds.return_value = MagicMock(valid=True, expired=False, refresh_token="r")
             status = check_auth_status()
 
@@ -531,8 +533,8 @@ class TestMultiProfileAuthStatus:
 
     def test_auth_status_no_token(self, monkeypatch, tmp_path):
         """check_auth_status reports no token when directory is empty."""
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_DIR", str(tmp_path))
-        monkeypatch.setattr("iobox.auth.CREDENTIALS_PATH", str(tmp_path / "credentials.json"))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(tmp_path / "credentials.json"))
         monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
 
         set_active_mode(AccessMode.standard)

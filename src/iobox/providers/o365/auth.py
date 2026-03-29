@@ -36,8 +36,8 @@ try:
 
     HAS_O365 = True
 except ImportError:
-    Account = None  # type: ignore[assignment,misc]
-    FileSystemTokenBackend = None  # type: ignore[assignment,misc]
+    Account = None
+    FileSystemTokenBackend = None
     HAS_O365 = False
 
 # ---------------------------------------------------------------------------
@@ -276,7 +276,8 @@ def get_outlook_account(
         ImportError: If the ``O365`` package is not installed.
     """
     try:
-        from O365 import Account as _Account, FileSystemTokenBackend as _FSTB
+        from O365 import Account as _Account
+        from O365 import FileSystemTokenBackend as _FSTB
     except ImportError as exc:
         raise ImportError(
             "The 'O365' package is required for Outlook support. "
@@ -390,7 +391,8 @@ def check_outlook_auth_status(account: str = "default") -> dict[str, Any]:
         return status
 
     try:
-        from O365 import Account as _Account, FileSystemTokenBackend as _FSTB
+        from O365 import Account as _Account
+        from O365 import FileSystemTokenBackend as _FSTB
 
         credentials = (cfg["client_id"], cfg["client_secret"])
         token_backend = _FSTB(token_path=token_dir, token_filename=_LEGACY_TOKEN_FILENAME)

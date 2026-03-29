@@ -464,7 +464,10 @@ class TestAuthStatusDeprecation:
                     "token_path": "/tmp/token.json",
                 },
             ),
-            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("no auth")),
+            patch(
+                "iobox.providers.google.auth.get_gmail_service",
+                side_effect=Exception("no auth"),
+            ),
         ):
             mock_prov.return_value = MagicMock()
             result = runner.invoke(app, ["auth-status"])

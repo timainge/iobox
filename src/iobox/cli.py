@@ -14,7 +14,7 @@ import typer
 
 from iobox import __version__
 from iobox.accounts import set_active_account
-from iobox.providers.google.auth import set_active_mode
+from iobox.modes import CLI_COMMANDS_BY_MODE, AccessMode, get_mode_from_env
 from iobox.processing.file_manager import (
     SyncState,
     check_for_duplicates,
@@ -22,10 +22,12 @@ from iobox.processing.file_manager import (
     download_email_attachments,
     save_email_to_markdown,
 )
-from iobox.markdown import convert_email_to_markdown
-from iobox.processing.markdown_converter import convert_thread_to_markdown
-from iobox.modes import CLI_COMMANDS_BY_MODE, AccessMode, get_mode_from_env
+from iobox.processing.markdown_converter import (
+    convert_email_to_markdown,
+    convert_thread_to_markdown,
+)
 from iobox.providers import EmailData, EmailProvider, EmailQuery, get_provider
+from iobox.providers.google.auth import set_active_mode
 
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
@@ -151,7 +153,11 @@ def auth_status(ctx: typer.Context):
                 pass
     else:
         # Gmail auth status
-        from iobox.providers.google.auth import check_auth_status, get_gmail_profile, get_gmail_service
+        from iobox.providers.google.auth import (  # noqa: PLC0415
+            check_auth_status,
+            get_gmail_profile,
+            get_gmail_service,
+        )
 
         status = check_auth_status()
         typer.echo(f"Authenticated: {status['authenticated']}")

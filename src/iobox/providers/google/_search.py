@@ -12,7 +12,9 @@ from typing import Any
 from googleapiclient.errors import HttpError
 
 # Re-export public retrieval functions for backward compatibility
-from iobox.providers.google._retrieval import download_attachment as download_attachment  # noqa: F401
+from iobox.providers.google._retrieval import (
+    download_attachment as download_attachment,  # noqa: F401
+)
 from iobox.providers.google._retrieval import get_email_content as get_email_content  # noqa: F401
 from iobox.providers.google._retrieval import get_label_map as get_label_map  # noqa: F401
 
@@ -92,7 +94,7 @@ def batch_get_metadata(
     return metadata_list
 
 
-def get_new_messages(service, history_id: str) -> list[str] | None:
+def get_new_messages(service: Any, history_id: str) -> list[str] | None:
     """
     Get message IDs added since the given historyId.
 
@@ -134,7 +136,7 @@ def get_new_messages(service, history_id: str) -> list[str] | None:
 
 
 def search_emails(
-    service,
+    service: Any,
     query: str,
     max_results: int = 100,
     days_back: int = 7,

@@ -15,11 +15,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from iobox.providers.google import auth as _auth
-from iobox.providers.google import _retrieval
-from iobox.providers.google import _search
-from iobox.providers.google import _sender
 from iobox.providers.base import AttachmentInfo, EmailData, EmailProvider, EmailQuery
+from iobox.providers.google import _retrieval, _search, _sender
+from iobox.providers.google import auth as _auth
 
 logger = logging.getLogger(__name__)
 

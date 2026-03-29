@@ -11,24 +11,31 @@ Key design decisions:
 - **Three independent provider ABCs**: `EmailProvider`, `CalendarProvider`, `FileProvider` — never a monolithic one. Mix-and-match across ecosystems is a valid use case (Gmail + OneDrive).
 - **Google-first ordering**: Gmail → Google Calendar → Google Drive → Outlook → O365 Calendar → OneDrive.
 
-## Current State (v1.0.0)
+## Current State
 
-The workspace expansion is complete. All provider types and the workspace compositor are implemented:
+All provider types and the workspace compositor are implemented and tested (Google providers via live tests; O365 providers via unit tests only — not yet tested against a real M365 tenant).
+
 - Provider ABCs: `EmailProvider`, `CalendarProvider`, `FileProvider` — all with full read + write methods
 - `GmailProvider`, `OutlookProvider` — email, read + write
 - `GoogleCalendarProvider`, `OutlookCalendarProvider` — calendar, read + write
 - `GoogleDriveProvider`, `OneDriveProvider` — files, read + write
 - `Workspace` compositor — fans out cross-type search; `space` CLI command group
 - `processing/` package — Markdown conversion, Claude summarization, semantic embedding + search
-- Full MCP server with workspace-aware tools; CI/CD; PyPI packaging; docs site
+- Full MCP server with workspace-aware tools; CI/CD; PyPI packaging
+
+## Version Policy
+
+**Current version: `0.5.0`** — will remain below `1.0.0` until O365 providers (Outlook email, calendar, OneDrive) are tested end-to-end against a real Microsoft 365 tenant. Do not bump to `1.0.0` or above until live O365 testing passes.
+
+Set up an M365 dev sandbox for O365 testing: see `.dev/testing-o365.md` for instructions.
 
 ## Provider Architecture
 
 Iobox uses an abstract provider layer so multiple backends share a single CLI and MCP surface.
 
 - **`EmailProvider` ABC** — `src/iobox/providers/base.py` defines the interface (search, retrieve, send, label, trash, sync, etc.).
-- **`GmailProvider`** — Google Gmail API (`src/iobox/providers/gmail.py`). Default provider.
-- **`OutlookProvider`** — Microsoft 365 / Exchange Online via the `O365` library (`src/iobox/providers/outlook.py`).
+- **`GmailProvider`** — Google Gmail API (`src/iobox/providers/google/email.py`). Default provider.
+- **`OutlookProvider`** — Microsoft 365 / Exchange Online via the `O365` library (`src/iobox/providers/o365/email.py`).
 
 ### Selecting a provider
 
@@ -58,16 +65,24 @@ src/iobox/providers/
   base.py                # Provider ABCs: EmailProvider, CalendarProvider, FileProvider
                          # Type hierarchy: Resource, Email, Event, File, AttendeeInfo
                          # Query types: EmailQuery, EventQuery, FileQuery
-  gmail.py               # GmailProvider — delegates to legacy modules below
-  outlook.py             # OutlookProvider — Microsoft Graph via O365 library
-  outlook_calendar.py    # OutlookCalendarProvider — O365 calendar
-  onedrive.py            # OneDriveProvider — O365 file storage
-  google_calendar.py     # GoogleCalendarProvider — Google Calendar API v3
-  google_drive.py        # GoogleDriveProvider — Google Drive API v3
-  google_auth.py         # GoogleAuth shared object — one token per (account, scopes)
-  microsoft_auth.py      # MicrosoftAuth shared object — one token per (account, scopes)
-  outlook_auth.py        # Legacy O365 auth helper
-  __init__.py            # get_provider() factory + new type exports
+  __init__.py            # get_provider() factory + type re-exports
+
+  google/
+    __init__.py
+    auth.py              # GoogleAuth — one token per (account, scope-tier), legacy migration
+    email.py             # GmailProvider
+    calendar.py          # GoogleCalendarProvider
+    files.py             # GoogleDriveProvider
+    _retrieval.py        # Gmail message retrieval and attachment download
+    _search.py           # Gmail API search and query parsing
+    _sender.py           # Gmail compose, send, forward, draft management
+
+  o365/
+    __init__.py
+    auth.py              # MicrosoftAuth + get_outlook_account — one token per (account, scopes)
+    email.py             # OutlookProvider — Microsoft Graph via O365 library; ImmutableId
+    calendar.py          # OutlookCalendarProvider
+    files.py             # OneDriveProvider
 ```
 
 ### Workspace layer
@@ -77,26 +92,19 @@ src/iobox/providers/
 
 ### Processing modules
 
-- **`src/iobox/processing/markdown.py`**: Unified resource→Markdown converter for Email, Event, and File types
+- **`src/iobox/processing/markdown.py`**: Unified resource→Markdown converter for Event, File, and Email types (`convert_event_to_markdown`, `convert_file_to_markdown`)
+- **`src/iobox/processing/markdown_converter.py`**: Email-specific Markdown conversion — HTML→Markdown, YAML frontmatter, thread formatting (`convert_email_to_markdown`, `convert_thread_to_markdown`)
+- **`src/iobox/processing/file_manager.py`**: Save resources to disk, dedup, attachment handling, `SyncState`
 - **`src/iobox/processing/summarize.py`**: Claude-powered resource summarization (`pip install 'iobox[ai]'`)
 - **`src/iobox/processing/embed.py`**: Embedding backends (OpenAI, Voyage, local) + `ResourceIndex` (sqlite-vec) + `embed_resources()` + `semantic_search()` (`pip install 'iobox[semantic]'`)
-
-### Supporting modules (Gmail implementation details, wrapped by GmailProvider)
-
-- **`src/iobox/email_search.py`**: Gmail API search and query parsing
-- **`src/iobox/email_retrieval.py`**: Gmail message retrieval and attachment download
-- **`src/iobox/email_sender.py`**: Gmail compose, send, forward, draft management
-- **`src/iobox/auth.py`**: Google OAuth 2.0 with multi-profile token storage
 
 ### Shared modules
 
 - **`src/iobox/cli.py`**: Typer CLI — all commands route through provider interface; includes `space`, `events`, `files`, and `workspace` command groups
+- **`src/iobox/__main__.py`**: Package entry point — `python -m iobox` delegates to `cli.app()`
 - **`src/iobox/modes.py`**: Access mode definitions (readonly/standard/dangerous); `get_google_scopes()`, `get_microsoft_scopes()`
 - **`src/iobox/accounts.py`**: Active account name for token namespacing
-- **`src/iobox/markdown_converter.py`**: HTML → Markdown and YAML frontmatter
-- **`src/iobox/markdown.py`**: Re-exports from markdown_converter for backward compat
-- **`src/iobox/file_manager.py`**: Save emails to disk, dedup, attachment handling
-- **`src/iobox/utils.py`**: Filename generation and text slugifying
+- **`src/iobox/utils.py`**: Filename generation and text slugifying (`create_markdown_filename`, `slugify_text`)
 - **`src/iobox/mcp_server.py`**: FastMCP server exposing iobox tools (workspace-aware)
 
 ### Key Dependencies
@@ -148,7 +156,7 @@ If `GMAIL_TOKEN_FILE` is set to a non-default value, the legacy single-file beha
 
 ### Microsoft 365 / Outlook
 
-Set `OUTLOOK_CLIENT_ID` and optionally `OUTLOOK_TENANT_ID` (defaults to `"common"`). Token stored at `$CREDENTIALS_DIR/tokens/outlook/o365_token.txt`.
+Set `OUTLOOK_CLIENT_ID` and optionally `OUTLOOK_TENANT_ID` (defaults to `"common"`). Token stored at `$CREDENTIALS_DIR/tokens/{account}/microsoft_token.txt` (namespaced by account email). Legacy `o365_token.txt` files are auto-migrated on first use.
 
 ## Key Invariants
 
@@ -242,7 +250,7 @@ python tests/live/run_tests.py
 python tests/live/cleanup.py  # clean up test emails after a run
 ```
 
-For Outlook live testing guidance (what mocks can't verify, M365 dev sandbox setup): `.dev/testing-o365.md`
+For Outlook live testing guidance (what mocks can't verify, M365 dev sandbox setup): see the Version Policy section above and set up an M365 dev sandbox.
 
 ## File Output Format
 

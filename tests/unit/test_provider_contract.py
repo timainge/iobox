@@ -22,8 +22,8 @@ from iobox.providers.base import (
     FileProvider,
     FileQuery,
 )
-from iobox.providers.google.email import GmailProvider
 from iobox.providers.google.calendar import GoogleCalendarProvider
+from iobox.providers.google.email import GmailProvider
 from iobox.providers.google.files import GoogleDriveProvider
 from iobox.providers.o365.email import OutlookProvider
 from tests.fixtures.mock_calendar_responses import MOCK_LIST_RESPONSE, MOCK_SYNC_RESPONSE

@@ -449,7 +449,10 @@ class TestNewCliFeatures:
         with (
             patch("iobox.cli.get_provider", return_value=provider),
             patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("Auth failed")),
+            patch(
+                "iobox.providers.google.auth.get_gmail_service",
+                side_effect=Exception("Auth failed"),
+            ),
         ):
             result = runner.invoke(app, ["auth-status"])
 

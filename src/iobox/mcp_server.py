@@ -14,7 +14,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from iobox.providers.google.auth import check_auth_status, get_gmail_profile, get_gmail_service, set_active_mode
+from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode, get_mode_from_env
 from iobox.processing.file_manager import (
     SyncState,
     check_for_duplicates,
@@ -22,8 +22,16 @@ from iobox.processing.file_manager import (
     download_email_attachments,
     save_email_to_markdown,
 )
-from iobox.processing.markdown_converter import convert_email_to_markdown, convert_thread_to_markdown
-from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode, get_mode_from_env
+from iobox.processing.markdown_converter import (
+    convert_email_to_markdown,
+    convert_thread_to_markdown,
+)
+from iobox.providers.google.auth import (
+    check_auth_status,
+    get_gmail_profile,
+    get_gmail_service,
+    set_active_mode,
+)
 from iobox.utils import slugify_text
 
 mcp = FastMCP("iobox")
@@ -677,12 +685,12 @@ def batch_modify_gmail_labels(
     """
     from datetime import date, timedelta
 
+    from iobox.providers.base import EmailQuery
     from iobox.providers.google._retrieval import (
         batch_modify_labels,
         modify_message_labels,
         resolve_label_name,
     )
-    from iobox.providers.base import EmailQuery
 
     service = get_gmail_service()
     add_labels: list[str] = []

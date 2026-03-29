@@ -563,7 +563,6 @@ def test_space_status_empty() -> Result:
 
 def cleanup_test_space() -> None:
     """Remove the test space config file created during section C."""
-    import shutil as _shutil
 
     space_dir = Path.home() / ".iobox" / "workspaces"
     for candidate in (
@@ -666,7 +665,8 @@ def test_events_save(tmp: str) -> Result:
 def _has_file_provider() -> bool:
     """Return True if the active workspace has at least one file slot."""
     proc = iobox("space", "status")
-    return proc.returncode == 0 and ("drive" in proc.stdout.lower() or "onedrive" in proc.stdout.lower())
+    out = proc.stdout.lower()
+    return proc.returncode == 0 and ("drive" in out or "onedrive" in out)
 
 
 def _get_first_file_id(query: str = "report") -> str | None:
@@ -884,7 +884,8 @@ def main():
             failed += 1
 
     skipped = sum(1 for r in results if r.passed and r.detail.startswith("SKIP"))
-    print(f"\n{BOLD}{passed} passed, {failed} failed, {skipped} skipped, {len(results)} total{RESET}")
+    total = len(results)
+    print(f"\n{BOLD}{passed} passed, {failed} failed, {skipped} skipped, {total} total{RESET}")
 
     # Cleanup temp directory
     try:
