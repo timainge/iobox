@@ -3,6 +3,7 @@ token.json
 xtoken.json
 credentials.json
 credentials2.json
+tokens/
 
 # Environment variables
 .env

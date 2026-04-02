@@ -4,7 +4,11 @@
 [![Python](https://img.shields.io/pypi/pyversions/iobox)](https://pypi.org/project/iobox/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A personal workspace context tool — search, retrieve, and export **email, calendar events, and files** across Gmail, Google Calendar, Google Drive, and Microsoft 365, all from one CLI.
+Your email is in one place. Your calendar is in another. Your files are somewhere else entirely.
+
+**Iobox puts them in the same box.** One workspace fans out a single query across every account and service simultaneously — email, calendar events, and files — and returns clean Markdown. Use it from the CLI or wire it into Claude Desktop via MCP so your AI assistant can search your inbox directly.
+
+> **Status (v0.5.0):** Google providers (Gmail, Calendar, Drive) are live-tested. Microsoft 365 providers (Outlook, OneDrive) are fully implemented but not yet tested against a real tenant — expect rough edges and please open issues.
 
 ## Why
 
@@ -66,7 +70,7 @@ pip install 'iobox[semantic]'  # Semantic search (OpenAI embeddings + sqlite-vec
 ### Install from source
 
 ```bash
-git clone https://github.com/timainge/iobox.git
+git clone https://github.com/basementlabs-com/iobox.git
 cd iobox
 uv sync
 ```
