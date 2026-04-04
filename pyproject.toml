@@ -53,6 +53,7 @@ dev = [
     "pytest-mock>=3.0",
     "ruff>=0.5",
     "mypy>=1.0",
+    "pre-commit>=3.0",
 ]
 docs = [
     "mkdocs>=1.6,<2",
@@ -138,4 +139,5 @@ dev-dependencies = [
     "ruff",
     "types-PyYAML",
     "types-python-dateutil",
+    "pre-commit>=4.5.1",
 ]
