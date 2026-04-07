@@ -1,0 +1,25 @@
+{
+  "version": "0.2",
+  "words": [
+    "docstrings",
+    "dogfood",
+    "mkdocs",
+    "mkdocstrings",
+    "pypa",
+    "pypi",
+    "twine",
+    "iobox",
+    "timainge",
+    "gmail",
+    "oauth",
+    "oidc",
+    "fastmcp",
+    "typer",
+    "dotenv",
+    "frontmatter",
+    "mypy",
+    "ruff",
+    "uv",
+    "shadcn"
+  ]
+}

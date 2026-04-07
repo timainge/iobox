@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from iobox.providers.outlook import OutlookProvider
+from iobox.providers.o365.email import OutlookProvider
 from tests.fixtures.mock_outlook_responses import (
     MockHttpResponse,
     make_full_mock_account,
@@ -94,7 +94,9 @@ class TestGetSyncState:
     def test_initial_sync_multi_page(self, sync_provider):
         """Initial sync follows @odata.nextLink pages before returning deltaLink."""
         delta_url = sync_provider._get_inbox_delta_url()
-        page2_url = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$skiptoken=page2"
+        page2_url = (
+            "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$skiptoken=page2"
+        )
         final_delta = "https://graph.microsoft.com/v1.0/delta?$deltatoken=final"
 
         # Page 1 has nextLink
@@ -226,12 +228,14 @@ class TestGetNewMessages410Gone:
     def test_410_gone_with_error_body(self, sync_provider):
         """410 with SyncStateNotFound error body still returns None."""
         delta_link = "https://graph.microsoft.com/v1.0/delta?token=stale"
-        gone_resp = MockHttpResponse({
-            "error": {
-                "code": "SyncStateNotFound",
-                "message": "deltaLink has expired",
+        gone_resp = MockHttpResponse(
+            {
+                "error": {
+                    "code": "SyncStateNotFound",
+                    "message": "deltaLink has expired",
+                }
             }
-        })
+        )
         gone_resp.status_code = 410
         sync_provider._account.con.get = MagicMock(return_value=gone_resp)
 
@@ -315,7 +319,4 @@ class TestGetNewMessagesWithToken:
 class TestGetInboxDeltaUrl:
     def test_constructs_correct_url(self, sync_provider):
         url = sync_provider._get_inbox_delta_url()
-        assert url == (
-            "https://graph.microsoft.com/v1.0"
-            "/me/mailFolders/inbox/messages/delta"
-        )
+        assert url == ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta")

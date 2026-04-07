@@ -3,6 +3,14 @@ Provider abstraction layer for iobox.
 
 Defines the EmailProvider ABC, EmailQuery dataclass, and EmailData TypedDict
 that all provider implementations must satisfy.
+
+Also defines the workspace-level resource type hierarchy:
+  Resource (base TypedDict)
+  ├── Email(Resource)   — email/message
+  ├── Event(Resource)   — calendar event
+  └── File(Resource)    — drive/storage file
+
+And the CalendarProvider and FileProvider ABCs used by the Workspace layer.
 """
 
 from __future__ import annotations
@@ -261,5 +269,288 @@ class EmailProvider(ABC):
         Note:
             Implementations should return the refreshed token so callers can
             persist it for the next incremental sync without a second round-trip.
+        """
+        ...
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Workspace resource type hierarchy
+# ───────────────────────────────────────────────────────────────────────────────
+# These types are additive — they do NOT replace EmailData / EmailProvider.
+# EmailProvider methods still use EmailData. The Resource/Email/Event/File types
+# exist for the Workspace layer where all three resource types are handled
+# together (e.g. Workspace.search() returns list[Resource]).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class Resource(TypedDict):
+    """Base TypedDict shared by all workspace resource types.
+
+    resource_type values: "email" | "event" | "file"
+    """
+
+    id: str
+    provider_id: str  # "gmail" | "google_calendar" | "google_drive" | "outlook" | …
+    resource_type: str  # discriminant — use to dispatch without isinstance
+    title: str  # subject / event name / filename
+    created_at: str  # ISO 8601
+    modified_at: str  # ISO 8601
+    url: str | None  # browser-accessible link, if any
+
+
+class AttendeeInfo(TypedDict):
+    """Calendar event attendee."""
+
+    email: str
+    name: str | None
+    response_status: str | None  # "accepted" | "declined" | "tentative" | "needsAction"
+
+
+class Email(Resource):
+    """An email message in Resource context (for cross-type Workspace results).
+
+    NOTE: EmailProvider methods return EmailData, not Email. Email is used
+    only when emails are mixed with events/files in a unified result list.
+    """
+
+    from_: str
+    to: list[str]
+    cc: list[str]
+    thread_id: str | None
+    snippet: str | None
+    labels: list[str]
+    body: str | None
+    content_type: str | None  # "text/html" | "text/plain"
+    attachments: list[AttachmentInfo]
+
+
+class Event(Resource):
+    """A calendar event."""
+
+    start: str  # ISO 8601 datetime or date (all-day)
+    end: str  # ISO 8601 datetime or date
+    all_day: bool
+    organizer: str | None  # email address
+    attendees: list[AttendeeInfo]
+    location: str | None
+    description: str | None
+    meeting_url: str | None
+    status: str | None  # "confirmed" | "tentative" | "cancelled"
+    recurrence: str | None  # RRULE string, e.g. "RRULE:FREQ=DAILY;BYDAY=MO"
+
+
+class File(Resource):
+    """A file or folder in a cloud storage service."""
+
+    name: str  # filename (not full path)
+    mime_type: str
+    size: int  # bytes; 0 for Google Workspace files and folders
+    path: str | None  # folder path, if available
+    parent_id: str | None
+    is_folder: bool
+    download_url: str | None
+    content: str | None  # pre-fetched text content; None means not yet fetched
+
+
+# ── Query dataclasses ──────────────────────────────────────────────────────────
+
+
+@dataclass
+class ResourceQuery:
+    """Base query shared by all resource types."""
+
+    text: str | None = None
+    after: str | None = None  # ISO 8601 date string
+    before: str | None = None  # ISO 8601 date string
+    max_results: int = 25
+
+
+@dataclass
+class EventQuery(ResourceQuery):
+    """Query for calendar events."""
+
+    calendar_id: str = "primary"
+
+
+@dataclass
+class FileQuery(ResourceQuery):
+    """Query for files and folders."""
+
+    mime_type: str | None = None
+    folder_id: str | None = None
+    shared_with_me: bool = False
+
+
+# ── CalendarProvider ABC ───────────────────────────────────────────────────────
+
+
+class CalendarProvider(ABC):
+    """Abstract base for calendar provider backends (read-only initially).
+
+    Implementations: GoogleCalendarProvider, OutlookCalendarProvider.
+    """
+
+    @abstractmethod
+    def authenticate(self) -> None:
+        """Trigger OAuth or token refresh as needed."""
+        ...
+
+    @abstractmethod
+    def get_profile(self) -> dict[str, Any]:
+        """Return basic account info: email, display_name."""
+        ...
+
+    @abstractmethod
+    def list_events(self, query: EventQuery) -> list[Event]:
+        """Return events matching query, sorted by start time ascending."""
+        ...
+
+    @abstractmethod
+    def get_event(self, event_id: str) -> Event:
+        """Return a single event by ID. Raises KeyError if not found."""
+        ...
+
+    @abstractmethod
+    def get_sync_state(self) -> dict[str, Any]:
+        """Return provider-specific sync token/cursor for incremental sync."""
+        ...
+
+    @abstractmethod
+    def get_new_events(self, sync_token: str) -> tuple[list[Event], str]:
+        """Return (new_events, next_sync_token) since last sync.
+
+        Raises NotImplementedError if the provider does not support incremental sync.
+        """
+        ...
+
+    @abstractmethod
+    def create_event(
+        self,
+        title: str,
+        start: str,
+        end: str,
+        *,
+        all_day: bool = False,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+    ) -> Event:
+        """Create a new calendar event. Returns the created event.
+
+        Requires mode='standard'.
+        """
+        ...
+
+    @abstractmethod
+    def update_event(self, event_id: str, updates: dict[str, Any]) -> Event:
+        """Update fields of an existing event. Returns the updated event.
+
+        Requires mode='standard'.
+        """
+        ...
+
+    @abstractmethod
+    def delete_event(self, event_id: str) -> None:
+        """Delete an event from the calendar.
+
+        Requires mode='standard'.
+        """
+        ...
+
+    @abstractmethod
+    def rsvp(self, event_id: str, response: str) -> Event:
+        """Respond to a calendar invite.
+
+        response: "accepted" | "declined" | "tentative"
+        Requires mode='standard'.
+        """
+        ...
+
+
+# ── FileProvider ABC ───────────────────────────────────────────────────────────
+
+
+class FileProvider(ABC):
+    """Abstract base for file/storage provider backends (read-only initially).
+
+    Implementations: GoogleDriveProvider, OneDriveProvider.
+    """
+
+    @abstractmethod
+    def authenticate(self) -> None:
+        """Trigger OAuth or token refresh as needed."""
+        ...
+
+    @abstractmethod
+    def get_profile(self) -> dict[str, Any]:
+        """Return basic account info: email, display_name."""
+        ...
+
+    @abstractmethod
+    def list_files(self, query: FileQuery) -> list[File]:
+        """Return files matching query."""
+        ...
+
+    @abstractmethod
+    def get_file(self, file_id: str) -> File:
+        """Return file metadata by ID. Raises KeyError if not found."""
+        ...
+
+    @abstractmethod
+    def get_file_content(self, file_id: str) -> str:
+        """Return text content of file.
+
+        Returns empty string for binary files (with a warning log).
+        Google Workspace files are exported as text/plain or text/csv.
+        """
+        ...
+
+    @abstractmethod
+    def download_file(self, file_id: str) -> bytes:
+        """Return raw bytes of file."""
+        ...
+
+    @abstractmethod
+    def upload_file(
+        self,
+        local_path: str,
+        *,
+        parent_id: str | None = None,
+        name: str | None = None,
+    ) -> File:
+        """Upload a local file. Returns the created File.
+
+        name overrides the filename; defaults to basename of local_path.
+        Requires mode='standard'.
+        """
+        ...
+
+    @abstractmethod
+    def update_file(self, file_id: str, local_path: str) -> File:
+        """Replace content of an existing file. Returns the updated File.
+
+        Requires mode='standard'.
+        """
+        ...
+
+    @abstractmethod
+    def delete_file(self, file_id: str, *, permanent: bool = False) -> None:
+        """Move file to trash (default) or permanently delete (permanent=True).
+
+        OneDrive does not support trash — always permanent.
+        Requires mode='standard'.
+        """
+        ...
+
+    @abstractmethod
+    def create_folder(
+        self,
+        name: str,
+        *,
+        parent_id: str | None = None,
+    ) -> File:
+        """Create a new folder. Returns File with is_folder=True.
+
+        Requires mode='standard'.
         """
         ...

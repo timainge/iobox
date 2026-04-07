@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import iobox.email_retrieval as er
-from iobox.email_retrieval import (
+import iobox.providers.google._retrieval as er
+from iobox.providers.google._retrieval import (
     batch_get_emails,
     batch_modify_labels,
     download_attachment,
@@ -72,11 +72,11 @@ class TestEmailRetrieval:
 
         assert result == base64.urlsafe_b64decode(mock_data)
 
-    def test_backward_compat_import_from_email_search(self):
-        """Ensure importing from email_search still works."""
-        from iobox.email_search import download_attachment as es_dl
-        from iobox.email_search import get_email_content as es_get
-        from iobox.email_search import get_label_map as es_glm
+    def test_backward_compat_import_from_retrieval(self):
+        """Ensure importing from the canonical module path works."""
+        from iobox.providers.google._retrieval import download_attachment as es_dl
+        from iobox.providers.google._retrieval import get_email_content as es_get
+        from iobox.providers.google._retrieval import get_label_map as es_glm
 
         assert es_get is get_email_content
         assert es_dl is download_attachment

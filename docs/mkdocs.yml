@@ -1,0 +1,78 @@
+# ── Site metadata ────────────────────────────────────────
+site_name: iobox
+site_url: https://timainge.github.io/iobox/
+site_description: Personal workspace context tool — email, calendar, and files across Gmail and Microsoft 365
+repo_url: https://github.com/timainge/iobox
+repo_name: timainge/iobox
+
+docs_dir: content
+site_dir: site
+
+# ── Theme ────────────────────────────────────────────────
+theme:
+  name: shadcn
+  custom_dir: overrides
+  topbar_sections: true
+  icon: assets/logo.svg
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+
+# ── Plugins ──────────────────────────────────────────────
+plugins:
+  - search
+
+# ── Markdown extensions ──────────────────────────────────
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+
+# ── Extra assets ─────────────────────────────────────────
+extra_css:
+  - css/custom.css
+
+extra_javascript:
+  - js/theme-toggle.js
+  - js/mermaid-init.js
+
+# ── Navigation ───────────────────────────────────────────
+nav:
+  - iobox: index.md
+  - Guide:
+    - Getting Started:
+      - Installation: getting-started/installation.md
+      - Authentication: getting-started/authentication.md
+      - Quick Start: getting-started/quickstart.md
+    - Workspace: workspace-guide.md
+    - Providers:
+      - Gmail: providers/gmail.md
+      - Outlook: providers/outlook.md
+      - Google Calendar: providers/google-calendar.md
+      - Google Drive: providers/google-drive.md
+    - MCP Server: mcp.md
+  - Reference:
+    - CLI Reference:
+      - events: cli/events.md
+      - files: cli/files.md
+      - space: cli/space.md
+      - search: cli/search.md
+      - save: cli/save.md
+      - send: cli/send.md
+      - forward: cli/forward.md
+      - label: cli/label.md
+      - trash: cli/trash.md
+      - Drafts: cli/drafts.md
+      - auth-status: cli/auth-status.md
+    - Integrations: integrations.md

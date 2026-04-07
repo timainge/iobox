@@ -1,4 +1,8 @@
 repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.0
     hooks:
@@ -9,5 +13,6 @@ repos:
     rev: v1.9.0
     hooks:
       - id: mypy
-        additional_dependencies: [types-PyYAML]
-        args: [src/iobox/]
+        additional_dependencies: [types-PyYAML, types-python-dateutil]
+        args: [src/iobox/, --no-warn-unused-ignores]
+        pass_filenames: false

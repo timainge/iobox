@@ -1,57 +1,92 @@
 # Roadmap: iobox
 
-- **Date**: 2026-03-07
-- **Target**: Publish library — release to PyPI, deploy docs site, promote MCP integration
-- **Effort**: 1–2 weeks
+- **Updated**: 2026-03-19
+- **Version**: 0.5.0 — will reach 1.0.0 once O365 providers are live-tested
 
-## Why This Target
+---
 
-All 9 development phases are complete — packaging, CI/CD, and docs are already scaffolded. The
-project is a `git tag` and a `twine upload` away from being a real PyPI package, and the MCP
-server is a timely differentiator worth promoting now.
+## What was built (v0.5.0)
 
-## Steps to Ship
+Iobox is a **multi-provider personal workspace context tool** — a single interface for searching, retrieving, and exporting email, calendar events, and files across Google and Microsoft 365 accounts.
 
-### Phase 1: PyPI Release
-- [ ] Verify `pyproject.toml` version, classifiers, and `[project.urls]` (homepage, docs, changelog)
-- [ ] Dry-run: `uv build && twine check dist/*`
-- [ ] Configure PyPI Trusted Publishing (OIDC) in the PyPI project settings
-- [ ] Tag `v1.0.0`, push tag — confirm CI `release.yml` publishes successfully
-- [ ] Smoke-test: `pip install iobox` on a clean env, run `iobox --help` and `iobox auth-status`
+### Core infrastructure
+- **Provider ABCs** (`providers/base.py`): `EmailProvider`, `CalendarProvider`, `FileProvider` with full read + write signatures; `Resource`, `Email`, `Event`, `File` type hierarchy; `EmailQuery`, `EventQuery`, `FileQuery` dataclasses
+- **Workspace compositor** (`workspace.py`): `Workspace`, `ProviderSlot`, `WorkspaceSession` — fans out queries across all registered providers with partial-failure tolerance
+- **Space config** (`space_config.py`): TOML-based workspace configs at `~/.iobox/workspaces/NAME.toml`
 
-### Phase 2: Docs & README
-- [ ] Deploy MkDocs site via `mkdocs gh-deploy` or add GitHub Pages step to CI
-- [ ] Update README: add PyPI badge, one-liner install, and MCP setup snippet for Claude Desktop
-- [ ] Add a Quickstart doc page: authenticate → search → save in under 5 minutes
-- [ ] Confirm `pip install iobox[mcp]` installs FastMCP and `mcp_server.py` is wired correctly
+### Provider subpackages
+```
+providers/
+  google/        auth.py, email.py, calendar.py, files.py, _retrieval.py, _search.py, _sender.py
+  o365/          auth.py, email.py, calendar.py, files.py
+  base.py        ABCs and type hierarchy
+  __init__.py    get_provider() factory
+```
 
-### Phase 3: O365 Provider (v1.1)
-- [ ] Define `EmailProvider` abstract base class (search, fetch, send, label, trash, draft)
-- [ ] Refactor Gmail modules to implement the interface without breaking existing CLI behavior
-- [ ] Implement `OutlookProvider` using Microsoft Graph API per the O365 research in `.dev/`
-- [ ] Add `--provider gmail|outlook` CLI flag with separate OAuth flow per provider
-- [ ] Add mocked Graph API unit tests mirroring the Gmail test suite structure
+- **`GmailProvider`** — full read + write (search, get, send, draft, label, trash, sync)
+- **`OutlookProvider`** — Microsoft Graph via O365 library, full read + write, ImmutableId, batch ops
+- **`GoogleCalendarProvider`** — read + write (create, update, delete, RSVP)
+- **`OutlookCalendarProvider`** — read + write
+- **`GoogleDriveProvider`** — read + write (upload, delete, mkdir)
+- **`OneDriveProvider`** — read + write
+- **`GoogleAuth`** — one token per (account, scope-tier), legacy migration
+- **`MicrosoftAuth`** — one token per (account, scopes), legacy migration
 
-## Claude Code Tooling
+### Processing layer (`processing/`)
+- **`markdown.py`** — unified `Resource → Markdown` converter for Email, Event, and File
+- **`markdown_converter.py`** — HTML→Markdown and YAML frontmatter
+- **`file_manager.py`** — save resources to disk, dedup, attachment handling
+- **`summarize.py`** — Claude-powered summarization (`pip install 'iobox[ai]'`)
+- **`embed.py`** — embedding backends (OpenAI, Voyage, local) + `ResourceIndex` (sqlite-vec) + `semantic_search()` (`pip install 'iobox[semantic]'`)
 
-### Skills
-- **claude-api**: Relevant if adding an AI-summarize or MCP tool-description generation step
-  using the Anthropic SDK — this skill covers idiomatic SDK and agent patterns.
+### CLI & MCP
+- **`iobox space`** — create/add/list/status/use/login/logout
+- **`iobox events`** — list, get, save, create, delete, rsvp
+- **`iobox files`** — list, get, save, upload, delete, mkdir
+- **`iobox search`** — workspace-level cross-type search
+- **MCP server** — all workspace tools exposed via FastMCP; workspace-aware
 
-### Plugins / MCP Servers
-- **iobox MCP server (self)**: Register `mcp_server.py` in Claude Desktop to dogfood the tool
-  during development — the fastest way to find gaps in tool descriptions and error handling.
+---
 
-### Reference Material
-- **`.dev/o365-research.md`** (or equivalent): The 6-enquiry, 42-source O365 analysis already
-  in this repo is the spec for Phase 3 — use it directly to drive `OutlookProvider` implementation.
-- **PyPI Trusted Publishing docs**: Covers the OIDC setup needed so the GitHub Actions release
-  workflow can publish without a stored API token.
-- **MkDocs Material + mkdocstrings**: Already in the project's doc dependencies — reference the
-  mkdocstrings `:::` directive syntax to auto-generate API docs from existing Google-style docstrings.
+## Architecture invariants
 
-## Success Criteria
+- **`EmailData["from_"]`** (underscore) in provider return values — never change
+- **Outlook searches inbox only; Gmail searches all mail** — documented on `EmailQuery`
+- **Write ops return `{"message_id": ..., "status": ...}`** — not `"id"`
+- **Partial failure in Workspace fan-out must not propagate** — catch per-slot, log, continue
+- **Three independent provider ABCs** — never a monolithic one; mix-and-match is a valid use case
+- **Google-first ordering**: Gmail → GCal → GDrive → Outlook → O365Cal → OneDrive
 
-- `pip install iobox` works on a clean machine and `iobox search -q "from:me" -m 5` returns results
-- MkDocs documentation site is live at a public URL (GitHub Pages or equivalent)
-- MCP server is listed in at least one public MCP registry or directory
+
+---
+
+### TASK-B: Docs site (multi-sprint, mkdocs-shadcn)
+
+**Goal**: Publish a docs site at `timainge.github.io/iobox` using the mkdocs-shadcn pattern.
+
+Use the `/mkdocs-shadcn` skill for setup and theming guidance.
+
+**Sprint 1 — scaffold and deploy**:
+1. `pip install mkdocs mkdocs-material` (or shadcn theme if available)
+2. Create `docs/` with at minimum: `index.md`, `quickstart.md`, `workspace-guide.md`, `providers.md`, `cli-reference.md`, `mcp-server.md`
+3. Configure `mkdocs.yml` with nav, theme, and GitHub Pages settings
+4. Add `docs` job to `.github/workflows/` to deploy on push to `main`
+5. Verify site builds locally with `mkdocs serve`
+
+**Sprint 2 — content**:
+- `workspace-guide.md` — full workspace setup, multi-account, fan-out search
+- `providers.md` — per-provider setup, OAuth flows, scope tiers
+- `cli-reference.md` — complete command reference (copy from CLAUDE.md, expand)
+- `mcp-server.md` — Claude Desktop config, available tools, workspace-aware mode
+
+**Sprint 3 — polish**:
+- Landing page hero, card grid for feature overview
+- Dark mode toggle
+- Search integration
+
+---
+
+
+## Autonomous execution hook
+
+`.claude/hooks/roadmap-checker.py` — scans `.dev/task-*.md` for `status: ready` tasks and queues the next one when Claude finishes a session. Currently idle (no task files). See `.claude/hooks/README.md` for operating instructions.

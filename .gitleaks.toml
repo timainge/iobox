@@ -1,0 +1,22 @@
+[extend]
+# Extend the default ruleset rather than replace it
+useDefault = true
+
+[allowlist]
+description = "Allowlist for test fixtures and known-safe patterns"
+
+# Obvious placeholder values in test fixtures — not real credentials
+regexes = [
+    '''mock-refresh-token''',
+    '''mock-client-secret''',
+    '''refreshed-token''',
+    '''legacy-refresh''',
+    '''mock-token''',
+    '''my-secret''',
+]
+
+# Test files use fake credentials by design
+paths = [
+    '''tests/.*''',
+    '''tests/fixtures/.*''',
+]

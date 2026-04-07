@@ -68,10 +68,11 @@ class TestGetOutlookAccountBrowserFlow:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id", token_dir=token_dir),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 result = mod.get_outlook_account()
 
         assert result is mock_account
@@ -85,14 +86,15 @@ class TestGetOutlookAccountBrowserFlow:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(
                     client_id="test-client-id",
                     tenant_id="common",
                     token_dir=token_dir,
                 ),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 result = mod.get_outlook_account()
 
         mock_account.authenticate.assert_called_once()
@@ -109,10 +111,11 @@ class TestGetOutlookAccountBrowserFlow:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id", token_dir=token_dir),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 mod.get_outlook_account()
 
         call_kwargs = mock_account.authenticate.call_args.kwargs
@@ -123,10 +126,11 @@ class TestGetOutlookAccountBrowserFlow:
         o365 = _make_o365_module()
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id=""),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 with pytest.raises(ValueError, match="OUTLOOK_CLIENT_ID"):
                     mod.get_outlook_account()
 
@@ -138,10 +142,11 @@ class TestGetOutlookAccountBrowserFlow:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id", token_dir=token_dir),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 with pytest.raises(RuntimeError, match="authentication failed"):
                     mod.get_outlook_account()
 
@@ -153,10 +158,11 @@ class TestGetOutlookAccountBrowserFlow:
             # Remove O365 if present
             sys.modules.pop("O365", None)
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id"),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 with pytest.raises(ImportError, match="O365"):
                     mod.get_outlook_account()
 
@@ -175,10 +181,11 @@ class TestGetOutlookAccountDeviceCodeFlow:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id", token_dir=token_dir),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 mod.get_outlook_account(device_code=True)
 
         call_kwargs = mock_account.authenticate.call_args.kwargs
@@ -192,10 +199,11 @@ class TestGetOutlookAccountDeviceCodeFlow:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id", token_dir=token_dir),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 mod.get_outlook_account(device_code=True)
 
         call_kwargs = mock_account.authenticate.call_args.kwargs
@@ -211,10 +219,11 @@ class TestGetOutlookAccountDeviceCodeFlow:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id", token_dir=token_dir),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 mod.get_outlook_account(device_code=True)
 
         mock_account.authenticate.assert_not_called()
@@ -240,11 +249,12 @@ class TestTokenFilePath:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-client-id", token_dir=token_dir),
             ):
                 with patch("os.makedirs") as mock_makedirs:
-                    import iobox.providers.outlook_auth as mod
+                    import iobox.providers.o365.auth as mod
+
                     mod.get_outlook_account()
 
         mock_makedirs.assert_called_once_with(token_dir, exist_ok=True)
@@ -266,7 +276,7 @@ class TestTokenFilePath:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(
                     client_id="my-client-id",
                     client_secret="my-secret",
@@ -275,7 +285,8 @@ class TestTokenFilePath:
                 ),
             ):
                 with patch("os.makedirs"):
-                    import iobox.providers.outlook_auth as mod
+                    import iobox.providers.o365.auth as mod
+
                     mod.get_outlook_account()
 
         mock_account_cls.assert_called_once_with(
@@ -293,10 +304,11 @@ class TestTokenFilePath:
 class TestCheckOutlookAuthStatus:
     def test_returns_not_authenticated_when_no_client_id(self):
         with patch(
-            "iobox.providers.outlook_auth._get_config",
+            "iobox.providers.o365.auth._get_config",
             return_value=_cfg(client_id=""),
         ):
-            import iobox.providers.outlook_auth as mod
+            import iobox.providers.o365.auth as mod
+
             status = mod.check_outlook_auth_status()
 
         assert status["authenticated"] is False
@@ -305,10 +317,11 @@ class TestCheckOutlookAuthStatus:
     def test_returns_not_authenticated_when_token_file_missing(self, tmp_path):
         non_existent_dir = str(tmp_path / "tokens" / "outlook")
         with patch(
-            "iobox.providers.outlook_auth._get_config",
+            "iobox.providers.o365.auth._get_config",
             return_value=_cfg(client_id="test-id", token_dir=non_existent_dir),
         ):
-            import iobox.providers.outlook_auth as mod
+            import iobox.providers.o365.auth as mod
+
             status = mod.check_outlook_auth_status()
 
         assert status["authenticated"] is False
@@ -326,10 +339,11 @@ class TestCheckOutlookAuthStatus:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-id", token_dir=str(token_dir)),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 status = mod.check_outlook_auth_status()
 
         assert status["authenticated"] is True
@@ -347,10 +361,11 @@ class TestCheckOutlookAuthStatus:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-id", token_dir=str(token_dir)),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 status = mod.check_outlook_auth_status()
 
         assert status["authenticated"] is False
@@ -365,10 +380,11 @@ class TestCheckOutlookAuthStatus:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-id", token_dir=str(token_dir)),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 status = mod.check_outlook_auth_status()
 
         assert status["authenticated"] is False
@@ -384,10 +400,11 @@ class TestCheckOutlookAuthStatus:
         saved = sys.modules.pop("O365", None)
         try:
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-id", token_dir=str(token_dir)),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 status = mod.check_outlook_auth_status()
         finally:
             if saved is not None:
@@ -401,20 +418,22 @@ class TestCheckOutlookAuthStatus:
         expected_path = str(token_dir / "o365_token.txt")
 
         with patch(
-            "iobox.providers.outlook_auth._get_config",
+            "iobox.providers.o365.auth._get_config",
             return_value=_cfg(client_id="test-id", token_dir=str(token_dir)),
         ):
-            import iobox.providers.outlook_auth as mod
+            import iobox.providers.o365.auth as mod
+
             status = mod.check_outlook_auth_status()
 
         assert status["token_path"] == expected_path
 
     def test_tenant_id_in_status(self):
         with patch(
-            "iobox.providers.outlook_auth._get_config",
+            "iobox.providers.o365.auth._get_config",
             return_value=_cfg(client_id="", tenant_id="mytenant"),
         ):
-            import iobox.providers.outlook_auth as mod
+            import iobox.providers.o365.auth as mod
+
             status = mod.check_outlook_auth_status()
 
         assert status["tenant_id"] == "mytenant"
@@ -431,10 +450,11 @@ class TestCheckOutlookAuthStatus:
 
         with patch.dict(sys.modules, {"O365": o365}):
             with patch(
-                "iobox.providers.outlook_auth._get_config",
+                "iobox.providers.o365.auth._get_config",
                 return_value=_cfg(client_id="test-id", token_dir=str(token_dir)),
             ):
-                import iobox.providers.outlook_auth as mod
+                import iobox.providers.o365.auth as mod
+
                 mod.check_outlook_auth_status()
 
         mock_account.authenticate.assert_not_called()
@@ -447,15 +467,18 @@ class TestCheckOutlookAuthStatus:
 
 class TestOutlookScopes:
     def test_scopes_contain_mail_readwrite(self):
-        import iobox.providers.outlook_auth as mod
+        import iobox.providers.o365.auth as mod
+
         assert "Mail.ReadWrite" in mod.OUTLOOK_SCOPES
 
     def test_scopes_contain_mail_send(self):
-        import iobox.providers.outlook_auth as mod
+        import iobox.providers.o365.auth as mod
+
         assert "Mail.Send" in mod.OUTLOOK_SCOPES
 
     def test_exactly_two_scopes(self):
-        import iobox.providers.outlook_auth as mod
+        import iobox.providers.o365.auth as mod
+
         assert len(mod.OUTLOOK_SCOPES) == 2
 
 
@@ -467,18 +490,95 @@ class TestOutlookScopes:
 class TestGetConfigIsolation:
     def test_patching_os_getenv_after_import_changes_client_id(self):
         """Demonstrate that patching os.getenv after import works via _get_config()."""
-        import iobox.providers.outlook_auth as mod
+        import iobox.providers.o365.auth as o365_mod
 
         with patch.dict(os.environ, {"OUTLOOK_CLIENT_ID": "patched-id"}, clear=False):
-            cfg = mod._get_config()
+            cfg = o365_mod._get_config()
 
         assert cfg["client_id"] == "patched-id"
 
     def test_patching_os_getenv_after_import_changes_tenant_id(self):
         """Patching OUTLOOK_TENANT_ID in the env is reflected by _get_config()."""
-        import iobox.providers.outlook_auth as mod
+        import iobox.providers.o365.auth as o365_mod
 
         with patch.dict(os.environ, {"OUTLOOK_TENANT_ID": "my-tenant"}, clear=False):
-            cfg = mod._get_config()
+            cfg = o365_mod._get_config()
 
         assert cfg["tenant_id"] == "my-tenant"
+
+    def test_get_config_uses_account_for_token_dir(self, tmp_path):
+        """token_dir must be derived from the account parameter."""
+        import iobox.providers.o365.auth as o365_mod
+
+        with patch.dict(
+            os.environ,
+            {"CREDENTIALS_DIR": str(tmp_path), "OUTLOOK_CLIENT_ID": "x"},
+            clear=False,
+        ):
+            cfg = o365_mod._get_config(account="corp@example.com")
+
+        assert cfg["token_dir"] == str(tmp_path / "tokens" / "corp@example.com")
+
+
+# ---------------------------------------------------------------------------
+# Outlook token migration
+# ---------------------------------------------------------------------------
+
+
+class TestOutlookAuthMigration:
+    def test_migrates_old_token_to_new_account_path(self, tmp_path):
+        """Old tokens/outlook/o365_token.txt must be copied to new dir."""
+        import iobox.providers.o365.auth as mod
+
+        # Write old-style token
+        old_dir = tmp_path / "tokens" / "outlook"
+        old_dir.mkdir(parents=True)
+        old_token = old_dir / "o365_token.txt"
+        old_token.write_text("old-token-data")
+
+        new_dir = tmp_path / "tokens" / "default"
+        new_dir.mkdir(parents=True)
+
+        mod._maybe_migrate_outlook_token(
+            credentials_dir=str(tmp_path),
+            token_dir=str(new_dir),
+        )
+
+        new_token = new_dir / "o365_token.txt"
+        assert new_token.exists()
+        assert new_token.read_text() == "old-token-data"
+
+    def test_does_not_overwrite_existing_new_token(self, tmp_path):
+        """Migration must not overwrite a new token that already exists."""
+        import iobox.providers.o365.auth as mod
+
+        old_dir = tmp_path / "tokens" / "outlook"
+        old_dir.mkdir(parents=True)
+        (old_dir / "o365_token.txt").write_text("old-data")
+
+        new_dir = tmp_path / "tokens" / "default"
+        new_dir.mkdir(parents=True)
+        new_token = new_dir / "o365_token.txt"
+        new_token.write_text("new-data")
+
+        mod._maybe_migrate_outlook_token(
+            credentials_dir=str(tmp_path),
+            token_dir=str(new_dir),
+        )
+
+        assert new_token.read_text() == "new-data"  # unchanged
+
+    def test_no_migration_when_old_token_missing(self, tmp_path):
+        """Migration does nothing if there is no old token to migrate."""
+        import iobox.providers.o365.auth as mod
+
+        new_dir = tmp_path / "tokens" / "default"
+        new_dir.mkdir(parents=True)
+
+        # Should not raise even when old path doesn't exist
+        mod._maybe_migrate_outlook_token(
+            credentials_dir=str(tmp_path),
+            token_dir=str(new_dir),
+        )
+
+        assert not (new_dir / "o365_token.txt").exists()

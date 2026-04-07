@@ -1,7 +1,7 @@
 """
-MCP Server for iobox Gmail tools.
+MCP Server for iobox workspace tools.
 
-Exposes iobox Gmail functions as MCP tools for use with Claude Desktop,
+Exposes iobox functions as MCP tools for use with Claude Desktop,
 Cursor, VS Code, and other MCP-compatible hosts.
 
 Install with: pip install iobox[mcp]
@@ -9,41 +9,29 @@ Run with: python -m iobox.mcp_server
 """
 
 import os
+from collections.abc import Callable
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from iobox.auth import check_auth_status, get_gmail_profile, get_gmail_service, set_active_mode
-from iobox.email_retrieval import (
-    batch_get_emails,
-    batch_modify_labels,
-    get_email_content,
-    get_label_map,
-    get_thread_content,
-    modify_message_labels,
-    resolve_label_name,
-    trash_message,
-    untrash_message,
-)
-from iobox.email_search import search_emails
-from iobox.email_sender import (
-    compose_message,
-    create_draft,
-    delete_draft,
-    forward_email,
-    list_drafts,
-    send_draft,
-    send_message,
-)
-from iobox.file_manager import (
+from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode, get_mode_from_env
+from iobox.processing.file_manager import (
     SyncState,
     check_for_duplicates,
     create_output_directory,
     download_email_attachments,
     save_email_to_markdown,
 )
-from iobox.markdown_converter import convert_email_to_markdown, convert_thread_to_markdown
-from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode, get_mode_from_env
+from iobox.processing.markdown_converter import (
+    convert_email_to_markdown,
+    convert_thread_to_markdown,
+)
+from iobox.providers.google.auth import (
+    check_auth_status,
+    get_gmail_profile,
+    get_gmail_service,
+    set_active_mode,
+)
 from iobox.utils import slugify_text
 
 mcp = FastMCP("iobox")
@@ -56,7 +44,7 @@ mcp = FastMCP("iobox")
 _ALL_TOOLS: dict[str, Any] = {}
 
 
-def _tool(fn):
+def _tool(fn: Any) -> Any:
     """Collect a tool function without registering it yet."""
     _ALL_TOOLS[fn.__name__] = fn
     return fn
@@ -68,6 +56,64 @@ def register_tools(mode: AccessMode) -> None:
     for name, fn in _ALL_TOOLS.items():
         if name in allowed:
             mcp.tool()(fn)
+
+
+# ---------------------------------------------------------------------------
+# Provider / workspace factories (injectable for tests)
+# ---------------------------------------------------------------------------
+
+
+def _get_gmail_provider() -> Any:
+    """Return a GmailProvider instance. Override in tests by patching."""
+    from iobox.providers.google.email import GmailProvider
+
+    return GmailProvider()
+
+
+def _default_workspace_fn() -> Any | None:
+    """Default factory: load active workspace from disk, or None."""
+    try:
+        from iobox.space_config import IOBOX_HOME, get_active_space, load_space
+        from iobox.workspace import Workspace
+
+        active = get_active_space()
+        if not active:
+            return None
+        config = load_space(active)
+        return Workspace.from_config(config, credentials_dir=str(IOBOX_HOME))
+    except Exception:
+        return None
+
+
+def create_mcp_server(*, _workspace_fn: Callable[[], Any] | None = None) -> FastMCP:
+    """Build the FastMCP server with an optional mock workspace factory for tests."""
+    return mcp
+
+
+# Module-level workspace factory (can be replaced in tests)
+_workspace_factory: Callable[[], Any | None] = _default_workspace_fn
+
+
+def _get_workspace() -> Any | None:
+    """Return the active Workspace, or None if no space is configured."""
+    return _workspace_factory()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _email_data_to_dict(data: Any) -> dict[str, Any]:
+    """Convert EmailData (from_ key) to legacy MCP format (from key).
+
+    Preserves backward compatibility for MCP clients that expect ``from``
+    rather than ``from_``.
+    """
+    result = dict(data)
+    if "from_" in result and "from" not in result:
+        result["from"] = result.pop("from_")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -94,18 +140,33 @@ def search_gmail(
         end_date: End date YYYY/MM/DD
         include_spam_trash: Include messages from SPAM and TRASH (default False)
     """
-    service = get_gmail_service()
-    label_map = get_label_map(service)
-    return search_emails(
-        service,
-        query,
-        max_results,
-        days,
-        start_date,
-        end_date,
-        label_map=label_map,
-        include_spam_trash=include_spam_trash,
+    from datetime import date, timedelta
+
+    from iobox.providers.base import EmailQuery
+
+    # Build EmailQuery from the legacy date params
+    after: date | None = None
+    before: date | None = None
+    if start_date:
+        parts = start_date.replace("-", "/").split("/")
+        after = date(int(parts[0]), int(parts[1]), int(parts[2]))
+    elif days:
+        after = date.today() - timedelta(days=days)
+    if end_date:
+        parts = end_date.replace("-", "/").split("/")
+        before = date(int(parts[0]), int(parts[1]), int(parts[2]))
+
+    provider = _get_gmail_provider()
+    results = provider.search_emails(
+        EmailQuery(
+            text=query,
+            max_results=max_results,
+            after=after,
+            before=before,
+            include_spam_trash=include_spam_trash,
+        )
     )
+    return [_email_data_to_dict(r) for r in results]
 
 
 @_tool
@@ -116,12 +177,9 @@ def get_email(message_id: str, prefer_html: bool = True) -> dict:
         message_id: Gmail message ID
         prefer_html: Use HTML content if available (default True)
     """
-    service = get_gmail_service()
-    label_map = get_label_map(service)
     content_type = "text/html" if prefer_html else "text/plain"
-    return get_email_content(
-        service, message_id, preferred_content_type=content_type, label_map=label_map
-    )
+    provider = _get_gmail_provider()
+    return _email_data_to_dict(provider.get_email_content(message_id, content_type))
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +209,9 @@ def save_email(
     Returns:
         Absolute path to the saved file.
     """
-    service = get_gmail_service()
-    label_map = get_label_map(service)
     content_type = "text/html" if prefer_html else "text/plain"
-    email_data = get_email_content(
-        service, message_id, preferred_content_type=content_type, label_map=label_map
-    )
+    provider = _get_gmail_provider()
+    email_data = _email_data_to_dict(provider.get_email_content(message_id, content_type))
     md = convert_email_to_markdown(email_data)
     out = create_output_directory(output_dir)
     filepath = save_email_to_markdown(email_data, md, out)
@@ -165,8 +220,12 @@ def save_email(
         filters = (
             [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
         )
+        service = get_gmail_service()
         download_email_attachments(
-            service=service, email_data=email_data, output_dir=out, attachment_filters=filters
+            service=service,
+            email_data=email_data,
+            output_dir=out,
+            attachment_filters=filters,
         )
 
     return filepath
@@ -190,9 +249,9 @@ def save_thread(
     Returns:
         Absolute path to the saved file.
     """
-    service = get_gmail_service()
-    content_type = "text/html" if prefer_html else "text/plain"
-    messages = get_thread_content(service, thread_id, preferred_content_type=content_type)
+    provider = _get_gmail_provider()
+    messages_raw = provider.get_thread(thread_id)
+    messages = [_email_data_to_dict(m) for m in messages_raw]
     md = convert_thread_to_markdown(messages)
     subject = messages[0].get("subject", "thread") if messages else "thread"
     subject_slug = slugify_text(subject)
@@ -236,29 +295,31 @@ def save_emails_by_query(
     Returns:
         Summary dict with saved_count, skipped_count, and attachment_count.
     """
-    service = get_gmail_service()
-    label_map = get_label_map(service)
+    from datetime import date, timedelta
+
+    from iobox.providers.base import EmailQuery
+
     content_type = "text/html" if prefer_html else "text/plain"
     out = create_output_directory(output_dir)
     att_filters = (
         [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
     )
+    provider = _get_gmail_provider()
 
     # Incremental sync
     sync_state = SyncState(out)
-    message_ids_to_fetch = None
+    message_ids_to_fetch: list[str] | None = None
 
     if sync:
-        from iobox.email_search import get_new_messages
-
         state_exists = sync_state.load()
         if state_exists and sync_state.last_history_id:
-            new_ids = get_new_messages(service, sync_state.last_history_id)
+            new_ids = provider.get_new_messages(sync_state.last_history_id)
             if new_ids is not None:
                 message_ids_to_fetch = new_ids
 
     if message_ids_to_fetch is not None:
         if not message_ids_to_fetch:
+            service = get_gmail_service()
             profile = service.users().getProfile(userId="me").execute()
             sync_state.update(profile.get("historyId", sync_state.last_history_id), [])
             return {
@@ -267,20 +328,31 @@ def save_emails_by_query(
                 "attachment_count": 0,
                 "detail": "No new emails since last sync.",
             }
-        results_for_batch = [{"message_id": mid} for mid in message_ids_to_fetch]
     else:
-        search_results = search_emails(
-            service,
-            query,
-            max_results,
-            days,
-            start_date,
-            end_date,
-            label_map=label_map,
-            include_spam_trash=include_spam_trash,
+        # Build EmailQuery
+        after: date | None = None
+        before: date | None = None
+        if start_date:
+            parts = start_date.replace("-", "/").split("/")
+            after = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        elif days:
+            after = date.today() - timedelta(days=days)
+        if end_date:
+            parts = end_date.replace("-", "/").split("/")
+            before = date(int(parts[0]), int(parts[1]), int(parts[2]))
+
+        search_results = provider.search_emails(
+            EmailQuery(
+                text=query,
+                max_results=max_results,
+                after=after,
+                before=before,
+                include_spam_trash=include_spam_trash,
+            )
         )
         if not search_results:
             if sync:
+                service = get_gmail_service()
                 profile = service.users().getProfile(userId="me").execute()
                 sync_state.update(profile.get("historyId", ""), [])
             return {
@@ -289,9 +361,9 @@ def save_emails_by_query(
                 "attachment_count": 0,
                 "detail": "No emails found.",
             }
-        results_for_batch = search_results
+        message_ids_to_fetch = [r["message_id"] for r in search_results]
 
-    all_ids = [r["message_id"] for r in results_for_batch]
+    all_ids = list(message_ids_to_fetch)
     duplicates = check_for_duplicates(all_ids, out)
     ids_to_process = [mid for mid in all_ids if mid not in duplicates]
 
@@ -299,16 +371,16 @@ def save_emails_by_query(
     attachment_count = 0
 
     if ids_to_process:
-        email_batch = batch_get_emails(
-            service, ids_to_process, preferred_content_type=content_type, label_map=label_map
-        )
-        for email_data in email_batch:
-            if "error" in email_data:
+        email_batch = provider.batch_get_emails(ids_to_process, preferred_content_type=content_type)
+        for email_raw in email_batch:
+            if "error" in email_raw:
                 continue
+            email_data = _email_data_to_dict(email_raw)
             md = convert_email_to_markdown(email_data)
             save_email_to_markdown(email_data, md, out)
             saved_count += 1
             if download_attachments and email_data.get("attachments"):
+                service = get_gmail_service()
                 res = download_email_attachments(
                     service=service,
                     email_data=email_data,
@@ -318,6 +390,7 @@ def save_emails_by_query(
                 attachment_count += res["downloaded_count"]
 
     if sync:
+        service = get_gmail_service()
         profile = service.users().getProfile(userId="me").execute()
         sync_state.update(profile.get("historyId", ""), ids_to_process)
 
@@ -354,15 +427,16 @@ def send_email(
         html: Send body as HTML content (default False)
         attachments: List of file paths to attach
     """
-    service = get_gmail_service()
-    content_type = "html" if html else "plain"
-    if attachments:
-        from pathlib import Path
+    from pathlib import Path
 
+    if attachments:
         for fp in attachments:
             if not Path(fp).exists():
                 raise FileNotFoundError(f"Attachment not found: {fp}")
-    message = compose_message(
+
+    content_type = "html" if html else "plain"
+    provider = _get_gmail_provider()
+    return provider.send_message(
         to=to,
         subject=subject,
         body=body,
@@ -371,7 +445,6 @@ def send_email(
         content_type=content_type,
         attachments=attachments,
     )
-    return send_message(service, message)
 
 
 @_tool
@@ -387,8 +460,8 @@ def forward_gmail(
         to: Recipient email address
         note: Optional text to prepend
     """
-    service = get_gmail_service()
-    return forward_email(service, message_id=message_id, to=to, additional_text=note)
+    provider = _get_gmail_provider()
+    return provider.forward_message(message_id=message_id, to=to, comment=note)
 
 
 @_tool
@@ -415,20 +488,32 @@ def batch_forward_gmail(
     Returns:
         Summary dict with forwarded_count.
     """
-    service = get_gmail_service()
-    label_map = get_label_map(service)
-    results = search_emails(
-        service, query, max_results, days, start_date, end_date, label_map=label_map
+    from datetime import date, timedelta
+
+    from iobox.providers.base import EmailQuery
+
+    after: date | None = None
+    before: date | None = None
+    if start_date:
+        parts = start_date.replace("-", "/").split("/")
+        after = date(int(parts[0]), int(parts[1]), int(parts[2]))
+    elif days:
+        after = date.today() - timedelta(days=days)
+    if end_date:
+        parts = end_date.replace("-", "/").split("/")
+        before = date(int(parts[0]), int(parts[1]), int(parts[2]))
+
+    provider = _get_gmail_provider()
+    results = provider.search_emails(
+        EmailQuery(text=query, max_results=max_results, after=after, before=before)
     )
     if not results:
         return {"forwarded_count": 0, "detail": "No emails found matching the query."}
 
-    forwarded = 0
     for r in results:
-        forward_email(service, message_id=r["message_id"], to=to, additional_text=note)
-        forwarded += 1
+        provider.forward_message(message_id=r["message_id"], to=to, comment=note)
 
-    return {"forwarded_count": forwarded}
+    return {"forwarded_count": len(results)}
 
 
 # ---------------------------------------------------------------------------
@@ -457,15 +542,16 @@ def create_gmail_draft(
         html: Use HTML content type (default False)
         attachments: List of file paths to attach
     """
-    service = get_gmail_service()
-    content_type = "html" if html else "plain"
-    if attachments:
-        from pathlib import Path
+    from pathlib import Path
 
+    if attachments:
         for fp in attachments:
             if not Path(fp).exists():
                 raise FileNotFoundError(f"Attachment not found: {fp}")
-    message = compose_message(
+
+    content_type = "html" if html else "plain"
+    provider = _get_gmail_provider()
+    return provider.create_draft(
         to=to,
         subject=subject,
         body=body,
@@ -474,7 +560,6 @@ def create_gmail_draft(
         content_type=content_type,
         attachments=attachments,
     )
-    return create_draft(service, message)
 
 
 @_tool
@@ -484,8 +569,8 @@ def list_gmail_drafts(max_results: int = 10) -> list[dict]:
     Args:
         max_results: Maximum number of drafts to return (default 10)
     """
-    service = get_gmail_service()
-    return list_drafts(service, max_results=max_results)
+    provider = _get_gmail_provider()
+    return list(provider.list_drafts(max_results=max_results))
 
 
 @_tool
@@ -495,8 +580,8 @@ def send_gmail_draft(draft_id: str) -> dict:
     Args:
         draft_id: The draft ID to send
     """
-    service = get_gmail_service()
-    return send_draft(service, draft_id)
+    provider = _get_gmail_provider()
+    return provider.send_draft(draft_id)
 
 
 @_tool
@@ -506,8 +591,8 @@ def delete_gmail_draft(draft_id: str) -> dict:
     Args:
         draft_id: The draft ID to delete
     """
-    service = get_gmail_service()
-    return delete_draft(service, draft_id)
+    provider = _get_gmail_provider()
+    return provider.delete_draft(draft_id)
 
 
 # ---------------------------------------------------------------------------
@@ -541,8 +626,12 @@ def modify_labels(
     Returns:
         Updated message resource.
     """
-    service = get_gmail_service()
+    from iobox.providers.google._retrieval import (
+        modify_message_labels,
+        resolve_label_name,
+    )
 
+    service = get_gmail_service()
     add_labels: list[str] = []
     remove_labels: list[str] = []
 
@@ -594,9 +683,16 @@ def batch_modify_gmail_labels(
     Returns:
         Summary dict with count of modified messages.
     """
-    service = get_gmail_service()
-    label_map = get_label_map(service)
+    from datetime import date, timedelta
 
+    from iobox.providers.base import EmailQuery
+    from iobox.providers.google._retrieval import (
+        batch_modify_labels,
+        modify_message_labels,
+        resolve_label_name,
+    )
+
+    service = get_gmail_service()
     add_labels: list[str] = []
     remove_labels: list[str] = []
 
@@ -615,7 +711,11 @@ def batch_modify_gmail_labels(
     if remove_label:
         remove_labels.append(resolve_label_name(service, remove_label))
 
-    results = search_emails(service, query, max_results, days, label_map=label_map)
+    provider = _get_gmail_provider()
+    after_date: date | None = date.today() - timedelta(days=days) if days else None
+    results = provider.search_emails(
+        EmailQuery(text=query, max_results=max_results, after=after_date)
+    )
     if not results:
         return {"modified_count": 0, "detail": "No emails found matching the query."}
 
@@ -640,8 +740,9 @@ def trash_gmail(message_id: str) -> dict:
     Args:
         message_id: Gmail message ID to trash
     """
-    service = get_gmail_service()
-    return trash_message(service, message_id)
+    provider = _get_gmail_provider()
+    provider.trash(message_id)
+    return {"message_id": message_id, "status": "trashed"}
 
 
 @_tool
@@ -651,8 +752,9 @@ def untrash_gmail(message_id: str) -> dict:
     Args:
         message_id: Gmail message ID to restore
     """
-    service = get_gmail_service()
-    return untrash_message(service, message_id)
+    provider = _get_gmail_provider()
+    provider.untrash(message_id)
+    return {"message_id": message_id, "status": "untrashed"}
 
 
 @_tool
@@ -671,14 +773,20 @@ def batch_trash_gmail(
     Returns:
         Summary dict with trashed_count.
     """
-    service = get_gmail_service()
-    label_map = get_label_map(service)
-    results = search_emails(service, query, max_results, days, label_map=label_map)
+    from datetime import date, timedelta
+
+    from iobox.providers.base import EmailQuery
+
+    provider = _get_gmail_provider()
+    after_date: date | None = date.today() - timedelta(days=days) if days else None
+    results = provider.search_emails(
+        EmailQuery(text=query, max_results=max_results, after=after_date)
+    )
     if not results:
         return {"trashed_count": 0, "detail": "No emails found matching the query."}
 
     for r in results:
-        trash_message(service, r["message_id"])
+        provider.trash(r["message_id"])
 
     return {"trashed_count": len(results)}
 
@@ -703,7 +811,257 @@ def check_auth() -> dict:
     return status
 
 
-if __name__ == "__main__":
+# ---------------------------------------------------------------------------
+# Workspace: cross-type search
+# ---------------------------------------------------------------------------
+
+
+@_tool
+def search_workspace(
+    query: str,
+    types: list[str] | None = None,
+    max_results: int = 10,
+) -> list[dict]:
+    """Cross-type search across messages, calendar events, and files.
+
+    Args:
+        query: Search text.
+        types: List of ``"email"``, ``"event"``, ``"file"`` (default: all).
+        max_results: Max results per resource type (default 10).
+
+    Returns:
+        List of Resource dicts with ``resource_type`` field for client dispatch.
+    """
+    ws = _get_workspace()
+    if not ws:
+        return [{"error": "No active workspace configured. Run `iobox space create` first."}]
+    try:
+        results = ws.search(query, types=types, max_results_per_type=max_results)
+        return [dict(r) for r in results]
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+
+# ---------------------------------------------------------------------------
+# Workspace: calendar events
+# ---------------------------------------------------------------------------
+
+
+@_tool
+def list_events(
+    after: str | None = None,
+    before: str | None = None,
+    text: str | None = None,
+    provider: str | None = None,
+    max_results: int = 25,
+) -> list[dict]:
+    """List calendar events from the active workspace.
+
+    Args:
+        after: Start date filter (YYYY-MM-DD).
+        before: End date filter (YYYY-MM-DD).
+        text: Text search filter.
+        provider: Provider slot name (default: all calendar slots).
+        max_results: Maximum results (default 25).
+    """
+    from iobox.providers.base import EventQuery
+
+    ws = _get_workspace()
+    if not ws:
+        return [{"error": "No active workspace configured."}]
+    try:
+        query = EventQuery(text=text, after=after, before=before, max_results=max_results)
+        providers = [provider] if provider else None
+        events = ws.list_events(query, providers=providers)
+        return [dict(e) for e in events]
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+
+@_tool
+def get_event(event_id: str, provider: str | None = None) -> dict:
+    """Get a single calendar event by ID.
+
+    Args:
+        event_id: Event ID.
+        provider: Provider slot name (default: first calendar slot).
+    """
+    ws = _get_workspace()
+    if not ws:
+        return {"error": "No active workspace configured."}
+    if not ws.calendar_providers:
+        return {"error": "No calendar providers in workspace."}
+    slot = ws.calendar_providers[0]
+    if provider:
+        matches = [s for s in ws.calendar_providers if s.name == provider]
+        if not matches:
+            return {"error": f"Calendar provider '{provider}' not found."}
+        slot = matches[0]
+    try:
+        return dict(slot.provider.get_event(event_id))
+    except KeyError:
+        return {"error": f"Event '{event_id}' not found."}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Workspace: files
+# ---------------------------------------------------------------------------
+
+
+@_tool
+def list_files(
+    query: str,
+    provider: str | None = None,
+    max_results: int = 20,
+) -> list[dict]:
+    """List files from the active workspace.
+
+    Args:
+        query: Search text (required — avoids listing all files).
+        provider: Provider slot name (default: all file slots).
+        max_results: Maximum results (default 20).
+    """
+    from iobox.providers.base import FileQuery
+
+    ws = _get_workspace()
+    if not ws:
+        return [{"error": "No active workspace configured."}]
+    try:
+        fq = FileQuery(text=query, max_results=max_results)
+        providers = [provider] if provider else None
+        files = ws.list_files(fq, providers=providers)
+        return [dict(f) for f in files]
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+
+@_tool
+def get_file(file_id: str, provider: str | None = None) -> dict:
+    """Get file metadata by ID.
+
+    Args:
+        file_id: File ID.
+        provider: Provider slot name (default: first file slot).
+    """
+    ws = _get_workspace()
+    if not ws:
+        return {"error": "No active workspace configured."}
+    if not ws.file_providers:
+        return {"error": "No file providers in workspace."}
+    slot = ws.file_providers[0]
+    if provider:
+        matches = [s for s in ws.file_providers if s.name == provider]
+        if not matches:
+            return {"error": f"File provider '{provider}' not found."}
+        slot = matches[0]
+    try:
+        return dict(slot.provider.get_file(file_id))
+    except KeyError:
+        return {"error": f"File '{file_id}' not found."}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@_tool
+def get_file_content(file_id: str, provider: str | None = None) -> dict:
+    """Get text content of a file.
+
+    Args:
+        file_id: File ID.
+        provider: Provider slot name (default: first file slot).
+
+    Returns:
+        Dict with ``content`` key (str) or ``error`` key on failure.
+    """
+    ws = _get_workspace()
+    if not ws:
+        return {"error": "No active workspace configured."}
+    if not ws.file_providers:
+        return {"error": "No file providers in workspace."}
+    slot = ws.file_providers[0]
+    if provider:
+        matches = [s for s in ws.file_providers if s.name == provider]
+        if not matches:
+            return {"error": f"File provider '{provider}' not found."}
+        slot = matches[0]
+    try:
+        content = slot.provider.get_file_content(file_id)
+        return {"content": content}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Semantic search
+# ---------------------------------------------------------------------------
+
+
+@_tool
+def semantic_search_workspace(
+    query: str,
+    types: list[str] | None = None,
+    top_k: int = 10,
+    backend: str = "openai",
+    workspace: str | None = None,
+) -> list[dict]:
+    """Semantic (vector) search across indexed workspace resources.
+
+    Requires the ``semantic`` optional dependency group:
+    ``pip install 'iobox[semantic]'``.
+
+    Resources must be indexed first via ``embed_resources()`` before this
+    tool returns meaningful results.  Falls back gracefully if no index
+    exists yet.
+
+    Args:
+        query: Natural-language search query.
+        types: Resource types to search — any of ``"email"``, ``"event"``,
+            ``"file"`` (default: all types).
+        top_k: Maximum number of results (default 10).
+        backend: Embedding backend — ``"openai"`` (default), ``"voyage"``,
+            or ``"local"``.
+        workspace: Workspace name (default: active workspace).
+
+    Returns:
+        List of dicts with ``id``, ``resource_type``, ``provider_id``, and
+        ``score`` fields, ranked by similarity (highest first).
+    """
+    try:
+        from iobox.processing.embed import get_backend as _get_backend
+        from iobox.processing.embed import semantic_search as _semantic_search
+    except ImportError:
+        return [
+            {
+                "error": (
+                    "Semantic search requires 'iobox[semantic]'. "
+                    "Run: pip install 'iobox[semantic]'"
+                )
+            }
+        ]
+
+    # Resolve workspace name
+    ws_name = workspace
+    if not ws_name:
+        try:
+            from iobox.space_config import get_active_space
+
+            ws_name = get_active_space()
+        except Exception:
+            pass
+    if not ws_name:
+        return [{"error": "No active workspace. Set one with `iobox space use NAME`."}]
+
+    try:
+        emb_backend = _get_backend(backend)
+        results = _semantic_search(query, ws_name, types=types, top_k=top_k, backend=emb_backend)
+        return results
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+
+def main() -> None:
     from iobox.accounts import get_account_from_env, set_active_account
 
     mode = get_mode_from_env()
@@ -711,3 +1069,7 @@ if __name__ == "__main__":
     set_active_account(get_account_from_env())
     register_tools(mode)
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

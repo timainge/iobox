@@ -202,9 +202,9 @@ class TestCliCommands:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service") as mock_service,
-            patch("iobox.auth.get_gmail_profile", return_value=mock_profile),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch("iobox.providers.google.auth.get_gmail_service") as mock_service,
+            patch("iobox.providers.google.auth.get_gmail_profile", return_value=mock_profile),
         ):
             mock_service.return_value = MagicMock()
             result = runner.invoke(app, ["auth-status"])
@@ -422,9 +422,9 @@ class TestNewCliFeatures:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service") as mock_svc,
-            patch("iobox.auth.get_gmail_profile", return_value=mock_profile),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch("iobox.providers.google.auth.get_gmail_service") as mock_svc,
+            patch("iobox.providers.google.auth.get_gmail_profile", return_value=mock_profile),
         ):
             mock_svc.return_value = MagicMock()
             result = runner.invoke(app, ["auth-status"])
@@ -448,8 +448,11 @@ class TestNewCliFeatures:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service", side_effect=Exception("Auth failed")),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch(
+                "iobox.providers.google.auth.get_gmail_service",
+                side_effect=Exception("Auth failed"),
+            ),
         ):
             result = runner.invoke(app, ["auth-status"])
 
@@ -621,7 +624,12 @@ class TestSyncFlag:
         mock_email = self._mock_email_data("m1")
 
         _e = {
-            "from_": "", "date": "", "snippet": "", "subject": "Test", "labels": [], "thread_id": ""
+            "from_": "",
+            "date": "",
+            "snippet": "",
+            "subject": "Test",
+            "labels": [],
+            "thread_id": "",
         }
         provider = _mock_provider(
             search_emails=[{"message_id": "m1", **_e}],
@@ -708,7 +716,12 @@ class TestSyncFlag:
         mock_email = self._mock_email_data("m-full")
 
         _e = {
-            "from_": "", "date": "", "snippet": "", "subject": "Test", "labels": [], "thread_id": ""
+            "from_": "",
+            "date": "",
+            "snippet": "",
+            "subject": "Test",
+            "labels": [],
+            "thread_id": "",
         }
         provider = _mock_provider(
             get_new_messages=None,
@@ -973,8 +986,8 @@ class TestModeGating:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service", side_effect=Exception("skip")),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("skip")),
         ):
             result = runner.invoke(app, ["--mode", "readonly", "auth-status"])
         assert result.exit_code == 0
@@ -996,8 +1009,8 @@ class TestAccountFlag:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service", side_effect=Exception("skip")),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("skip")),
         ):
             result = runner.invoke(app, ["--account", "work", "auth-status"])
         assert result.exit_code == 0
@@ -1015,8 +1028,8 @@ class TestAccountFlag:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service", side_effect=Exception("skip")),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("skip")),
         ):
             result = runner.invoke(app, ["auth-status"])
         assert result.exit_code == 0
@@ -1035,8 +1048,8 @@ class TestAccountFlag:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service", side_effect=Exception("skip")),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("skip")),
         ):
             result = runner.invoke(app, ["auth-status"])
         assert result.exit_code == 0
@@ -1100,8 +1113,8 @@ class TestProviderFlag:
         provider = _mock_provider()
         with (
             patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.auth.check_auth_status", return_value=mock_status),
-            patch("iobox.auth.get_gmail_service", side_effect=Exception("skip")),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=mock_status),
+            patch("iobox.providers.google.auth.get_gmail_service", side_effect=Exception("skip")),
         ):
             result = runner.invoke(app, ["auth-status"])
         assert result.exit_code == 0

@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from iobox.providers.base import EmailQuery
-from iobox.providers.gmail import GmailProvider
-from iobox.providers.outlook import OutlookProvider
+from iobox.providers.google.email import GmailProvider
+from iobox.providers.o365.email import OutlookProvider
 from tests.fixtures.mock_outlook_responses import make_full_mock_account
 
 # ---------------------------------------------------------------------------

@@ -10,10 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iobox.email_search import (
-    batch_get_metadata,
+from iobox.providers.google._retrieval import (
     download_attachment,
     get_email_content,
+)
+from iobox.providers.google._search import (
+    batch_get_metadata,
     get_new_messages,
     search_emails,
     validate_date_format,
@@ -113,7 +115,7 @@ class TestEmailSearch:
         _setup_batch_mock(mock_gmail_service, responses)
 
         # Patch datetime to return a fixed date for testing
-        with patch("iobox.email_search.datetime") as mock_datetime:
+        with patch("iobox.providers.google._search.datetime") as mock_datetime:
             mock_date = MagicMock()
             mock_date.now.return_value = mock_date
             mock_date.__sub__.return_value = mock_date
