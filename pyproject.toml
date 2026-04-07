@@ -61,11 +61,11 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/basementlabs-com/iobox"
-Repository = "https://github.com/basementlabs-com/iobox"
-Documentation = "https://github.com/basementlabs-com/iobox"
-Changelog = "https://github.com/basementlabs-com/iobox/releases"
-Issues = "https://github.com/basementlabs-com/iobox/issues"
+Homepage = "https://github.com/timainge/iobox"
+Repository = "https://github.com/timainge/iobox"
+Documentation = "https://github.com/timainge/iobox"
+Changelog = "https://github.com/timainge/iobox/releases"
+Issues = "https://github.com/timainge/iobox/issues"
 
 [project.scripts]
 iobox = "iobox.cli:app"

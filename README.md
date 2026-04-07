@@ -70,7 +70,7 @@ pip install 'iobox[semantic]'  # Semantic search (OpenAI embeddings + sqlite-vec
 ### Install from source
 
 ```bash
-git clone https://github.com/basementlabs-com/iobox.git
+git clone https://github.com/timainge/iobox.git
 cd iobox
 uv sync
 ```
