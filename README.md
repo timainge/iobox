@@ -2,7 +2,9 @@
 
 [![PyPI](https://img.shields.io/pypi/v/iobox)](https://pypi.org/project/iobox/)
 [![Python](https://img.shields.io/pypi/pyversions/iobox)](https://pypi.org/project/iobox/)
+[![CI](https://github.com/timainge/iobox/actions/workflows/ci.yml/badge.svg)](https://github.com/timainge/iobox/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-timainge.github.io%2Fiobox-blue)](https://timainge.github.io/iobox/)
 
 Your email is in one place. Your calendar is in another. Your files are somewhere else entirely.
 
