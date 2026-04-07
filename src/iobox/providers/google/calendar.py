@@ -172,14 +172,10 @@ class GoogleCalendarProvider(CalendarProvider):
         """Patch an existing event with partial updates."""
         self._check_write_mode()
         svc = _service_fn or self._get_service()
-        result = svc.events().patch(
-            calendarId="primary", eventId=event_id, body=updates
-        ).execute()
+        result = svc.events().patch(calendarId="primary", eventId=event_id, body=updates).execute()
         return self._google_event_to_event(result)
 
-    def delete_event(
-        self, event_id: str, *, _service_fn: Any | None = None
-    ) -> None:
+    def delete_event(self, event_id: str, *, _service_fn: Any | None = None) -> None:
         """Delete an event from the primary calendar."""
         self._check_write_mode()
         svc = _service_fn or self._get_service()
@@ -212,11 +208,15 @@ class GoogleCalendarProvider(CalendarProvider):
             raise ValueError(
                 f"Authenticated user '{my_email}' is not an attendee of event '{event_id}'"
             )
-        result = svc.events().patch(
-            calendarId="primary",
-            eventId=event_id,
-            body={"attendees": raw_attendees},
-        ).execute()
+        result = (
+            svc.events()
+            .patch(
+                calendarId="primary",
+                eventId=event_id,
+                body={"attendees": raw_attendees},
+            )
+            .execute()
+        )
         return self._google_event_to_event(result)
 
     # ── Normalizer ────────────────────────────────────────────────────────────

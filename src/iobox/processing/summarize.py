@@ -118,9 +118,7 @@ def summarize_batch(
             return idx, ""
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_summarize_one, (i, r)): i for i, r in enumerate(resources)
-        }
+        futures = {executor.submit(_summarize_one, (i, r)): i for i, r in enumerate(resources)}
         for future in as_completed(futures):
             idx, summary = future.result()
             summaries[idx] = summary
@@ -143,10 +141,7 @@ def _build_prompt(resource: Resource) -> str:
     if rtype == "file":
         return _file_prompt(resource)
     # Generic fallback (including EmailData which lacks resource_type)
-    return (
-        "Summarize this content in 2-3 sentences.\n\n"
-        f"Title: {resource.get('title', '')}\n"
-    )
+    return f"Summarize this content in 2-3 sentences.\n\nTitle: {resource.get('title', '')}\n"
 
 
 def _email_prompt(resource: Resource) -> str:
@@ -165,9 +160,7 @@ def _email_prompt(resource: Resource) -> str:
 def _event_prompt(resource: Resource) -> str:
     raw: Any = resource
     attendees = raw.get("attendees") or []
-    att_list = ", ".join(
-        (a.get("name") or a.get("email", "")) for a in attendees[:10]
-    )
+    att_list = ", ".join((a.get("name") or a.get("email", "")) for a in attendees[:10])
     description = (raw.get("description") or "")[:2000]
     return (
         "Summarize this calendar event in 1-2 sentences. Include the purpose, "

@@ -1035,8 +1035,7 @@ def semantic_search_workspace(
         return [
             {
                 "error": (
-                    "Semantic search requires 'iobox[semantic]'. "
-                    "Run: pip install 'iobox[semantic]'"
+                    "Semantic search requires 'iobox[semantic]'. Run: pip install 'iobox[semantic]'"
                 )
             }
         ]

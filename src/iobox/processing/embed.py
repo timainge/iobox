@@ -207,9 +207,7 @@ def get_backend(
         )
     if name == "local":
         return LocalEmbeddingBackend(model=model or DEFAULT_MODEL_LOCAL, _model_fn=_client_fn)
-    raise ValueError(
-        f"Unknown backend: {name!r}. Choose from: openai, voyage, local"
-    )
+    raise ValueError(f"Unknown backend: {name!r}. Choose from: openai, voyage, local")
 
 
 # ── Vector Index ───────────────────────────────────────────────────────────────
@@ -355,9 +353,7 @@ class ResourceIndex:
 
         if self._has_vec and row_id:
             blob = struct.pack(f"{self.dimensions}f", *embedding)
-            conn.execute(
-                "DELETE FROM resource_embeddings_vss WHERE rowid = ?", (row_id,)
-            )
+            conn.execute("DELETE FROM resource_embeddings_vss WHERE rowid = ?", (row_id,))
             conn.execute(
                 "INSERT INTO resource_embeddings_vss(rowid, embedding) VALUES (?, ?)",
                 (row_id, blob),
@@ -521,8 +517,10 @@ def embed_resources(
     if backend is None:
         backend = get_backend("openai")
 
-    index = _index if _index is not None else ResourceIndex(
-        workspace, backend.dimensions, credentials_dir
+    index = (
+        _index
+        if _index is not None
+        else ResourceIndex(workspace, backend.dimensions, credentials_dir)
     )
 
     to_embed: list[tuple[int, Resource]] = []
@@ -588,8 +586,10 @@ def semantic_search(
     if backend is None:
         backend = get_backend("openai")
 
-    index = _index if _index is not None else ResourceIndex(
-        workspace, backend.dimensions, credentials_dir
+    index = (
+        _index
+        if _index is not None
+        else ResourceIndex(workspace, backend.dimensions, credentials_dir)
     )
 
     try:

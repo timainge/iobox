@@ -9,7 +9,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-
 from iobox.processing.summarize import (
     DEFAULT_MODEL,
     _build_prompt,
@@ -22,9 +21,7 @@ from iobox.providers.base import Email, Event, File
 def _make_client(text: str = "Summary text.") -> MagicMock:
     """Return a mock Anthropic client whose messages.create() returns *text*."""
     client = MagicMock()
-    client.messages.create.return_value = MagicMock(
-        content=[MagicMock(text=text)]
-    )
+    client.messages.create.return_value = MagicMock(content=[MagicMock(text=text)])
     return client
 
 
@@ -198,9 +195,7 @@ class TestSummarizeBatch:
             if n == 1:  # second call fails
                 raise RuntimeError("transient error")
             client = MagicMock()
-            client.messages.create.return_value = MagicMock(
-                content=[MagicMock(text="ok")]
-            )
+            client.messages.create.return_value = MagicMock(content=[MagicMock(text="ok")])
             return client
 
         resources = [_make_email(), _make_event(), _make_file()]

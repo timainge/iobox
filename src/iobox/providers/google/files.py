@@ -209,9 +209,7 @@ class GoogleDriveProvider(FileProvider):
         mime = mime or "application/octet-stream"
         media = MediaFileUpload(local_path, mimetype=mime, resumable=False)
         svc = _service_fn or self._get_service()
-        result = svc.files().update(
-            fileId=file_id, media_body=media, fields=FILE_FIELDS
-        ).execute()
+        result = svc.files().update(fileId=file_id, media_body=media, fields=FILE_FIELDS).execute()
         return self._drive_file_to_file(result)
 
     def delete_file(

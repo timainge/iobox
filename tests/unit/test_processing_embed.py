@@ -10,7 +10,6 @@ import sqlite3
 from unittest.mock import MagicMock
 
 import pytest
-
 from iobox.processing.embed import (
     EmbeddingBackend,
     LocalEmbeddingBackend,
@@ -256,9 +255,7 @@ class TestResourceIndex:
         conn = idx._get_conn()  # triggers lazy setup
         tables = {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         assert "resource_embeddings" in tables
 

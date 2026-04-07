@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import iobox.space_config as sc
+import pytest
 from iobox.space_config import (
     ServiceEntry,
     ServiceSessionState,
@@ -78,15 +77,11 @@ class TestDeriveHelpers:
 
 class TestServiceEntry:
     def test_id_auto_derived_when_empty(self) -> None:
-        entry = ServiceEntry(
-            number=1, service="google", account="tim@gmail.com", scopes=["email"]
-        )
+        entry = ServiceEntry(number=1, service="google", account="tim@gmail.com", scopes=["email"])
         assert entry.id == "google-timgmailcom"
 
     def test_slug_auto_derived_when_empty(self) -> None:
-        entry = ServiceEntry(
-            number=1, service="google", account="tim@gmail.com", scopes=["email"]
-        )
+        entry = ServiceEntry(number=1, service="google", account="tim@gmail.com", scopes=["email"])
         assert entry.slug == "tim-gmail"
 
     def test_explicit_id_preserved(self) -> None:

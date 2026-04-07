@@ -1160,8 +1160,7 @@ def space_add(
 
     if drive and service == "o365":
         typer.echo(
-            "Drive scope is not yet supported for o365. "
-            "Remove --drive or use --service google.",
+            "Drive scope is not yet supported for o365. Remove --drive or use --service google.",
             err=True,
         )
         raise typer.Exit(1)

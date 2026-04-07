@@ -11,7 +11,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from iobox.providers.google.calendar import GoogleCalendarProvider
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -286,9 +285,7 @@ class TestOutlookCalendarWriteOps:
         o365_ev = self._make_o365_event()
         account = provider._microsoft_auth.get_account.return_value
         account.schedule().get_default_calendar().new_event.return_value = o365_ev
-        event = provider.create_event(
-            "Test Event", "2026-04-01T10:00:00", "2026-04-01T11:00:00"
-        )
+        event = provider.create_event("Test Event", "2026-04-01T10:00:00", "2026-04-01T11:00:00")
         assert event["title"] == "Test Event"
         o365_ev.save.assert_called_once()
 
