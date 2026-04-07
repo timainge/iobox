@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import iobox.space_config as sc
 import pytest
+
+import iobox.space_config as sc
 from iobox.space_config import (
     ServiceEntry,
     ServiceSessionState,

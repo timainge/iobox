@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from iobox.providers.google.calendar import GoogleCalendarProvider
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

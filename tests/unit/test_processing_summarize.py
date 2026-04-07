@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+
 from iobox.processing.summarize import (
     DEFAULT_MODEL,
     _build_prompt,
