@@ -137,8 +137,8 @@ class MicrosoftAuth:
         self.account = account
         self.scopes: list[str] = scopes or ["basic", "Mail.Read"]
         self._credentials_dir = Path(credentials_dir or Path.home() / ".iobox")
-        self.client_id: str = client_id or os.environ.get("OUTLOOK_CLIENT_ID", "")
-        self.tenant_id: str = tenant_id or os.environ.get("OUTLOOK_TENANT_ID", "common")
+        self.client_id: str = client_id or os.environ.get("OUTLOOK_CLIENT_ID") or ""
+        self.tenant_id: str = tenant_id or os.environ.get("OUTLOOK_TENANT_ID") or "common"
         self._o365_account: Any | None = None
 
     # ── Path helpers ───────────────────────────────────────────────────────────

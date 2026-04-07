@@ -60,6 +60,10 @@
     class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
     <div id="inner-body" class="bg-background relative z-10 flex min-h-svh flex-col">
         {% include "templates/header.html" %}
+        <div class="beta-banner">
+            <span class="beta-pill">Experimental</span> Google providers are live-tested; Microsoft 365 support is implemented but not yet tested against a real tenant. <a href="https://github.com/basementlabs-com/iobox/issues">Feedback welcome &rarr;</a>
+        </div>
+        <script>!function(){var b=document.querySelector('.beta-banner'),h=b&&b.previousElementSibling;if(h&&h.tagName==='HEADER')h.parentNode.insertBefore(b,h)}()</script>
 
         <main class="flex flex-1 flex-col">
             <div class="container-wrapper flex flex-1 flex-col px-2">
@@ -67,9 +71,15 @@
                 {# Full-width layout: no sidebar grid #}
                 <div class="flex w-full min-h-min flex-1 items-start px-0">
                     <div class="h-full w-full">
-                        <div data-slot="docs" class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full {% if hide_nav and hide_toc %}max-w-3xl mx-auto{% endif %}">
+                        <div data-slot="docs" class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full {% if hide_nav and hide_toc %}max-w-5xl mx-auto{% endif %}">
                             <div class="flex min-w-0 flex-1 flex-col">
                                 <div class="h-(--top-spacing) shrink-0"></div>
+                                {% if page.is_homepage %}
+                                <div class="hero">
+                                    <img class="hero-img hero-light" src="{{ 'assets/hero-light-wide.jpg' | url }}" alt="iobox">
+                                    <img class="hero-img hero-dark" src="{{ 'assets/hero-dark-wide.jpg' | url }}" alt="iobox">
+                                </div>
+                                {% endif %}
                                 {% include "templates/page.html" %}
                                 {% include "templates/bottom_navigation.html" %}
                                 {% include "templates/bottom_sidebar.html" %}

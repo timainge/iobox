@@ -1061,7 +1061,7 @@ def semantic_search_workspace(
         return [{"error": str(exc)}]
 
 
-if __name__ == "__main__":
+def main() -> None:
     from iobox.accounts import get_account_from_env, set_active_account
 
     mode = get_mode_from_env()
@@ -1069,3 +1069,7 @@ if __name__ == "__main__":
     set_active_account(get_account_from_env())
     register_tools(mode)
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

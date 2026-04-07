@@ -12,11 +12,6 @@ Your Gmail is in one place. Your Outlook calendar is in another. Your Google Dri
 
 One workspace fans out a single query across every account and service simultaneously — email, calendar events, and files — and returns clean Markdown. Use it from the CLI or connect it to Claude Desktop as an MCP server so your AI assistant can search your inbox directly.
 
-<div class="hero">
-<img class="hero-img hero-light" src="assets/hero-light.jpg" alt="iobox — everything in one box">
-<img class="hero-img hero-dark" src="assets/hero-dark.jpg" alt="iobox — everything in one box">
-</div>
-
 ---
 
 <div class="card-grid">

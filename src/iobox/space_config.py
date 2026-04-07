@@ -215,7 +215,7 @@ def _serialize_space_config(config: SpaceConfig) -> str:
                 "mode": svc.mode,
             }
         )
-    return tomli_w.dumps(data)
+    return tomli_w.dumps(data)  # type: ignore[no-any-return]
 
 
 def _parse_session(data: dict) -> SpaceSession:  # type: ignore[type-arg]

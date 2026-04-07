@@ -49,7 +49,7 @@ extra_javascript:
 
 # ── Navigation ───────────────────────────────────────────
 nav:
-  - Home: index.md
+  - iobox: index.md
   - Guide:
     - Getting Started:
       - Installation: getting-started/installation.md
