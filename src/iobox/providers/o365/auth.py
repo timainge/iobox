@@ -27,18 +27,89 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from iobox.providers.token_store import FilesystemTokenStore, TokenStore
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 try:
     from O365 import Account, FileSystemTokenBackend
+    from O365.utils.token import BaseTokenBackend
 
     HAS_O365 = True
 except ImportError:
     Account = None
     FileSystemTokenBackend = None
+    BaseTokenBackend = object
     HAS_O365 = False
+
+# ---------------------------------------------------------------------------
+# TokenStoreTokenBackend — adapter from iobox TokenStore → O365 BaseTokenBackend
+# ---------------------------------------------------------------------------
+
+
+class TokenStoreTokenBackend(BaseTokenBackend):  # type: ignore[misc]
+    """Adapter: route O365's token cache through an iobox ``TokenStore``.
+
+    O365's ``BaseTokenBackend`` works in two halves: ``self._cache`` (a
+    dict-like cache that the rest of O365 reads/writes) plus
+    ``load_token`` / ``save_token`` / ``delete_token`` / ``check_token``
+    for persistence. This adapter persists by serializing the cache
+    through the parent class' ``serialize``/``deserialize`` and storing
+    the resulting JSON string under a single key in a TokenStore dict.
+
+    Use case: nexus-api injects a ``PostgresTokenStore`` so each user's
+    Microsoft tokens land encrypted in their own row instead of in a
+    per-process file.
+
+    Construction fails loud if O365 is not installed.
+    """
+
+    _PAYLOAD_KEY = "_o365"
+
+    def __init__(self, token_store: TokenStore, account: str, tier: str = "default") -> None:
+        if not HAS_O365:
+            raise ImportError(
+                "O365 package required to use TokenStoreTokenBackend. "
+                "Install with: pip install 'iobox[outlook]'"
+            )
+        super().__init__()
+        self._token_store = token_store
+        self._account = account
+        self._tier = tier
+        # Re-affirm the parent's flag in our scope so static analyzers see
+        # the type.
+        self._has_state_changed: bool = False
+
+    def load_token(self) -> bool:
+        payload = self._token_store.load(self._account, self._tier)
+        if not payload or self._PAYLOAD_KEY not in payload:
+            return False
+        try:
+            self._cache = self.deserialize(payload[self._PAYLOAD_KEY])
+        except (ValueError, TypeError):
+            logger.warning("o365 token cache failed to deserialize; re-auth needed")
+            return False
+        return True
+
+    def save_token(self, force: bool = False) -> bool:
+        if not self._cache:
+            return False
+        if force is False and self._has_state_changed is False:
+            return True
+        self._token_store.save(self._account, self._tier, {self._PAYLOAD_KEY: self.serialize()})
+        self._has_state_changed = False
+        return True
+
+    def delete_token(self) -> bool:
+        self._token_store.delete(self._account, self._tier)
+        return True
+
+    def check_token(self) -> bool:
+        payload = self._token_store.load(self._account, self._tier)
+        return bool(payload and self._PAYLOAD_KEY in payload)
+
 
 # ---------------------------------------------------------------------------
 # Module-level constants (kept for backward compatibility)
@@ -128,6 +199,7 @@ class MicrosoftAuth:
         credentials_dir: str | None = None,
         client_id: str | None = None,
         tenant_id: str | None = None,
+        token_store: TokenStore | None = None,
     ) -> None:
         if not HAS_O365:
             raise ImportError(
@@ -139,6 +211,11 @@ class MicrosoftAuth:
         self._credentials_dir = Path(credentials_dir or Path.home() / ".iobox")
         self.client_id: str = client_id or os.environ.get("OUTLOOK_CLIENT_ID") or ""
         self.tenant_id: str = tenant_id or os.environ.get("OUTLOOK_TENANT_ID") or "common"
+        # Default store preserves legacy on-disk layout. Server callers inject
+        # a Postgres-backed store scoped to the request's authenticated user;
+        # MicrosoftAuth still uses a FileSystemTokenBackend internally for
+        # the CLI default to avoid migration of existing on-disk tokens.
+        self.token_store: TokenStore = token_store or FilesystemTokenStore(self._credentials_dir)
         self._o365_account: Any | None = None
 
     # ── Path helpers ───────────────────────────────────────────────────────────
@@ -177,13 +254,23 @@ class MicrosoftAuth:
                 "Application (client) ID in your .env file."
             )
 
-        # Migrate legacy token from old hardcoded path if needed.
-        self._maybe_migrate_token()
+        # Migrate legacy token from old hardcoded path if needed (only
+        # applies when the default filesystem store is in play; custom
+        # stores own their own migrations).
+        if isinstance(self.token_store, FilesystemTokenStore):
+            self._maybe_migrate_token()
 
-        token_backend = FileSystemTokenBackend(
-            token_path=str(self.token_dir),
-            token_filename=_TOKEN_FILENAME,
-        )
+        # If the caller injected a custom store, route Microsoft's token I/O
+        # through it. Otherwise fall back to the historical FileSystem
+        # backend so on-disk tokens keep working.
+        token_backend: Any
+        if isinstance(self.token_store, FilesystemTokenStore):
+            token_backend = FileSystemTokenBackend(
+                token_path=str(self.token_dir),
+                token_filename=_TOKEN_FILENAME,
+            )
+        else:
+            token_backend = TokenStoreTokenBackend(self.token_store, self.account, tier="default")
         o365_account = Account(
             credentials=(self.client_id, ""),
             auth_flow_type="authorization",

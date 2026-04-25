@@ -10,9 +10,15 @@ is the same on-disk layout as 0.5.0.
 **TokenStore protocol**
 - New `iobox.providers.token_store.TokenStore` Protocol with `load` / `save` / `delete`.
 - New `FilesystemTokenStore(credentials_dir)` — preserves the historical
-  `<credentials_dir>/tokens/<account>/token_<tier>.json` layout. Default for `GoogleAuth`.
+  `<credentials_dir>/tokens/<account>/token_<tier>.json` layout. Default for
+  `GoogleAuth` and `MicrosoftAuth`.
 - `GoogleAuth.__init__` accepts an optional `token_store` argument; when
   omitted, falls back to `FilesystemTokenStore(credentials_dir)`.
+- `MicrosoftAuth.__init__` accepts an optional `token_store`; when set,
+  routes O365's token cache through a `TokenStoreTokenBackend` adapter
+  (BaseTokenBackend → TokenStore). When omitted, falls back to O365's
+  built-in `FileSystemTokenBackend` so existing on-disk tokens keep
+  working.
 - Server embedders (e.g. Nexus) implement `PostgresTokenStore` to scope
   tokens per authenticated user with at-rest encryption.
 
