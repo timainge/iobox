@@ -116,8 +116,10 @@ class TestGoogleAuth:
         mock_creds = MagicMock()
         mock_creds.valid = True
 
+        # GoogleAuth now reads via TokenStore.load (returns a dict) and passes
+        # it to Credentials.from_authorized_user_info — patch the new path.
         with patch(
-            "iobox.providers.google.auth.Credentials.from_authorized_user_file",
+            "iobox.providers.google.auth.Credentials.from_authorized_user_info",
             return_value=mock_creds,
         ):
             auth = GoogleAuth(
@@ -141,7 +143,7 @@ class TestGoogleAuth:
         mock_creds.to_json.return_value = "{}"
 
         with patch(
-            "iobox.providers.google.auth.Credentials.from_authorized_user_file",
+            "iobox.providers.google.auth.Credentials.from_authorized_user_info",
             return_value=mock_creds,
         ):
             with patch("iobox.providers.google.auth.Request"):

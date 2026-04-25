@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iobox"
-version = "0.5.0"
+version = "0.6.0"
 description = "Personal workspace context tool — search, retrieve and export email, calendar events and files across Gmail and Microsoft 365"
 readme = "README.md"
 license = {text = "MIT"}

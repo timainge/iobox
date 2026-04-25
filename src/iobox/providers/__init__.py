@@ -30,6 +30,7 @@ from iobox.providers.base import (
     Resource,
     ResourceQuery,
 )
+from iobox.providers.token_store import FilesystemTokenStore, TokenStore
 
 __all__ = [
     # Original email types — unchanged
@@ -52,6 +53,9 @@ __all__ = [
     # Provider ABCs
     "CalendarProvider",
     "FileProvider",
+    # Token storage
+    "TokenStore",
+    "FilesystemTokenStore",
 ]
 
 _PROVIDERS: dict[str, str] = {

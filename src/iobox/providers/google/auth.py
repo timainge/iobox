@@ -22,6 +22,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -36,6 +37,7 @@ from googleapiclient.discovery import build
 
 from iobox.accounts import get_active_account
 from iobox.modes import SCOPE_IMPLIES, SCOPES_BY_MODE, AccessMode, get_mode_from_env
+from iobox.providers.token_store import FilesystemTokenStore, TokenStore
 
 load_dotenv()
 
@@ -72,11 +74,15 @@ class GoogleAuth:
         scopes: list[str] | None = None,
         credentials_dir: str | None = None,
         tier: str = "readonly",
+        token_store: TokenStore | None = None,
     ) -> None:
         self.account = account
         self.scopes: list[str] = scopes or []
         self.tier = tier
         self.credentials_dir = Path(credentials_dir or os.getcwd())
+        # Default store preserves legacy on-disk layout. Server callers inject
+        # a Postgres-backed store scoped to the request's authenticated user.
+        self.token_store: TokenStore = token_store or FilesystemTokenStore(self.credentials_dir)
         self._credentials: Credentials | None = None
 
     # ── Path properties ───────────────────────────────────────────────────────
@@ -108,8 +114,12 @@ class GoogleAuth:
             return self._credentials
 
         # Check for the GMAIL_TOKEN_FILE override (legacy single-file mode).
+        # This bypass exists so power users can point GoogleAuth at an arbitrary
+        # JSON file outside the TokenStore layout. It only triggers when the
+        # store is the default filesystem one — a custom store implies the
+        # caller wants tokens to flow through their store, not a magic env var.
         legacy_token = os.environ.get("GMAIL_TOKEN_FILE", "token.json")
-        if legacy_token != "token.json":
+        if legacy_token != "token.json" and isinstance(self.token_store, FilesystemTokenStore):
             token_path_str = (
                 legacy_token
                 if os.path.isabs(legacy_token)
@@ -124,11 +134,15 @@ class GoogleAuth:
                     return creds
 
         creds = None
-        token_path = self.token_path
-        if token_path.exists():
-            logger.info(f"Loading existing credentials from {token_path}")
-            creds = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
-                str(token_path), self.scopes
+        token_info = self.token_store.load(self.account, self.tier)
+        if token_info is not None:
+            logger.info(
+                "Loading existing credentials for account=%s tier=%s",
+                self.account,
+                self.tier,
+            )
+            creds = Credentials.from_authorized_user_info(  # type: ignore[no-untyped-call]
+                token_info, self.scopes
             )
 
         if not creds or not creds.valid:
@@ -146,8 +160,8 @@ class GoogleAuth:
                 flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), self.scopes)
                 creds = flow.run_local_server(port=0)
 
-            logger.info(f"Saving credentials to {token_path}")
-            token_path.write_text(creds.to_json())
+            logger.info("Saving credentials for account=%s tier=%s", self.account, self.tier)
+            self.token_store.save(self.account, self.tier, json.loads(creds.to_json()))
 
         self._credentials = creds
         return creds

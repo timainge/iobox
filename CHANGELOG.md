@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0
+
+The pluggable-storage release. iobox's OAuth tokens are no longer hard-coded
+to live as JSON files on disk — embedders can inject any backend that
+implements the new `TokenStore` protocol. The CLI is unchanged; the default
+is the same on-disk layout as 0.5.0.
+
+**TokenStore protocol**
+- New `iobox.providers.token_store.TokenStore` Protocol with `load` / `save` / `delete`.
+- New `FilesystemTokenStore(credentials_dir)` — preserves the historical
+  `<credentials_dir>/tokens/<account>/token_<tier>.json` layout. Default for `GoogleAuth`.
+- `GoogleAuth.__init__` accepts an optional `token_store` argument; when
+  omitted, falls back to `FilesystemTokenStore(credentials_dir)`.
+- Server embedders (e.g. Nexus) implement `PostgresTokenStore` to scope
+  tokens per authenticated user with at-rest encryption.
+
+**Compatibility**
+- Existing on-disk tokens load unchanged.
+- `GMAIL_TOKEN_FILE` legacy override still applies for the default
+  filesystem store; custom stores see all reads/writes flow through them.
+
+---
+
 ## 0.5.0
 
 The workspace release. iobox is no longer a single-provider tool — it's a multi-account, multi-service workspace that fans out queries across everything you've configured.
