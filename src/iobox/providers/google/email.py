@@ -18,14 +18,25 @@ from typing import Any
 from iobox.providers.base import AttachmentInfo, EmailData, EmailProvider, EmailQuery
 from iobox.providers.google import _retrieval, _search, _sender
 from iobox.providers.google import auth as _auth
+from iobox.providers.google.auth import GoogleAuth
 
 logger = logging.getLogger(__name__)
 
 
 class GmailProvider(EmailProvider):
-    """EmailProvider implementation backed by the existing Gmail modules."""
+    """EmailProvider implementation backed by the existing Gmail modules.
 
-    def __init__(self) -> None:
+    Args:
+        auth: Optional pre-built ``GoogleAuth``. Pass one constructed with
+            a custom ``token_store`` to route Gmail's OAuth tokens through
+            an embedder-supplied backend (e.g. nexus-api's
+            ``PostgresTokenStore`` for per-user storage). When omitted,
+            falls back to the legacy module-level ``get_gmail_service()``
+            which uses on-disk tokens — unchanged CLI behavior.
+    """
+
+    def __init__(self, auth: GoogleAuth | None = None) -> None:
+        self._auth = auth
         self._service: Any | None = None
 
     # ------------------------------------------------------------------
@@ -36,7 +47,10 @@ class GmailProvider(EmailProvider):
     def _svc(self) -> Any:
         """Return the authenticated Gmail API service, lazily authenticating."""
         if self._service is None:
-            self._service = _auth.get_gmail_service()
+            if self._auth is not None:
+                self._service = self._auth.get_service("gmail", "v1")
+            else:
+                self._service = _auth.get_gmail_service()
         return self._service
 
     def _build_gmail_query(self, query: EmailQuery) -> str:
@@ -135,7 +149,10 @@ class GmailProvider(EmailProvider):
 
     def authenticate(self) -> None:
         """Trigger the OAuth flow (or load cached credentials) immediately."""
-        self._service = _auth.get_gmail_service()
+        if self._auth is not None:
+            self._service = self._auth.get_service("gmail", "v1")
+        else:
+            self._service = _auth.get_gmail_service()
 
     def get_profile(self) -> dict[str, Any]:
         """Return Gmail profile info (emailAddress, messagesTotal, etc.)."""

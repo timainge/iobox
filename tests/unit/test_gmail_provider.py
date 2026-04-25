@@ -26,6 +26,44 @@ def provider():
 
 
 # ------------------------------------------------------------------
+# Constructor-level auth wiring
+# ------------------------------------------------------------------
+
+
+def test_default_uses_legacy_get_gmail_service():
+    """No auth= → falls back to module-level get_gmail_service()."""
+    p = GmailProvider()
+    fake_service = MagicMock(name="legacy_service")
+    with patch(
+        "iobox.providers.google.email._auth.get_gmail_service",
+        return_value=fake_service,
+    ):
+        assert p._svc is fake_service
+
+
+def test_injected_auth_routes_through_get_service():
+    """auth=GoogleAuth(...) → service comes from auth.get_service()."""
+    fake_auth = MagicMock(name="GoogleAuth")
+    fake_service = MagicMock(name="injected_service")
+    fake_auth.get_service.return_value = fake_service
+
+    p = GmailProvider(auth=fake_auth)
+    assert p._svc is fake_service
+    fake_auth.get_service.assert_called_once_with("gmail", "v1")
+
+
+def test_authenticate_uses_injected_auth():
+    fake_auth = MagicMock(name="GoogleAuth")
+    fake_service = MagicMock(name="injected_service")
+    fake_auth.get_service.return_value = fake_service
+
+    p = GmailProvider(auth=fake_auth)
+    p.authenticate()
+    assert p._service is fake_service
+    fake_auth.get_service.assert_called_with("gmail", "v1")
+
+
+# ------------------------------------------------------------------
 # _build_gmail_query — field-by-field coverage
 # ------------------------------------------------------------------
 
