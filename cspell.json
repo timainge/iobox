@@ -20,6 +20,11 @@
     "mypy",
     "ruff",
     "uv",
-    "shadcn"
+    "shadcn",
+    "venv",
+    "pyproject",
+    "kwargs",
+    "unstar",
+    "untrashed"
   ]
 }

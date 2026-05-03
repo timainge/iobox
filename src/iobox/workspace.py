@@ -312,7 +312,7 @@ class Workspace:
                 if "email" in entry.scopes:
                     from iobox.providers.google.email import GmailProvider
 
-                    g_msg: Any = GmailProvider()
+                    g_msg: Any = GmailProvider(auth=auth)
                     email_slots.append(ProviderSlot(name=entry.slug, provider=g_msg))
 
                 if "calendar" in entry.scopes:

@@ -88,7 +88,7 @@ def convert_html_to_markdown(html_content: str) -> str:
     h.pad_tables = True
 
     try:
-        markdown: str = h.handle(html_content)  # type: ignore[no-untyped-call]
+        markdown: str = h.handle(html_content)
         markdown = _clean_email_markdown(markdown)
         return markdown
     except Exception as e:

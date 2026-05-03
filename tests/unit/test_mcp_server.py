@@ -17,9 +17,15 @@ from iobox.mcp_server import (  # noqa: E402
     batch_modify_gmail_labels,
     batch_trash_gmail,
     check_auth,
+    create_event,
+    create_folder,
     create_gmail_draft,
+    delete_event,
+    delete_file,
     delete_gmail_draft,
+    download_file,
     forward_gmail,
+    get_active_workspace,
     get_email,
     get_event,
     get_file,
@@ -27,16 +33,25 @@ from iobox.mcp_server import (  # noqa: E402
     list_events,
     list_files,
     list_gmail_drafts,
+    list_provider_slots,
+    list_workspaces,
     modify_labels,
+    rsvp_event,
     save_email,
     save_emails_by_query,
+    save_event,
+    save_file,
     save_thread,
     search_gmail,
     search_workspace,
     send_email,
     send_gmail_draft,
+    set_active_workspace,
     trash_gmail,
     untrash_gmail,
+    update_event,
+    upload_file,
+    workspace_auth_status,
 )
 
 MODULE = "iobox.mcp_server"
@@ -387,73 +402,42 @@ class TestDrafts:
 
 class TestLabels:
     def test_modify_labels_star(self):
-        _MOD_LABELS = "iobox.providers.google._retrieval.modify_message_labels"
-        with (
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch(_MOD_LABELS, return_value={"id": "m1"}) as mock_mod,
-            patch("iobox.providers.google._retrieval.resolve_label_name"),
-        ):
-            mock_svc.return_value = MagicMock()
-            modify_labels("m1", star=True)
-        mock_mod.assert_called_once_with(mock_svc.return_value, "m1", ["STARRED"], None)
+        provider = _make_provider()
+        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+            result = modify_labels("m1", star=True)
+        assert result == {"message_id": "m1", "status": "modified"}
+        provider.set_star.assert_called_once_with("m1", True)
 
     def test_modify_labels_mark_read(self):
-        _MOD_LABELS = "iobox.providers.google._retrieval.modify_message_labels"
-        with (
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch(_MOD_LABELS, return_value={"id": "m1"}) as mock_mod,
-            patch("iobox.providers.google._retrieval.resolve_label_name"),
-        ):
-            mock_svc.return_value = MagicMock()
+        provider = _make_provider()
+        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
             modify_labels("m1", mark_read=True)
-        mock_mod.assert_called_once_with(mock_svc.return_value, "m1", None, ["UNREAD"])
+        provider.mark_read.assert_called_once_with("m1", True)
 
     def test_modify_labels_archive(self):
-        _MOD_LABELS = "iobox.providers.google._retrieval.modify_message_labels"
-        with (
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch(_MOD_LABELS, return_value={"id": "m1"}) as mock_mod,
-            patch("iobox.providers.google._retrieval.resolve_label_name"),
-        ):
-            mock_svc.return_value = MagicMock()
+        provider = _make_provider()
+        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
             modify_labels("m1", archive=True)
-        mock_mod.assert_called_once_with(mock_svc.return_value, "m1", None, ["INBOX"])
+        provider.archive.assert_called_once_with("m1")
 
     def test_modify_labels_custom(self):
-        _MOD_LABELS = "iobox.providers.google._retrieval.modify_message_labels"
-        with (
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch("iobox.providers.google._retrieval.resolve_label_name", return_value="Label_123"),
-            patch(_MOD_LABELS, return_value={"id": "m1"}) as mock_mod,
-        ):
-            mock_svc.return_value = MagicMock()
+        provider = _make_provider()
+        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
             modify_labels("m1", add_label="MyLabel")
-        mock_mod.assert_called_once_with(mock_svc.return_value, "m1", ["Label_123"], None)
+        provider.add_tag.assert_called_once_with("m1", "MyLabel")
 
     def test_batch_modify_labels(self):
         provider = _make_provider()
         provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
-        with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch("iobox.providers.google._retrieval.resolve_label_name", return_value=""),
-            patch("iobox.providers.google._retrieval.batch_modify_labels") as mock_batch,
-            patch("iobox.providers.google._retrieval.modify_message_labels"),
-        ):
-            mock_svc.return_value = MagicMock()
+        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
             result = batch_modify_gmail_labels("in:inbox", star=True)
         assert result["modified_count"] == 2
-        mock_batch.assert_called_once()
+        assert provider.set_star.call_count == 2
 
     def test_batch_modify_no_results(self):
         provider = _make_provider()
         provider.search_emails.return_value = []
-        with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch("iobox.providers.google._retrieval.resolve_label_name", return_value=""),
-        ):
-            mock_svc.return_value = MagicMock()
+        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
             result = batch_modify_gmail_labels("from:nobody@example.com", mark_read=True)
         assert result["modified_count"] == 0
 
@@ -708,3 +692,417 @@ class TestGetFileContent:
         with patch(f"{MODULE}._get_workspace", return_value=ws):
             result = get_file_content("file1")
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Workspace: calendar writes
+# ---------------------------------------------------------------------------
+
+
+class TestSaveEvent:
+    def test_save_event_success(self, tmp_path):
+        ws = _make_workspace(events=[{"id": "e1", "title": "Standup"}])
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=ws),
+            patch(
+                "iobox.processing.markdown.convert_event_to_markdown",
+                return_value="# Event",
+            ),
+            patch(f"{MODULE}.create_output_directory", return_value=str(tmp_path)),
+        ):
+            result = save_event("e1", output_dir=str(tmp_path))
+        assert result["title"] == "Standup"
+        assert result["filepath"].endswith(".md")
+
+    def test_save_event_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = save_event("e1")
+        assert "error" in result
+
+    def test_save_event_unknown_provider(self):
+        ws = _make_workspace(events=[{"id": "e1", "title": "Standup"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = save_event("e1", provider="nonexistent")
+        assert "error" in result
+
+
+class TestCreateEvent:
+    def test_create_event_success(self):
+        ws = _make_workspace(events=[])
+        ws.calendar_providers[0].provider.create_event.return_value = {
+            "id": "evt-new",
+            "title": "Standup",
+        }
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = create_event(
+                "Standup",
+                "2026-04-01T09:00:00",
+                "2026-04-01T09:30:00",
+                attendees=["a@b.com"],
+            )
+        assert result == {"id": "evt-new", "title": "Standup"}
+        ws.calendar_providers[0].provider.create_event.assert_called_once_with(
+            title="Standup",
+            start="2026-04-01T09:00:00",
+            end="2026-04-01T09:30:00",
+            all_day=False,
+            description=None,
+            location=None,
+            attendees=["a@b.com"],
+        )
+
+    def test_create_event_no_calendar_slots(self):
+        ws = MagicMock()
+        ws.calendar_providers = []
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = create_event("X", "2026-04-01", "2026-04-02")
+        assert "error" in result
+
+
+class TestUpdateEvent:
+    def test_update_event_success(self):
+        ws = _make_workspace(events=[{"id": "e1"}])
+        ws.calendar_providers[0].provider.update_event.return_value = {
+            "id": "e1",
+            "title": "New",
+        }
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = update_event("e1", {"title": "New"})
+        assert result["title"] == "New"
+        ws.calendar_providers[0].provider.update_event.assert_called_once_with(
+            "e1", {"title": "New"}
+        )
+
+    def test_update_event_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = update_event("e1", {"title": "X"})
+        assert "error" in result
+
+
+class TestDeleteEvent:
+    def test_delete_event_success(self):
+        ws = _make_workspace(events=[{"id": "e1"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = delete_event("e1")
+        assert result == {"event_id": "e1", "status": "deleted"}
+        ws.calendar_providers[0].provider.delete_event.assert_called_once_with("e1")
+
+    def test_delete_event_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = delete_event("e1")
+        assert "error" in result
+
+
+class TestRsvpEvent:
+    def test_rsvp_event_success(self):
+        ws = _make_workspace(events=[{"id": "e1"}])
+        ws.calendar_providers[0].provider.rsvp.return_value = {
+            "id": "e1",
+            "response": "accepted",
+        }
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = rsvp_event("e1", "accepted")
+        assert result["response"] == "accepted"
+        ws.calendar_providers[0].provider.rsvp.assert_called_once_with("e1", "accepted")
+
+    def test_rsvp_event_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = rsvp_event("e1", "accepted")
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Workspace: file writes
+# ---------------------------------------------------------------------------
+
+
+class TestSaveFile:
+    def test_save_file_success(self, tmp_path):
+        ws = _make_workspace(files=[{"id": "f1", "title": "report"}])
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=ws),
+            patch(
+                "iobox.processing.markdown.convert_file_to_markdown",
+                return_value="# File",
+            ),
+            patch(f"{MODULE}.create_output_directory", return_value=str(tmp_path)),
+        ):
+            result = save_file("f1", output_dir=str(tmp_path))
+        assert result["filepath"].endswith(".md")
+        assert "name" in result
+
+    def test_save_file_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = save_file("f1")
+        assert "error" in result
+
+
+class TestDownloadFile:
+    def test_download_file_success(self, tmp_path):
+        ws = _make_workspace(files=[{"id": "f1"}])
+        ws.file_providers[0].provider.download_file.return_value = b"hello world"
+        target = tmp_path / "out" / "file.bin"
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = download_file("f1", str(target))
+        assert result["bytes_written"] == len(b"hello world")
+        assert result["filepath"] == str(target)
+        assert target.read_bytes() == b"hello world"
+
+    def test_download_file_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = download_file("f1", "/tmp/x")
+        assert "error" in result
+
+
+class TestUploadFile:
+    def test_upload_file_success(self, tmp_path):
+        local = tmp_path / "report.pdf"
+        local.write_bytes(b"data")
+        ws = _make_workspace(files=[{"id": "f1"}])
+        ws.file_providers[0].provider.upload_file.return_value = {
+            "id": "uploaded-1",
+            "title": "report.pdf",
+        }
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = upload_file(str(local))
+        assert result == {"id": "uploaded-1", "name": "report.pdf"}
+
+    def test_upload_file_missing_local(self, tmp_path):
+        result = upload_file(str(tmp_path / "missing.pdf"))
+        assert "error" in result
+
+
+class TestDeleteFile:
+    def test_delete_file_trash(self):
+        ws = _make_workspace(files=[{"id": "f1"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = delete_file("f1")
+        assert result == {"file_id": "f1", "status": "trashed"}
+        ws.file_providers[0].provider.delete_file.assert_called_once_with("f1", permanent=False)
+
+    def test_delete_file_permanent(self):
+        ws = _make_workspace(files=[{"id": "f1"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = delete_file("f1", permanent=True)
+        assert result == {"file_id": "f1", "status": "deleted_permanently"}
+        ws.file_providers[0].provider.delete_file.assert_called_once_with("f1", permanent=True)
+
+
+class TestCreateFolder:
+    def test_create_folder_success(self):
+        ws = _make_workspace(files=[{"id": "f1"}])
+        ws.file_providers[0].provider.create_folder.return_value = {
+            "id": "folder-1",
+            "title": "New Folder",
+        }
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = create_folder("New Folder")
+        assert result == {"id": "folder-1", "name": "New Folder"}
+        ws.file_providers[0].provider.create_folder.assert_called_once_with(
+            "New Folder", parent_id=None
+        )
+
+    def test_create_folder_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = create_folder("X")
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Workspace: discovery + auth
+# ---------------------------------------------------------------------------
+
+
+class TestListWorkspaces:
+    def test_list_workspaces(self):
+        with (
+            patch(
+                "iobox.space_config.list_spaces",
+                return_value=["personal", "work"],
+            ),
+            patch("iobox.space_config.get_active_space", return_value="personal"),
+        ):
+            result = list_workspaces()
+        assert result == {"workspaces": ["personal", "work"], "active": "personal"}
+
+
+class TestGetActiveWorkspace:
+    def test_get_active_workspace(self):
+        with patch("iobox.space_config.get_active_space", return_value="personal"):
+            result = get_active_workspace()
+        assert result == {"active": "personal"}
+
+    def test_get_active_workspace_none(self):
+        with patch("iobox.space_config.get_active_space", return_value=None):
+            result = get_active_workspace()
+        assert result == {"active": None}
+
+
+class TestSetActiveWorkspace:
+    def test_set_active_workspace_success(self):
+        with (
+            patch("iobox.space_config.list_spaces", return_value=["personal", "work"]),
+            patch("iobox.space_config.set_active_space") as mock_set,
+        ):
+            result = set_active_workspace("work")
+        assert result == {"active": "work"}
+        mock_set.assert_called_once_with("work")
+
+    def test_set_active_workspace_unknown(self):
+        with (
+            patch("iobox.space_config.list_spaces", return_value=["personal"]),
+            patch("iobox.space_config.set_active_space") as mock_set,
+        ):
+            result = set_active_workspace("nope")
+        assert "error" in result
+        mock_set.assert_not_called()
+
+
+def _make_full_workspace():
+    """Build a workspace with all three slot types populated."""
+    ws = MagicMock()
+    ws.name = "personal"
+
+    def _slot(name, tags, klass_name):
+        s = MagicMock()
+        s.name = name
+        s.tags = tags
+        s.provider = MagicMock()
+        s.provider.__class__.__name__ = klass_name
+        type(s.provider).__name__ = klass_name  # ensure type() reads correctly
+        return s
+
+    email_slot = _slot("personal-gmail", ["primary"], "GmailProvider")
+    cal_slot = _slot("personal-cal", [], "GoogleCalendarProvider")
+    file_slot = _slot("personal-drive", ["work"], "GoogleDriveProvider")
+
+    ws.email_providers = [email_slot]
+    ws.calendar_providers = [cal_slot]
+    ws.file_providers = [file_slot]
+    return ws
+
+
+class TestListProviderSlots:
+    def test_list_provider_slots(self):
+        ws = _make_full_workspace()
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = list_provider_slots()
+        assert result["workspace"] == "personal"
+        assert len(result["email"]) == 1
+        assert result["email"][0]["name"] == "personal-gmail"
+        assert result["email"][0]["tags"] == ["primary"]
+        assert "provider_class" in result["email"][0]
+        assert result["calendar"][0]["name"] == "personal-cal"
+        assert result["file"][0]["name"] == "personal-drive"
+        assert result["file"][0]["tags"] == ["work"]
+
+    def test_list_provider_slots_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = list_provider_slots()
+        assert "error" in result
+
+
+class TestWorkspaceAuthStatus:
+    def test_auth_status_success(self):
+        ws = _make_full_workspace()
+        ws.email_providers[0].provider.get_profile.return_value = {"emailAddress": "me@gmail.com"}
+        ws.calendar_providers[0].provider.get_profile.return_value = {
+            "emailAddress": "me@gmail.com"
+        }
+        ws.file_providers[0].provider.get_profile.return_value = {"email": "me@gmail.com"}
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = workspace_auth_status()
+        assert result["workspace"] == "personal"
+        slots = result["slots"]
+        assert slots["personal-gmail"]["authenticated"] is True
+        assert slots["personal-gmail"]["account"] == "me@gmail.com"
+        assert slots["personal-gmail"]["error"] is None
+        assert slots["personal-drive"]["account"] == "me@gmail.com"
+
+    def test_auth_status_exception(self):
+        ws = _make_full_workspace()
+        ws.email_providers[0].provider.get_profile.side_effect = RuntimeError("expired")
+        ws.calendar_providers[0].provider.get_profile.return_value = {
+            "emailAddress": "me@gmail.com"
+        }
+        ws.file_providers[0].provider.get_profile.return_value = {"emailAddress": "me@gmail.com"}
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = workspace_auth_status()
+        slot = result["slots"]["personal-gmail"]
+        assert slot["authenticated"] is False
+        assert slot["account"] is None
+        assert "expired" in slot["error"]
+
+    def test_auth_status_no_workspace(self):
+        with patch(f"{MODULE}._get_workspace", return_value=None):
+            result = workspace_auth_status()
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# Email tools: workspace routing
+# ---------------------------------------------------------------------------
+
+
+class TestEmailToolsWorkspaceRouting:
+    def test_search_gmail_routes_via_workspace(self):
+        """search_gmail with workspace fans out via Workspace.search_emails."""
+        ws = _make_full_workspace()
+        ws.search_emails.return_value = [{"message_id": "m1", "from_": "x@y.com"}]
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = search_gmail("hello", workspace="personal")
+        assert len(result) == 1
+        assert result[0]["from"] == "x@y.com"
+        ws.search_emails.assert_called_once()
+
+    def test_search_gmail_with_provider_filter(self):
+        ws = _make_full_workspace()
+        ws.search_emails.return_value = []
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            search_gmail("hello", provider="personal-gmail")
+        _, kwargs = ws.search_emails.call_args
+        assert kwargs["providers"] == ["personal-gmail"]
+
+    def test_send_email_routes_to_named_slot(self):
+        """send_email with provider= picks the named slot via _resolve_email_provider."""
+        ws = _make_full_workspace()
+        ws.email_providers[0].provider.send_message.return_value = {
+            "message_id": "sent-1",
+            "id": "sent-1",
+        }
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = send_email("bob@example.com", "Hi", "Body", provider="personal-gmail")
+        assert result["id"] == "sent-1"
+        ws.email_providers[0].provider.send_message.assert_called_once()
+
+    def test_send_email_unknown_provider_raises(self):
+        ws = _make_full_workspace()
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            try:
+                send_email("bob@example.com", "Hi", "Body", provider="nonexistent")
+            except ValueError as exc:
+                assert "nonexistent" in str(exc)
+            else:
+                raise AssertionError("expected ValueError")
+
+    def test_search_gmail_legacy_fallback(self):
+        """No workspace + no provider → legacy _get_gmail_provider() path."""
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1", "from_": "x"}]
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=None),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            result = search_gmail("hello")
+        assert result == [{"message_id": "m1", "from": "x"}]
+        provider.search_emails.assert_called_once()
+
+    def test_send_email_legacy_fallback(self):
+        provider = _make_provider()
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=None),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            result = send_email("bob@example.com", "Hi", "Body")
+        assert result["id"] == "sent-1"
+        provider.send_message.assert_called_once()

@@ -125,6 +125,7 @@ CLI_COMMANDS_BY_MODE: dict[AccessMode, set[str]] = {
 
 # MCP tool function names allowed per mode.
 _READONLY_MCP = {
+    # Email reads + saves
     "search_gmail",
     "get_email",
     "save_email",
@@ -132,30 +133,53 @@ _READONLY_MCP = {
     "save_emails_by_query",
     "list_gmail_drafts",
     "check_auth",
-    # Workspace tools
+    # Workspace cross-type
     "search_workspace",
+    "semantic_search_workspace",
+    # Calendar reads + saves
     "list_events",
     "get_event",
+    "save_event",
+    # File reads + saves
     "list_files",
     "get_file",
     "get_file_content",
-    # Semantic search
-    "semantic_search_workspace",
+    "save_file",
+    "download_file",
+    # Workspace discovery + auth
+    "list_workspaces",
+    "get_active_workspace",
+    "list_provider_slots",
+    "workspace_auth_status",
 }
 _STANDARD_MCP = _READONLY_MCP | {
+    # Email writes
     "create_gmail_draft",
     "send_gmail_draft",
     "delete_gmail_draft",
     "modify_labels",
     "batch_modify_gmail_labels",
+    # Calendar writes
+    "create_event",
+    "update_event",
+    "rsvp_event",
+    # File writes
+    "upload_file",
+    "create_folder",
+    "delete_file",
+    # Workspace mutation (config write)
+    "set_active_workspace",
 }
 _DANGEROUS_MCP = _STANDARD_MCP | {
+    # Email send + irreversible
     "send_email",
     "forward_gmail",
     "batch_forward_gmail",
     "trash_gmail",
     "untrash_gmail",
     "batch_trash_gmail",
+    # Calendar destructive
+    "delete_event",
 }
 
 MCP_TOOLS_BY_MODE: dict[AccessMode, set[str]] = {
