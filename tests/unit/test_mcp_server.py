@@ -87,7 +87,10 @@ class TestSearchGmail:
     def test_basic_search(self):
         provider = _make_provider()
         provider.search_emails.return_value = [{"message_id": "m1"}]
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=None),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
             result = search_gmail("from:test@example.com", max_results=5, days=3)
         assert result == [{"message_id": "m1"}]
         provider.search_emails.assert_called_once()
@@ -97,7 +100,10 @@ class TestSearchGmail:
 
     def test_search_with_dates(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=None),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
             result = search_gmail(
                 "subject:report",
                 max_results=20,
@@ -110,7 +116,10 @@ class TestSearchGmail:
 
     def test_search_include_spam_trash(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=None),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
             search_gmail("in:anywhere", include_spam_trash=True)
         call_query = provider.search_emails.call_args[0][0]
         assert call_query.include_spam_trash is True
@@ -124,14 +133,14 @@ class TestGetEmail:
             "subject": "Test",
             "from_": "x",
         }
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = get_email("m1")
         assert result["subject"] == "Test"
         provider.get_email_content.assert_called_once_with("m1", "text/html")
 
     def test_get_email_plain(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             get_email("m1", prefer_html=False)
         provider.get_email_content.assert_called_once_with("m1", "text/plain")
 
@@ -146,7 +155,7 @@ class TestSaveEmail:
         provider = _make_provider()
         provider.get_email_content.return_value = {"message_id": "m1", "from_": "x"}
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
             patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
@@ -158,7 +167,7 @@ class TestSaveEmail:
         provider = _make_provider()
         provider.get_email_content.return_value = {"message_id": "m2", "from_": "x"}
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
             patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
@@ -171,17 +180,16 @@ class TestSaveEmail:
         provider = _make_provider()
         provider.get_email_content.return_value = email_data
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
             patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
             patch(f"{MODULE}.download_email_attachments") as mock_dl,
         ):
-            mock_svc.return_value = MagicMock()
             save_email("m3", download_attachments=True, attachment_types="pdf,docx")
         mock_dl.assert_called_once()
         _, kwargs = mock_dl.call_args
+        assert kwargs["download_fn"] == provider.download_attachment
         assert kwargs["attachment_filters"] == ["pdf", "docx"]
 
 
@@ -191,7 +199,7 @@ class TestSaveThread:
         provider = _make_provider()
         provider.get_thread.return_value = messages
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_thread_to_markdown", return_value="# Thread"),
             patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch("builtins.open", MagicMock()),
@@ -206,7 +214,7 @@ class TestSaveEmailsByQuery:
         provider = _make_provider()
         provider.search_emails.return_value = []
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
         ):
             result = save_emails_by_query("from:nobody@example.com")
@@ -222,7 +230,7 @@ class TestSaveEmailsByQuery:
         provider.search_emails.return_value = search_results
         provider.batch_get_emails.return_value = email_batch
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.check_for_duplicates", return_value=[]),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
@@ -239,7 +247,7 @@ class TestSaveEmailsByQuery:
         provider.search_emails.return_value = search_results
         provider.batch_get_emails.return_value = email_batch
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.check_for_duplicates", return_value=["m1"]),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
@@ -258,7 +266,7 @@ class TestSaveEmailsByQuery:
 class TestSendEmail:
     def test_send_plain(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = send_email("bob@example.com", "Hello", "Body text")
         assert result["id"] == "sent-1"
         provider.send_message.assert_called_once_with(
@@ -273,14 +281,14 @@ class TestSendEmail:
 
     def test_send_html(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             send_email("bob@example.com", "Hi", "<b>Bold</b>", html=True)
         _, kwargs = provider.send_message.call_args
         assert kwargs["content_type"] == "html"
 
     def test_send_with_cc_bcc(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             send_email("bob@example.com", "Hi", "Body", cc="cc@example.com", bcc="bcc@example.com")
         provider.send_message.assert_called_once_with(
             to="bob@example.com",
@@ -295,7 +303,7 @@ class TestSendEmail:
     def test_send_with_attachments(self):
         provider = _make_provider()
         with (
-            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch("pathlib.Path.exists", return_value=True),
         ):
             send_email("bob@example.com", "Hi", "See attached", attachments=["/tmp/f.txt"])
@@ -306,7 +314,7 @@ class TestSendEmail:
 class TestForwardGmail:
     def test_forward(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = forward_gmail("m1", "bob@example.com", note="FYI")
         assert result["id"] == "fwd-1"
         provider.forward_message.assert_called_once_with(
@@ -315,7 +323,7 @@ class TestForwardGmail:
 
     def test_forward_no_note(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = forward_gmail("m2", "alice@example.com")
         assert result["id"] == "fwd-1"
 
@@ -324,7 +332,7 @@ class TestBatchForwardGmail:
     def test_batch_forward(self):
         provider = _make_provider()
         provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = batch_forward_gmail("from:test@example.com", "bob@example.com", note="FYI")
         assert result["forwarded_count"] == 2
         assert provider.forward_message.call_count == 2
@@ -332,14 +340,14 @@ class TestBatchForwardGmail:
     def test_batch_forward_no_results(self):
         provider = _make_provider()
         provider.search_emails.return_value = []
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = batch_forward_gmail("from:nobody@example.com", "bob@example.com")
         assert result["forwarded_count"] == 0
 
     def test_batch_forward_with_dates(self):
         provider = _make_provider()
         provider.search_emails.return_value = [{"message_id": "m1"}]
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = batch_forward_gmail(
                 "subject:report",
                 "bob@example.com",
@@ -360,14 +368,14 @@ class TestBatchForwardGmail:
 class TestDrafts:
     def test_create_draft(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = create_gmail_draft("bob@example.com", "Draft Subject", "Body")
         assert result["id"] == "d1"
         provider.create_draft.assert_called_once()
 
     def test_create_draft_html(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             create_gmail_draft("bob@example.com", "HTML Draft", "<b>Bold</b>", html=True)
         _, kwargs = provider.create_draft.call_args
         assert kwargs["content_type"] == "html"
@@ -375,21 +383,21 @@ class TestDrafts:
     def test_list_drafts(self):
         provider = _make_provider()
         provider.list_drafts.return_value = [{"id": "d1", "subject": "Test"}]
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = list_gmail_drafts(max_results=5)
         assert len(result) == 1
         provider.list_drafts.assert_called_once_with(max_results=5)
 
     def test_send_draft(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = send_gmail_draft("d1")
         assert result["id"] == "sent-d1"
         provider.send_draft.assert_called_once_with("d1")
 
     def test_delete_draft(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = delete_gmail_draft("d1")
         assert result["draft_id"] == "d1"
         provider.delete_draft.assert_called_once_with("d1")
@@ -403,33 +411,33 @@ class TestDrafts:
 class TestLabels:
     def test_modify_labels_star(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = modify_labels("m1", star=True)
         assert result == {"message_id": "m1", "status": "modified"}
         provider.set_star.assert_called_once_with("m1", True)
 
     def test_modify_labels_mark_read(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             modify_labels("m1", mark_read=True)
         provider.mark_read.assert_called_once_with("m1", True)
 
     def test_modify_labels_archive(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             modify_labels("m1", archive=True)
         provider.archive.assert_called_once_with("m1")
 
     def test_modify_labels_custom(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             modify_labels("m1", add_label="MyLabel")
         provider.add_tag.assert_called_once_with("m1", "MyLabel")
 
     def test_batch_modify_labels(self):
         provider = _make_provider()
         provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = batch_modify_gmail_labels("in:inbox", star=True)
         assert result["modified_count"] == 2
         assert provider.set_star.call_count == 2
@@ -437,7 +445,7 @@ class TestLabels:
     def test_batch_modify_no_results(self):
         provider = _make_provider()
         provider.search_emails.return_value = []
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = batch_modify_gmail_labels("from:nobody@example.com", mark_read=True)
         assert result["modified_count"] == 0
 
@@ -450,7 +458,7 @@ class TestLabels:
 class TestTrash:
     def test_trash(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = trash_gmail("m1")
         assert result["message_id"] == "m1"
         assert result["status"] == "trashed"
@@ -458,7 +466,7 @@ class TestTrash:
 
     def test_untrash(self):
         provider = _make_provider()
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = untrash_gmail("m1")
         assert result["message_id"] == "m1"
         assert result["status"] == "untrashed"
@@ -469,7 +477,7 @@ class TestBatchTrashGmail:
     def test_batch_trash(self):
         provider = _make_provider()
         provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = batch_trash_gmail("from:spam@example.com", max_results=5, days=30)
         assert result["trashed_count"] == 2
         assert provider.trash.call_count == 2
@@ -477,7 +485,7 @@ class TestBatchTrashGmail:
     def test_batch_trash_no_results(self):
         provider = _make_provider()
         provider.search_emails.return_value = []
-        with patch(f"{MODULE}._get_gmail_provider", return_value=provider):
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = batch_trash_gmail("from:nobody@example.com")
         assert result["trashed_count"] == 0
 

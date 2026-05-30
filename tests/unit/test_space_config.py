@@ -16,12 +16,14 @@ from iobox.space_config import (
     _derive_slug,
     ensure_iobox_home,
     get_active_space,
+    is_authenticated,
     list_spaces,
     load_session,
     load_space,
     save_session,
     save_space,
     set_active_space,
+    token_file_for,
 )
 
 # ── Fixture: redirect all path constants to tmp_path ─────────────────────────
@@ -299,3 +301,54 @@ class TestSessionIO:
         save_session(self._make_session())
         loaded = load_session("personal")
         assert loaded.services["outlook-corpmegacorpcom"].last_sync is None
+
+
+# ── Token-file probes ────────────────────────────────────────────────────────
+
+
+class TestTokenFileProbes:
+    def _entry(self, service: str, mode: str = "standard") -> ServiceEntry:
+        return ServiceEntry(
+            number=1,
+            service=service,  # type: ignore[arg-type]
+            account="tim@gmail.com",
+            scopes=["email"],
+            mode=mode,  # type: ignore[arg-type]
+        )
+
+    def _touch(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+
+    def test_token_file_for_google_standard(self) -> None:
+        path = token_file_for(self._entry("google", "standard"))
+        assert path == sc.IOBOX_HOME / "tokens" / "tim@gmail.com" / "token_standard.json"
+
+    def test_token_file_for_google_readonly(self) -> None:
+        path = token_file_for(self._entry("google", "readonly"))
+        assert path == sc.IOBOX_HOME / "tokens" / "tim@gmail.com" / "token_readonly.json"
+
+    def test_token_file_for_o365(self) -> None:
+        path = token_file_for(self._entry("o365"))
+        assert path == sc.IOBOX_HOME / "tokens" / "tim@gmail.com" / "microsoft_token.txt"
+
+    def test_unauthenticated_when_no_token_file(self) -> None:
+        assert is_authenticated(self._entry("google")) is False
+
+    def test_authenticated_when_token_file_exists(self) -> None:
+        self._touch(token_file_for(self._entry("google")))
+        assert is_authenticated(self._entry("google")) is True
+
+    def test_readonly_falls_back_to_standard_token(self) -> None:
+        # Broader standard-tier token satisfies a readonly entry.
+        self._touch(token_file_for(self._entry("google", "standard")))
+        assert is_authenticated(self._entry("google", "readonly")) is True
+
+    def test_standard_does_not_fall_back_to_readonly_token(self) -> None:
+        self._touch(token_file_for(self._entry("google", "readonly")))
+        assert is_authenticated(self._entry("google", "standard")) is False
+
+    def test_o365_legacy_filename_counts(self) -> None:
+        legacy = token_file_for(self._entry("o365")).parent / "o365_token.txt"
+        self._touch(legacy)
+        assert is_authenticated(self._entry("o365")) is True

@@ -155,6 +155,45 @@ def set_active_space(name: str) -> None:
     ACTIVE_SPACE_FILE.write_text(name)
 
 
+# ── Token-file probes ─────────────────────────────────────────────────────────
+
+
+def token_file_for(entry: ServiceEntry) -> Path:
+    """Return the canonical token-file path for a service session.
+
+    The auth flow writes here on successful OAuth; the file's existence is
+    treated as the source of truth for "is this session authenticated".
+    """
+    base = IOBOX_HOME / "tokens" / entry.account
+    if entry.service == "google":
+        tier = "readonly" if entry.mode == "readonly" else "standard"
+        return base / f"token_{tier}.json"
+    if entry.service == "o365":
+        return base / "microsoft_token.txt"
+    return base / "unknown"
+
+
+def is_authenticated(entry: ServiceEntry) -> bool:
+    """Whether a token file exists on disk for this service session.
+
+    For Google in ``readonly`` mode, a broader ``standard``-tier token also
+    counts (matches ``GoogleAuth._resolve_token``'s fallback). For O365 the
+    legacy ``o365_token.txt`` filename is also accepted.
+    """
+    path = token_file_for(entry)
+    if path.exists():
+        return True
+    if entry.service == "google" and entry.mode == "readonly":
+        broader = path.parent / "token_standard.json"
+        if broader.exists():
+            return True
+    if entry.service == "o365":
+        legacy = path.parent / "o365_token.txt"
+        if legacy.exists():
+            return True
+    return False
+
+
 # ── Session JSON I/O ──────────────────────────────────────────────────────────
 
 

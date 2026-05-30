@@ -131,6 +131,7 @@ _READONLY_MCP = {
     "save_email",
     "save_thread",
     "save_emails_by_query",
+    "download_email_attachment",
     "list_gmail_drafts",
     "check_auth",
     # Workspace cross-type

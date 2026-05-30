@@ -299,13 +299,19 @@ def save_email(
 ) -> str:
     """Save an email message as a Markdown file.
 
+    Set ``download_attachments=True`` to also pull every attachment on the
+    message into ``output_dir`` alongside the Markdown — this is the easiest
+    way to grab attachments in bulk. For a single attachment by ID without
+    saving the email body, use ``download_email_attachment`` instead.
+
     Args:
         message_id: Email message ID.
         output_dir: Directory to save the file (default: current dir).
         prefer_html: Use HTML content if available (default: True).
-        download_attachments: Download email attachments (default: False).
-            Currently only supported for Gmail slots.
-        attachment_types: Filter attachments by extension, comma-separated.
+        download_attachments: Also save every attachment on this email into
+            ``output_dir`` (default: False — Markdown only). Gmail slots only.
+        attachment_types: When ``download_attachments`` is True, restrict to
+            these extensions (comma-separated, e.g. ``"pdf,docx"``).
         include_spam_trash: Include messages from SPAM and TRASH (default False).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
@@ -321,23 +327,15 @@ def save_email(
     filepath = save_email_to_markdown(email_data, md, out)
 
     if download_attachments and email_data.get("attachments"):
-        # Attachment download currently uses the Gmail-specific service handle.
-        try:
-            filters = (
-                [ext.strip().lower() for ext in attachment_types.split(",")]
-                if attachment_types
-                else []
-            )
-            service = get_gmail_service()
-            download_email_attachments(
-                service=service,
-                email_data=email_data,
-                output_dir=out,
-                attachment_filters=filters,
-            )
-        except Exception:
-            # Non-Gmail providers fall through silently — Markdown is still saved.
-            pass
+        filters = (
+            [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
+        )
+        download_email_attachments(
+            download_fn=p.download_attachment,
+            email_data=email_data,
+            output_dir=out,
+            attachment_filters=filters,
+        )
 
     return filepath
 
@@ -396,6 +394,10 @@ def save_emails_by_query(
 ) -> dict:
     """Save multiple email messages matching a query as Markdown files.
 
+    Set ``download_attachments=True`` to also pull every attachment from each
+    matched email into ``output_dir`` — this is the bulk-grab path. For a
+    single attachment by ID, use ``download_email_attachment`` instead.
+
     Args:
         query: Email search syntax.
         output_dir: Directory to save files (default: current dir).
@@ -404,8 +406,11 @@ def save_emails_by_query(
         start_date: Start date YYYY/MM/DD (overrides days).
         end_date: End date YYYY/MM/DD.
         prefer_html: Use HTML content if available (default True).
-        download_attachments: Download attachments (default False, Gmail only).
-        attachment_types: Filter attachments by extension, comma-separated.
+        download_attachments: Also save every attachment from each matched
+            email into ``output_dir`` (default: False — Markdown only).
+            Gmail slots only.
+        attachment_types: When ``download_attachments`` is True, restrict to
+            these extensions (comma-separated, e.g. ``"pdf,docx"``).
         include_spam_trash: Include SPAM and TRASH (default False).
         sync: Enable incremental sync — Gmail only (default False).
         provider: Optional email slot name.
@@ -502,17 +507,13 @@ def save_emails_by_query(
             save_email_to_markdown(email_data, md, out)
             saved_count += 1
             if download_attachments and email_data.get("attachments"):
-                try:
-                    service = get_gmail_service()
-                    res = download_email_attachments(
-                        service=service,
-                        email_data=email_data,
-                        output_dir=out,
-                        attachment_filters=att_filters,
-                    )
-                    attachment_count += res["downloaded_count"]
-                except Exception:
-                    pass  # Non-Gmail providers: skip attachments silently.
+                res = download_email_attachments(
+                    download_fn=p.download_attachment,
+                    email_data=email_data,
+                    output_dir=out,
+                    attachment_filters=att_filters,
+                )
+                attachment_count += res["downloaded_count"]
 
     if sync:
         try:
@@ -527,6 +528,69 @@ def save_emails_by_query(
         "skipped_count": len(duplicates),
         "attachment_count": attachment_count,
     }
+
+
+@_tool
+def download_email_attachment(
+    message_id: str,
+    attachment_id: str,
+    output_path: str | None = None,
+    return_base64: bool = False,
+    provider: str | None = None,
+    workspace: str | None = None,
+) -> dict:
+    """Download a single email attachment by ID.
+
+    Use this when you want one specific attachment without saving the whole
+    email. To grab every attachment on a message alongside its Markdown body,
+    use ``save_email(download_attachments=True)`` instead.
+
+    Get ``attachment_id`` values from the ``attachments`` list returned by
+    ``get_email`` — each entry has ``id``, ``filename``, ``mime_type``, ``size``.
+
+    By default writes the bytes to disk and returns the filepath. Set
+    ``return_base64=True`` to receive the bytes inline as a base64 string
+    (useful when the caller has no filesystem to write to).
+
+    Args:
+        message_id: Email message ID containing the attachment.
+        attachment_id: Attachment ID from the email's ``attachments`` list.
+        output_path: Local path to write the file. Required when
+            ``return_base64`` is False. Parent directories are created.
+        return_base64: If True, skip the disk write and return the bytes
+            inline as a base64-encoded ASCII string in the ``data`` field
+            (default False).
+        provider: Optional email slot name.
+        workspace: Optional workspace name (default: active workspace).
+
+    Returns:
+        On disk write: ``{"filepath": str, "bytes_written": int}``.
+        On base64: ``{"data": str, "bytes_written": int, "encoding": "base64"}``.
+        On failure: ``{"error": str}``.
+    """
+    if not return_base64 and not output_path:
+        return {"error": "output_path is required when return_base64=False."}
+    try:
+        p = _resolve_email_provider(provider=provider, workspace=workspace)
+        data = p.download_attachment(message_id, attachment_id)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    if return_base64:
+        import base64
+
+        return {
+            "data": base64.b64encode(data).decode("ascii"),
+            "bytes_written": len(data),
+            "encoding": "base64",
+        }
+
+    from pathlib import Path
+
+    path = Path(output_path)  # type: ignore[arg-type]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return {"filepath": str(path), "bytes_written": len(data)}
 
 
 # ---------------------------------------------------------------------------

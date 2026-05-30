@@ -1084,7 +1084,12 @@ def space_status() -> None:
     from rich.console import Console
     from rich.table import Table
 
-    from iobox.space_config import get_active_space, load_session, load_space
+    from iobox.space_config import (
+        get_active_space,
+        is_authenticated,
+        load_session,
+        load_space,
+    )
 
     active = get_active_space()
     if not active:
@@ -1092,7 +1097,7 @@ def space_status() -> None:
         return
 
     config = load_space(active)
-    session = load_session(active)
+    session = load_session(active)  # cache for last_sync / error annotations
 
     console = Console()
     table = Table(title=f"Space: {active} (active)")
@@ -1104,11 +1109,11 @@ def space_status() -> None:
     table.add_column("Status")
 
     for svc in config.services:
-        state = session.services.get(svc.id)
-        if state and state.authenticated:
+        cached = session.services.get(svc.id)
+        if is_authenticated(svc):
             status_str = "✓ authenticated"
-        elif state and state.error:
-            status_str = f"✗ {state.error[:40]}"
+        elif cached and cached.error:
+            status_str = f"✗ {cached.error[:40]}"
         else:
             status_str = "✗ not authenticated"
 
