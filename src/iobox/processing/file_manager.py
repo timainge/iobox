@@ -340,6 +340,7 @@ def download_email_attachments(
     output_dir: str = "",
     attachment_filters: list[str] | None = None,
     download_fn: Any | None = None,
+    include_inline: bool = False,
 ) -> dict[str, Any]:
     """
     Download all attachments for an email.
@@ -352,9 +353,13 @@ def download_email_attachments(
         download_fn: Optional callable ``(message_id, attachment_id) -> bytes``.
             When provided, it is used instead of the Gmail-specific download path
             so that any provider backend can supply attachment data.
+        include_inline: When ``False`` (default), inline parts (signature logos,
+            cid-referenced images) are skipped so only real document attachments
+            are saved. Set ``True`` to download inline parts too.
 
     Returns:
-        dict: Result with downloaded_count, skipped_count, and errors list
+        dict: Result with downloaded_count, skipped_count, errors list, and a
+        ``saved`` manifest of ``{filename, path, inline, mime_type, size}`` dicts.
     """
     if download_fn is None:
         from iobox.providers.google._retrieval import download_attachment as _dl
@@ -367,17 +372,24 @@ def download_email_attachments(
 
     if not attachments:
         logging.info("No attachments found")
-        return {"downloaded_count": 0, "skipped_count": 0, "errors": []}
+        return {"downloaded_count": 0, "skipped_count": 0, "errors": [], "saved": []}
 
     logging.info(f"Found {len(attachments)} attachments for message {message_id}")
 
     downloaded_count = 0
     skipped_count = 0
     errors: list[str] = []
+    saved: list[dict[str, Any]] = []
 
     for attachment in attachments:
+        filename = attachment.get("filename", "")
+
+        if not include_inline and attachment.get("inline"):
+            logging.info(f"Skipping inline attachment: {filename}")
+            skipped_count += 1
+            continue
+
         if attachment_filters:
-            filename = attachment.get("filename", "")
             ext = os.path.splitext(filename)[1].lower().lstrip(".")
             if ext and ext not in attachment_filters:
                 logging.info(f"Skipping attachment (type filter): {filename}")
@@ -385,7 +397,6 @@ def download_email_attachments(
                 continue
 
         attachment_id = attachment.get("id", "")
-        filename = attachment.get("filename", "")
 
         if not attachment_id or not filename:
             logging.info("Skipping attachment with missing ID or filename")
@@ -404,6 +415,15 @@ def download_email_attachments(
                     output_dir=output_dir,
                 )
                 downloaded_count += 1
+                saved.append(
+                    {
+                        "filename": filename,
+                        "path": filepath,
+                        "inline": bool(attachment.get("inline", False)),
+                        "mime_type": attachment.get("mime_type", ""),
+                        "size": attachment.get("size", 0),
+                    }
+                )
                 logging.info(f"Saved attachment to: {filepath}")
             else:
                 msg = f"Failed to download attachment: {filename}"
@@ -414,4 +434,9 @@ def download_email_attachments(
             logging.error(msg)
             errors.append(msg)
 
-    return {"downloaded_count": downloaded_count, "skipped_count": skipped_count, "errors": errors}
+    return {
+        "downloaded_count": downloaded_count,
+        "skipped_count": skipped_count,
+        "errors": errors,
+        "saved": saved,
+    }

@@ -73,15 +73,18 @@ def _process_message_response(
         [label_map.get(lid, lid) for lid in raw_labels] if label_map is not None else raw_labels
     )
 
+    def _hdr(name: str, default: str = "") -> str:
+        return next((h["value"] for h in headers if h["name"].lower() == name), default)
+
     email_data = {
         "message_id": email_id,
-        "subject": next(
-            (h["value"] for h in headers if h["name"].lower() == "subject"), "No Subject"
-        ),
-        "from": next(
-            (h["value"] for h in headers if h["name"].lower() == "from"), "Unknown Sender"
-        ),
-        "date": next((h["value"] for h in headers if h["name"].lower() == "date"), "Unknown Date"),
+        "subject": _hdr("subject", "No Subject"),
+        "from": _hdr("from", "Unknown Sender"),
+        "to": _hdr("to"),
+        "cc": _hdr("cc"),
+        "bcc": _hdr("bcc"),
+        "reply_to": _hdr("reply-to"),
+        "date": _hdr("date", "Unknown Date"),
         "labels": resolved_labels,
         "snippet": message.get("snippet", ""),
         "thread_id": message.get("threadId", ""),
@@ -241,6 +244,7 @@ def get_thread_content(
                     (h["value"] for h in headers if h["name"].lower() == "from"), "Unknown Sender"
                 ),
                 "to": next((h["value"] for h in headers if h["name"].lower() == "to"), ""),
+                "cc": next((h["value"] for h in headers if h["name"].lower() == "cc"), ""),
                 "date": next(
                     (h["value"] for h in headers if h["name"].lower() == "date"), "Unknown Date"
                 ),
@@ -327,6 +331,41 @@ def resolve_label_name(service: Any, label_name: str) -> str:
     raise ValueError(f"Label '{label_name}' not found")
 
 
+def create_label(service: Any, name: str) -> dict[str, str]:
+    """Create a Gmail label, returning its ``{id, name}``.
+
+    Nested labels use ``/``-delimited names (e.g. ``"LifeAdmin/property/7-leslie-st"``)
+    — Gmail renders the hierarchy automatically. If the label already exists,
+    the existing label is returned rather than raising.
+
+    Args:
+        service: Authenticated Gmail API service
+        name: Label name (``/``-delimited for nesting)
+
+    Returns:
+        dict: ``{"id": ..., "name": ...}`` for the created (or existing) label
+    """
+    body = {
+        "name": name,
+        "labelListVisibility": "labelShow",
+        "messageListVisibility": "show",
+    }
+    try:
+        created = service.users().labels().create(userId="me", body=body).execute()
+    except HttpError as error:
+        # 409 → label already exists; resolve and return it.
+        if getattr(error, "resp", None) is not None and error.resp.status == 409:
+            existing = get_label_map(service)
+            name_to_id = {v: k for k, v in existing.items()}
+            if name in name_to_id:
+                return {"id": name_to_id[name], "name": name}
+        logging.error(f"Error creating label {name!r}: {error}")
+        raise
+    # Refresh the module cache so subsequent resolves see the new label.
+    _label_cache[created["id"]] = created["name"]
+    return {"id": created["id"], "name": created["name"]}
+
+
 def batch_modify_labels(
     service: Any,
     message_ids: list[str],
@@ -405,12 +444,23 @@ def _find_attachments(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for part in parts:
         if "filename" in part and part["filename"]:
+            headers = {h["name"].lower(): h["value"] for h in part.get("headers", [])}
+            disposition = headers.get("content-disposition", "").lower()
+            content_id = headers.get("content-id", "")
+            content_id = content_id.strip().lstrip("<").rstrip(">") or None
+            # Inline when explicitly dispositioned inline, or (lacking a
+            # disposition) when a Content-ID marks it as a cid-referenced part.
+            is_inline = disposition.startswith("inline") or (
+                not disposition and content_id is not None
+            )
             attachments.append(
                 {
                     "id": part.get("body", {}).get("attachmentId", ""),
                     "filename": part["filename"],
                     "mime_type": part.get("mimeType", "application/octet-stream"),
                     "size": part.get("body", {}).get("size", 0),
+                    "inline": is_inline,
+                    "content_id": content_id,
                 }
             )
 

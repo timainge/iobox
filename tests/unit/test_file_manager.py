@@ -457,6 +457,74 @@ class TestDownloadEmailAttachments:
         # Only pdf was downloaded
         mock_dl.assert_called_once_with(mock_service, "msg-test", "att-1")
 
+    def test_inline_attachments_skipped_by_default(self, tmp_path):
+        """Inline parts (signature logos) are skipped unless include_inline=True."""
+        mock_service = MagicMock()
+        email_data = self._make_email_data(
+            [
+                {
+                    "id": "att-1",
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf",
+                    "size": 100,
+                    "inline": False,
+                },
+                {
+                    "id": "att-2",
+                    "filename": "image001.png",
+                    "mime_type": "image/png",
+                    "size": 50,
+                    "inline": True,
+                },
+            ]
+        )
+
+        with (
+            patch(
+                "iobox.providers.google._retrieval.download_attachment", return_value=b"data"
+            ) as mock_dl,
+            patch(
+                "iobox.processing.file_manager.save_attachment",
+                return_value=str(tmp_path / "report.pdf"),
+            ),
+        ):
+            result = download_email_attachments(mock_service, email_data, str(tmp_path))
+
+        assert result["downloaded_count"] == 1
+        assert result["skipped_count"] == 1
+        assert result["saved"][0]["filename"] == "report.pdf"
+        assert result["saved"][0]["inline"] is False
+        mock_dl.assert_called_once_with(mock_service, "msg-test", "att-1")
+
+    def test_inline_attachments_included_when_opted_in(self, tmp_path):
+        """include_inline=True downloads inline parts too."""
+        mock_service = MagicMock()
+        email_data = self._make_email_data(
+            [
+                {
+                    "id": "att-2",
+                    "filename": "image001.png",
+                    "mime_type": "image/png",
+                    "size": 50,
+                    "inline": True,
+                },
+            ]
+        )
+
+        with (
+            patch("iobox.providers.google._retrieval.download_attachment", return_value=b"data"),
+            patch(
+                "iobox.processing.file_manager.save_attachment",
+                return_value=str(tmp_path / "image001.png"),
+            ),
+        ):
+            result = download_email_attachments(
+                mock_service, email_data, str(tmp_path), include_inline=True
+            )
+
+        assert result["downloaded_count"] == 1
+        assert result["skipped_count"] == 0
+
     def test_download_error_recorded(self, tmp_path):
         """Errors during download are collected in the errors list."""
         mock_service = MagicMock()

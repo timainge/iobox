@@ -128,6 +128,7 @@ _READONLY_MCP = {
     # Email reads + saves
     "search_gmail",
     "get_email",
+    "get_emails",
     "save_email",
     "save_thread",
     "save_emails_by_query",
@@ -147,6 +148,8 @@ _READONLY_MCP = {
     "get_file_content",
     "save_file",
     "download_file",
+    # Label discovery
+    "list_labels",
     # Workspace discovery + auth
     "list_workspaces",
     "get_active_workspace",
@@ -158,6 +161,7 @@ _STANDARD_MCP = _READONLY_MCP | {
     "create_gmail_draft",
     "send_gmail_draft",
     "delete_gmail_draft",
+    "create_label",
     "modify_labels",
     "batch_modify_gmail_labels",
     # Calendar writes

@@ -37,6 +37,11 @@ def generate_yaml_frontmatter(email_data: dict[str, Any]) -> str:
         "saved_date": datetime.now().isoformat(),
     }
 
+    # Optional recipient headers — only emitted when present.
+    for opt_key in ("cc", "reply_to"):
+        if email_data.get(opt_key):
+            frontmatter[opt_key] = email_data[opt_key]
+
     if "attachments" in email_data:
         frontmatter["attachments"] = email_data["attachments"]
 
@@ -211,6 +216,12 @@ def convert_thread_to_markdown(messages: list[dict[str, Any]]) -> str:
         content_type = msg.get("content_type", "text/plain")
 
         section = f"## From: {sender} — {date}\n\n"
+        recipients = msg.get("to", "")
+        if recipients:
+            section += f"**To:** {recipients}\n\n"
+        cc = msg.get("cc", "")
+        if cc:
+            section += f"**Cc:** {cc}\n\n"
         if content_type == "text/html":
             section += convert_html_to_markdown(body)
         else:

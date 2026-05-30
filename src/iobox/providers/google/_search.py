@@ -57,7 +57,7 @@ def batch_get_metadata(
                     userId="me",
                     id=msg_id,
                     format="metadata",
-                    metadataHeaders=["From", "To", "Subject", "Date"],
+                    metadataHeaders=["From", "To", "Cc", "Bcc", "Reply-To", "Subject", "Date"],
                 ),
                 request_id=msg_id,
             )
@@ -82,6 +82,10 @@ def batch_get_metadata(
                     "thread_id": msg.get("threadId", ""),
                     "subject": headers.get("Subject", "No Subject"),
                     "from": headers.get("From", "Unknown"),
+                    "to": headers.get("To", ""),
+                    "cc": headers.get("Cc", ""),
+                    "bcc": headers.get("Bcc", ""),
+                    "reply_to": headers.get("Reply-To", ""),
                     "date": headers.get("Date", ""),
                     "snippet": msg.get("snippet", ""),
                     "labels": resolved_labels,  # type: ignore[dict-item]  # resolved_labels may contain list values from batch label resolution

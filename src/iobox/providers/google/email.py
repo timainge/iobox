@@ -125,6 +125,16 @@ class GmailProvider(EmailProvider):
             "thread_id": raw.get("thread_id", ""),
         }
 
+        # Recipient headers — present in both search metadata and full retrieval.
+        if raw.get("to"):
+            data["to"] = raw["to"]
+        if raw.get("cc"):
+            data["cc"] = raw["cc"]
+        if raw.get("bcc"):
+            data["bcc"] = raw["bcc"]
+        if raw.get("reply_to"):
+            data["reply_to"] = raw["reply_to"]
+
         # Full-retrieval fields — absent in metadata-only search results.
         if "body" in raw:
             data["body"] = raw["body"]
@@ -137,6 +147,8 @@ class GmailProvider(EmailProvider):
                     filename=a.get("filename", ""),
                     mime_type=a.get("mime_type", "application/octet-stream"),
                     size=a.get("size", 0),
+                    inline=a.get("inline", False),
+                    content_id=a.get("content_id"),
                 )
                 for a in raw["attachments"]
             ]
@@ -328,8 +340,16 @@ class GmailProvider(EmailProvider):
     # ------------------------------------------------------------------
 
     def add_tag(self, message_id: str, tag_name: str) -> None:
-        """Apply a label (tag) to a message, resolving the name to a label ID."""
-        label_id = _retrieval.resolve_label_name(self._svc, tag_name)
+        """Apply a label (tag) to a message, creating it if it doesn't exist.
+
+        Resolves ``tag_name`` to a label ID; if no such label exists (including
+        nested ``/``-delimited names), the label is created on the fly so that a
+        new taxonomy bucket can be applied in a single call.
+        """
+        try:
+            label_id = _retrieval.resolve_label_name(self._svc, tag_name)
+        except ValueError:
+            label_id = _retrieval.create_label(self._svc, tag_name)["id"]
         _retrieval.modify_message_labels(self._svc, message_id, add_labels=[label_id])
 
     def remove_tag(self, message_id: str, tag_name: str) -> None:
@@ -340,6 +360,10 @@ class GmailProvider(EmailProvider):
     def list_tags(self) -> dict[str, str]:
         """Return the full label ID → name mapping for the authenticated account."""
         return _retrieval.get_label_map(self._svc)
+
+    def create_tag(self, name: str) -> dict[str, str]:
+        """Create a Gmail label (``/``-delimited for nesting); returns ``{id, name}``."""
+        return _retrieval.create_label(self._svc, name)
 
     # ------------------------------------------------------------------
     # 6. Sync

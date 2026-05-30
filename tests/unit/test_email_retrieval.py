@@ -14,6 +14,7 @@ import iobox.providers.google._retrieval as er
 from iobox.providers.google._retrieval import (
     batch_get_emails,
     batch_modify_labels,
+    create_label,
     download_attachment,
     get_email_content,
     get_label_map,
@@ -197,6 +198,115 @@ class TestLabelResolution:
         assert "Newsletter" not in email_data["labels"]
 
 
+class TestInlineAttachments:
+    """Tests for inline/content_id attachment flags (Task 6)."""
+
+    def test_find_attachments_flags_inline(self, mock_gmail_service):
+        message = {
+            "id": "m1",
+            "threadId": "t1",
+            "labelIds": ["INBOX"],
+            "snippet": "s",
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "headers": [
+                    {"name": "From", "value": "a@b.com"},
+                    {"name": "Subject", "value": "S"},
+                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"},
+                ],
+                "parts": [
+                    {"mimeType": "text/plain", "body": {"data": "aGk=", "size": 2}},
+                    {
+                        "mimeType": "application/pdf",
+                        "filename": "report.pdf",
+                        "body": {"attachmentId": "att-doc", "size": 100},
+                        "headers": [{"name": "Content-Disposition", "value": "attachment"}],
+                    },
+                    {
+                        "mimeType": "image/png",
+                        "filename": "logo.png",
+                        "body": {"attachmentId": "att-img", "size": 50},
+                        "headers": [
+                            {"name": "Content-Disposition", "value": "inline"},
+                            {"name": "Content-ID", "value": "<logo123>"},
+                        ],
+                    },
+                ],
+            },
+        }
+        mock_get = MagicMock()
+        mock_get.execute.return_value = message
+        mock_gmail_service.users().messages().get = MagicMock(return_value=mock_get)
+
+        data = get_email_content(service=mock_gmail_service, message_id="m1")
+        by_name = {a["filename"]: a for a in data["attachments"]}
+
+        assert by_name["report.pdf"]["inline"] is False
+        assert by_name["report.pdf"]["content_id"] is None
+        assert by_name["logo.png"]["inline"] is True
+        assert by_name["logo.png"]["content_id"] == "logo123"
+
+
+class TestRecipientHeaders:
+    """Tests for To/Cc/Bcc/Reply-To extraction (Task 2)."""
+
+    def test_recipient_headers_extracted(self, mock_gmail_service):
+        message = {
+            "id": "message-id-1",
+            "threadId": "thread-id-1",
+            "labelIds": ["INBOX"],
+            "snippet": "snippet",
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "From", "value": "sender@example.com"},
+                    {"name": "To", "value": "a@example.com, b@example.com"},
+                    {"name": "Cc", "value": "c@example.com"},
+                    {"name": "Bcc", "value": "d@example.com"},
+                    {"name": "Reply-To", "value": "noreply@example.com"},
+                    {"name": "Subject", "value": "Test"},
+                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"},
+                ],
+                "body": {"data": "SGVsbG8=", "size": 5},
+            },
+        }
+        mock_get = MagicMock()
+        mock_get.execute.return_value = message
+        mock_gmail_service.users().messages().get = MagicMock(return_value=mock_get)
+
+        email_data = get_email_content(service=mock_gmail_service, message_id="message-id-1")
+
+        assert email_data["to"] == "a@example.com, b@example.com"
+        assert email_data["cc"] == "c@example.com"
+        assert email_data["bcc"] == "d@example.com"
+        assert email_data["reply_to"] == "noreply@example.com"
+
+    def test_missing_recipient_headers_default_empty(self, mock_gmail_service):
+        message = {
+            "id": "message-id-2",
+            "threadId": "thread-id-2",
+            "labelIds": ["INBOX"],
+            "snippet": "snippet",
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "From", "value": "sender@example.com"},
+                    {"name": "Subject", "value": "Test"},
+                    {"name": "Date", "value": "Mon, 01 Apr 2025 10:00:00 +0000"},
+                ],
+                "body": {"data": "SGVsbG8=", "size": 5},
+            },
+        }
+        mock_get = MagicMock()
+        mock_get.execute.return_value = message
+        mock_gmail_service.users().messages().get = MagicMock(return_value=mock_get)
+
+        email_data = get_email_content(service=mock_gmail_service, message_id="message-id-2")
+
+        assert email_data["to"] == ""
+        assert email_data["cc"] == ""
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -346,6 +456,38 @@ class TestResolveLabelName:
 
         with pytest.raises(ValueError, match="not found"):
             resolve_label_name(mock_gmail_service, "NonExistent")
+
+
+class TestCreateLabel:
+    """Tests for create_label() (Task 5)."""
+
+    def test_create_label_returns_id_and_name(self, mock_gmail_service, mocker):
+        mocker.patch.dict(er._label_cache, {}, clear=True)
+        mock_create = MagicMock()
+        mock_create.execute.return_value = {
+            "id": "Label_999",
+            "name": "LifeAdmin/property/7-leslie-st",
+        }
+        mock_gmail_service.users().labels().create.return_value = mock_create
+
+        result = create_label(mock_gmail_service, "LifeAdmin/property/7-leslie-st")
+
+        assert result == {"id": "Label_999", "name": "LifeAdmin/property/7-leslie-st"}
+        # New label is cached for subsequent resolves.
+        assert er._label_cache["Label_999"] == "LifeAdmin/property/7-leslie-st"
+
+    def test_create_label_already_exists_returns_existing(self, mock_gmail_service, mocker):
+        from googleapiclient.errors import HttpError
+
+        mocker.patch.dict(er._label_cache, {"Label_55": "Existing"}, clear=True)
+        resp = MagicMock()
+        resp.status = 409
+        mock_gmail_service.users().labels().create.return_value.execute.side_effect = HttpError(
+            resp, b"already exists"
+        )
+
+        result = create_label(mock_gmail_service, "Existing")
+        assert result == {"id": "Label_55", "name": "Existing"}
 
 
 class TestBatchModifyLabels:

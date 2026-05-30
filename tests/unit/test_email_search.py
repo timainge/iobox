@@ -648,6 +648,54 @@ class TestBatchGetMetadata:
         assert result[1]["message_id"] == "m2"
         assert "error" in result[1]
 
+    def test_large_window_all_rows_fully_populated(self, mock_gmail_service):
+        """Regression (Task 8): a 60-result window returns 60 rows that all
+        carry real metadata — no empty 'stub' rows past the first batch."""
+        msg_ids = [f"m{i}" for i in range(60)]
+        responses = {mid: self._make_metadata_response(mid, subject=f"S{mid}") for mid in msg_ids}
+
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]["callback"]
+            for req_id, resp in responses.items():
+                callback(req_id, resp, None)
+
+        mock_batch.execute.side_effect = fake_execute
+
+        result = batch_get_metadata(mock_gmail_service, msg_ids)
+
+        assert len(result) == 60
+        # Every row must have a non-empty subject/from/date — no stubs.
+        for row in result:
+            assert "error" not in row
+            assert row["subject"]
+            assert row["from"]
+            assert row["date"]
+
+    def test_batch_get_metadata_extracts_recipients(self, mock_gmail_service):
+        """Task 2: To/Cc are surfaced in search metadata rows."""
+        resp = self._make_metadata_response("m1")
+        resp["payload"]["headers"].extend(
+            [
+                {"name": "To", "value": "to@x.com"},
+                {"name": "Cc", "value": "cc@x.com"},
+            ]
+        )
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]["callback"]
+            callback("m1", resp, None)
+
+        mock_batch.execute.side_effect = fake_execute
+
+        result = batch_get_metadata(mock_gmail_service, ["m1"])
+        assert result[0]["to"] == "to@x.com"
+        assert result[0]["cc"] == "cc@x.com"
+
 
 class TestGetNewMessages:
     """Tests for get_new_messages()."""

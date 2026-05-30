@@ -21,11 +21,19 @@ from datetime import date
 from typing import Any, TypedDict
 
 
-class AttachmentInfo(TypedDict):
+class _AttachmentRequired(TypedDict):
     id: str
     filename: str
     mime_type: str
     size: int
+
+
+class AttachmentInfo(_AttachmentRequired, total=False):
+    # Inline parts are body-embedded (e.g. signature logos referenced by a
+    # ``cid:`` URL) rather than real document attachments. ``content_id`` is the
+    # bare Content-ID (no angle brackets) when present.
+    inline: bool
+    content_id: str | None
 
 
 class EmailMetadata(TypedDict):
@@ -43,6 +51,13 @@ class EmailMetadata(TypedDict):
 class EmailData(EmailMetadata, total=False):
     """Full email data — optional fields present only after content retrieval."""
 
+    # Recipient headers — raw header strings ("Name <email>, Name2 <email2>").
+    # Populated by search/metadata and full retrieval; absent only when the
+    # provider could not supply them.
+    to: str
+    cc: str
+    bcc: str
+    reply_to: str
     body: str
     content_type: str  # 'text/plain' or 'text/html'
     attachments: list[AttachmentInfo]
@@ -182,6 +197,16 @@ class EmailProvider(ABC):
 
     @abstractmethod
     def list_tags(self) -> dict[str, str]: ...
+
+    def create_tag(self, name: str) -> dict[str, str]:
+        """Create a label/tag/category, returning ``{"id": ..., "name": ...}``.
+
+        Nested taxonomies use ``/``-delimited names where the provider supports
+        them (Gmail). Providers without a creation step (e.g. Outlook's free-form
+        categories) may return the name unchanged. Default raises so providers
+        opt in explicitly.
+        """
+        raise NotImplementedError
 
     # ── 7. Batch Operations (optional — loop default) ──────────
     # Non-abstract convenience methods for bulk org operations.

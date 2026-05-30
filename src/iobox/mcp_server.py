@@ -187,6 +187,41 @@ def _email_data_to_dict(data: Any) -> dict[str, Any]:
     return result
 
 
+_VALID_BODY_MODES = ("none", "text", "html", "markdown")
+
+
+def _apply_body_mode(data: dict[str, Any], mode: str, max_body_chars: int | None) -> dict[str, Any]:
+    """Apply a ``get_email`` body mode (none|text|html|markdown) + truncation.
+
+    Operates on an already-fetched, ``_email_data_to_dict``-normalised dict.
+    ``markdown`` converts an HTML body; ``none`` drops the body entirely.
+    """
+    from iobox.processing.markdown_converter import convert_html_to_markdown
+
+    raw_body = data.get("body", "") or ""
+    fetched_type = data.get("content_type", "text/plain")
+
+    if mode == "none":
+        data.pop("body", None)
+        data.pop("content_type", None)
+        return data
+
+    if mode == "markdown":
+        data["body"] = (
+            convert_html_to_markdown(raw_body) if fetched_type == "text/html" else raw_body
+        )
+        data["content_type"] = "text/markdown"
+    else:
+        data["body"] = raw_body
+
+    if max_body_chars is not None and len(data["body"]) > max_body_chars:
+        omitted = len(data["body"]) - max_body_chars
+        data["body"] = data["body"][:max_body_chars] + f"\n...[truncated {omitted} chars]"
+        data["truncated"] = True
+
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Search & Read
 # ---------------------------------------------------------------------------
@@ -213,10 +248,15 @@ def search_gmail(
     Args:
         query: Search text (Gmail uses Gmail search syntax; Outlook accepts
             free-text and basic operators).
-        max_results: Maximum number of results per slot (default 10).
-        days: Days back to search (default 7).
-        start_date: Start date YYYY/MM/DD (overrides days).
-        end_date: End date YYYY/MM/DD.
+        max_results: Maximum number of results per slot (default 10). Every
+            returned row carries full metadata (subject/from/to/cc/date/labels)
+            up to this count — there are no empty placeholder rows.
+        days: Days back to search (default 7). Used only when ``start_date`` is
+            not given.
+        start_date: Start date YYYY/MM/DD. When set, it takes precedence over
+            ``days`` for the lower bound.
+        end_date: End date YYYY/MM/DD. Independent upper bound; combine with
+            ``start_date`` (or ``days``) to bound a window on both sides.
         include_spam_trash: Include messages from SPAM and TRASH (default False).
         provider: Optional email slot name (e.g. ``"personal-gmail"``).
         workspace: Optional workspace name (default: active workspace).
@@ -263,22 +303,96 @@ def search_gmail(
 @_tool
 def get_email(
     message_id: str,
-    prefer_html: bool = True,
+    body: str = "markdown",
+    max_body_chars: int | None = None,
+    prefer_html: bool | None = None,
     provider: str | None = None,
     workspace: str | None = None,
 ) -> dict:
-    """Retrieve full email content by message ID.
+    """Retrieve email content by message ID, with control over body size.
+
+    A single raw-HTML email can be tens of thousands of characters and blow the
+    tool's token budget. Use ``body`` and ``max_body_chars`` to keep responses
+    small — default ``"markdown"`` is far more compact than raw HTML.
 
     Args:
         message_id: Email message ID (Gmail message ID or Outlook ImmutableId).
-        prefer_html: Use HTML content if available (default True).
+        body: How to return the message body:
+            ``"none"`` — headers + attachment manifest only, no body;
+            ``"text"`` — plain-text body;
+            ``"html"`` — raw HTML body;
+            ``"markdown"`` (default) — HTML converted to compact Markdown.
+        max_body_chars: If set, truncate the body to this many characters and
+            set ``truncated: true`` in the result. ``None`` means no limit.
+        prefer_html: Deprecated. ``True`` maps to ``body="html"``, ``False`` to
+            ``body="text"``. Ignored when ``body`` is set to a non-default value.
         provider: Optional email slot name. Required when the workspace has
             multiple email slots and you want a specific account.
         workspace: Optional workspace name (default: active workspace).
+
+    Returns:
+        Email dict. The ``body`` field reflects the requested mode (absent for
+        ``"none"``); ``truncated`` is present and True when the body was cut.
     """
-    content_type = "text/html" if prefer_html else "text/plain"
+    # Backward-compat: honour prefer_html only when body is left at default.
+    mode = body.lower()
+    if prefer_html is not None and mode == "markdown":
+        mode = "html" if prefer_html else "text"
+
+    if mode not in _VALID_BODY_MODES:
+        return {"error": f"Invalid body mode {body!r}. Use none|text|html|markdown."}
+
+    # Fetch richer HTML when we need to render markdown or html; plain otherwise.
+    content_type = "text/html" if mode in ("html", "markdown") else "text/plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    return _email_data_to_dict(p.get_email_content(message_id, content_type))
+    data = _email_data_to_dict(p.get_email_content(message_id, content_type))
+    return _apply_body_mode(data, mode, max_body_chars)
+
+
+@_tool
+def get_emails(
+    message_ids: list[str],
+    body: str = "none",
+    max_body_chars: int | None = None,
+    provider: str | None = None,
+    workspace: str | None = None,
+) -> list[dict]:
+    """Fetch multiple emails in one call — the fast path for triage scanning.
+
+    Retrieves headers (subject, from, to, cc, date, labels) and an attachment
+    manifest for every ID in a single batched request, instead of calling
+    ``get_email`` one message at a time. Default ``body="none"`` keeps the
+    response compact for scanning; raise it to ``"text"``/``"markdown"`` when
+    you need content.
+
+    Args:
+        message_ids: Email message IDs to fetch.
+        body: Body mode applied to every message — ``"none"`` (default,
+            headers + attachment manifest only), ``"text"``, ``"html"``, or
+            ``"markdown"``. See ``get_email`` for semantics.
+        max_body_chars: Per-message body truncation (see ``get_email``).
+        provider: Optional email slot name.
+        workspace: Optional workspace name (default: active workspace).
+
+    Returns:
+        List of email dicts in the same order as ``message_ids``. Failed
+        fetches appear as ``{"message_id": ..., "error": ...}``.
+    """
+    mode = body.lower()
+    if mode not in _VALID_BODY_MODES:
+        return [{"error": f"Invalid body mode {body!r}. Use none|text|html|markdown."}]
+
+    content_type = "text/html" if mode in ("html", "markdown") else "text/plain"
+    p = _resolve_email_provider(provider=provider, workspace=workspace)
+    raw_batch = p.batch_get_emails(message_ids, preferred_content_type=content_type)
+
+    out: list[dict] = []
+    for raw in raw_batch:
+        if "error" in raw:
+            out.append({"message_id": raw.get("message_id", ""), "error": raw["error"]})
+            continue
+        out.append(_apply_body_mode(_email_data_to_dict(raw), mode, max_body_chars))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -293,16 +407,20 @@ def save_email(
     prefer_html: bool = True,
     download_attachments: bool = False,
     attachment_types: str | None = None,
+    include_inline: bool = False,
     include_spam_trash: bool = False,
     provider: str | None = None,
     workspace: str | None = None,
-) -> str:
+) -> dict:
     """Save an email message as a Markdown file.
 
     Set ``download_attachments=True`` to also pull every attachment on the
     message into ``output_dir`` alongside the Markdown — this is the easiest
     way to grab attachments in bulk. For a single attachment by ID without
     saving the email body, use ``download_email_attachment`` instead.
+
+    Attachments are written to ``<output_dir>/attachments/<message_id>/``; the
+    returned manifest lists each saved file so you don't have to walk the tree.
 
     Args:
         message_id: Email message ID.
@@ -312,12 +430,15 @@ def save_email(
             ``output_dir`` (default: False — Markdown only). Gmail slots only.
         attachment_types: When ``download_attachments`` is True, restrict to
             these extensions (comma-separated, e.g. ``"pdf,docx"``).
+        include_inline: Include inline parts (signature logos, cid images) when
+            downloading attachments (default False — skip inline cruft).
         include_spam_trash: Include messages from SPAM and TRASH (default False).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Absolute path to the saved file.
+        Dict with ``markdown_path`` and an ``attachments`` manifest — a list of
+        ``{filename, path, inline, mime_type, size}`` for each saved attachment.
     """
     content_type = "text/html" if prefer_html else "text/plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
@@ -326,18 +447,21 @@ def save_email(
     out = create_output_directory(output_dir)
     filepath = save_email_to_markdown(email_data, md, out)
 
+    saved: list[dict] = []
     if download_attachments and email_data.get("attachments"):
         filters = (
             [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
         )
-        download_email_attachments(
+        result = download_email_attachments(
             download_fn=p.download_attachment,
             email_data=email_data,
             output_dir=out,
             attachment_filters=filters,
+            include_inline=include_inline,
         )
+        saved = result.get("saved", [])
 
-    return filepath
+    return {"markdown_path": filepath, "attachments": saved}
 
 
 @_tool
@@ -387,6 +511,7 @@ def save_emails_by_query(
     prefer_html: bool = True,
     download_attachments: bool = False,
     attachment_types: str | None = None,
+    include_inline: bool = False,
     include_spam_trash: bool = False,
     sync: bool = False,
     provider: str | None = None,
@@ -512,6 +637,7 @@ def save_emails_by_query(
                     email_data=email_data,
                     output_dir=out,
                     attachment_filters=att_filters,
+                    include_inline=include_inline,
                 )
                 attachment_count += res["downloaded_count"]
 
@@ -856,6 +982,66 @@ def _apply_label_actions(
 
 
 @_tool
+def list_labels(
+    provider: str | None = None,
+    workspace: str | None = None,
+) -> dict:
+    """List the labels/categories available on an email account.
+
+    Resolves the opaque label IDs that appear on messages to human-readable
+    names — use it to discover which labels exist before applying them with
+    ``modify_labels``.
+
+    Args:
+        provider: Optional email slot name.
+        workspace: Optional workspace name (default: active workspace).
+
+    Returns:
+        Dict with ``labels``: a mapping of label ID → display name (for Outlook,
+        category name → category name).
+    """
+    p = _resolve_email_provider(provider=provider, workspace=workspace)
+    try:
+        return {"labels": p.list_tags()}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@_tool
+def create_label(
+    name: str,
+    provider: str | None = None,
+    workspace: str | None = None,
+) -> dict:
+    """Create a label/category, including nested taxonomies.
+
+    Gmail supports nesting via ``/``-delimited names (e.g.
+    ``"LifeAdmin/property/7-leslie-st"``) — the hierarchy renders automatically.
+    Outlook categories are free-form; the name is registered as a master
+    category. Existing labels are returned rather than erroring.
+
+    Note: ``modify_labels(add_label=...)`` already auto-creates a missing label
+    when applying it, so call this only when you want to create a label without
+    tagging a message.
+
+    Args:
+        name: Label name (``/``-delimited for nesting on Gmail).
+        provider: Optional email slot name.
+        workspace: Optional workspace name (default: active workspace).
+
+    Returns:
+        Dict with ``id`` and ``name`` of the created (or existing) label.
+    """
+    p = _resolve_email_provider(provider=provider, workspace=workspace)
+    try:
+        return p.create_tag(name)
+    except NotImplementedError:
+        return {"error": "This provider does not support label creation."}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@_tool
 def modify_labels(
     message_id: str,
     mark_read: bool = False,
@@ -1045,8 +1231,32 @@ def batch_trash_gmail(
 
 @_tool
 def check_auth() -> dict:
-    """Check Gmail authentication status and profile info."""
+    """Check authentication status, profile info, and the active access mode.
+
+    The ``mode`` / ``available_write_ops`` fields let a constrained agent
+    self-diagnose: if write tools seem to be missing, it's almost always because
+    the server is running in ``readonly`` mode rather than a missing feature.
+
+    Returns:
+        Status dict including ``mode`` (readonly|standard|dangerous),
+        ``available_write_ops`` (labels/drafts/calendar/file writes),
+        ``available_send_ops`` (send/forward/trash), and a ``mode_hint`` when
+        running read-only.
+    """
+    from iobox.modes import AccessMode, get_mode_from_env
+
     status = check_auth_status()
+
+    mode = get_mode_from_env()
+    status["mode"] = mode.value
+    status["available_write_ops"] = mode != AccessMode.readonly
+    status["available_send_ops"] = mode == AccessMode.dangerous
+    if mode == AccessMode.readonly:
+        status["mode_hint"] = (
+            "Running read-only. Set IOBOX_MODE=standard for labels/drafts/"
+            "calendar/file writes, or IOBOX_MODE=dangerous for send/forward/trash."
+        )
+
     try:
         service = get_gmail_service()
         profile = get_gmail_profile(service)

@@ -255,6 +255,8 @@ For Outlook live testing guidance (what mocks can't verify, M365 dev sandbox set
 ## File Output Format
 
 Emails saved as markdown files with:
-- YAML frontmatter: `from`, `to`, `subject`, `date`, `message_id`, `labels`
+- YAML frontmatter: `from`, `to`, `cc`/`reply_to` (when present), `subject`, `date`, `message_id`, `labels`
 - Markdown-converted body
-- Attachments in `attachments/{email_id}/` subdirectories
+- Attachments in `<output_dir>/attachments/{message_id}/` subdirectories
+
+`save_email` returns a manifest — `{markdown_path, attachments: [{filename, path, inline, mime_type, size}]}` — so callers don't have to walk the tree. Inline parts (signature logos, `cid:` images) are flagged `inline=True` on `AttachmentInfo` and **skipped by default** when downloading; pass `include_inline=True` to keep them.

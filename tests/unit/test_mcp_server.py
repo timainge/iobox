@@ -20,6 +20,7 @@ from iobox.mcp_server import (  # noqa: E402
     create_event,
     create_folder,
     create_gmail_draft,
+    create_label,
     delete_event,
     delete_file,
     delete_gmail_draft,
@@ -27,12 +28,14 @@ from iobox.mcp_server import (  # noqa: E402
     forward_gmail,
     get_active_workspace,
     get_email,
+    get_emails,
     get_event,
     get_file,
     get_file_content,
     list_events,
     list_files,
     list_gmail_drafts,
+    list_labels,
     list_provider_slots,
     list_workspaces,
     modify_labels,
@@ -144,6 +147,88 @@ class TestGetEmail:
             get_email("m1", prefer_html=False)
         provider.get_email_content.assert_called_once_with("m1", "text/plain")
 
+    def test_get_email_body_none_omits_body(self):
+        provider = _make_provider()
+        provider.get_email_content.return_value = {
+            "message_id": "m1",
+            "from_": "x",
+            "body": "<p>big html</p>",
+            "content_type": "text/html",
+            "attachments": [{"id": "a1", "filename": "r.pdf"}],
+        }
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_email("m1", body="none")
+        assert "body" not in result
+        assert "content_type" not in result
+        assert result["attachments"][0]["filename"] == "r.pdf"
+
+    def test_get_email_markdown_converts_html(self):
+        provider = _make_provider()
+        provider.get_email_content.return_value = {
+            "message_id": "m1",
+            "from_": "x",
+            "body": "<p>Hello <b>world</b></p>",
+            "content_type": "text/html",
+        }
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_email("m1", body="markdown")
+        assert result["content_type"] == "text/markdown"
+        assert "Hello" in result["body"]
+        assert "<p>" not in result["body"]
+
+    def test_get_email_truncates_body(self):
+        provider = _make_provider()
+        provider.get_email_content.return_value = {
+            "message_id": "m1",
+            "from_": "x",
+            "body": "x" * 5000,
+            "content_type": "text/plain",
+        }
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_email("m1", body="text", max_body_chars=100)
+        assert result["truncated"] is True
+        assert result["body"].startswith("x" * 100)
+        assert "truncated" in result["body"]
+
+    def test_get_email_invalid_mode(self):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_email("m1", body="bogus")
+        assert "error" in result
+
+
+class TestGetEmails:
+    def test_batch_headers_only(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m1", "from_": "a@y.com", "subject": "A", "body": "hi"},
+            {"message_id": "m2", "from_": "b@y.com", "subject": "B", "body": "yo"},
+        ]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2"])
+        provider.batch_get_emails.assert_called_once_with(
+            ["m1", "m2"], preferred_content_type="text/plain"
+        )
+        assert [r["message_id"] for r in result] == ["m1", "m2"]
+        assert "body" not in result[0]  # default body="none"
+        assert result[0]["from"] == "a@y.com"
+
+    def test_batch_propagates_errors(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m1", "from_": "a@y.com", "subject": "A"},
+            {"message_id": "m2", "error": "Not found in batch response"},
+        ]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2"], body="text")
+        assert result[1]["error"] == "Not found in batch response"
+
+    def test_batch_invalid_mode(self):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1"], body="bogus")
+        assert "error" in result[0]
+
 
 # ---------------------------------------------------------------------------
 # Save
@@ -161,7 +246,8 @@ class TestSaveEmail:
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
         ):
             result = save_email("m1", output_dir="/tmp/out")
-        assert result == "/tmp/out/email.md"
+        assert result["markdown_path"] == "/tmp/out/email.md"
+        assert result["attachments"] == []
 
     def test_save_plain_text(self):
         provider = _make_provider()
@@ -186,11 +272,19 @@ class TestSaveEmail:
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
             patch(f"{MODULE}.download_email_attachments") as mock_dl,
         ):
-            save_email("m3", download_attachments=True, attachment_types="pdf,docx")
+            mock_dl.return_value = {
+                "downloaded_count": 1,
+                "skipped_count": 0,
+                "errors": [],
+                "saved": [{"filename": "f.pdf", "path": "/tmp/out/attachments/m3/f.pdf"}],
+            }
+            result = save_email("m3", download_attachments=True, attachment_types="pdf,docx")
         mock_dl.assert_called_once()
         _, kwargs = mock_dl.call_args
         assert kwargs["download_fn"] == provider.download_attachment
         assert kwargs["attachment_filters"] == ["pdf", "docx"]
+        assert kwargs["include_inline"] is False
+        assert result["attachments"][0]["filename"] == "f.pdf"
 
 
 class TestSaveThread:
@@ -408,6 +502,30 @@ class TestDrafts:
 # ---------------------------------------------------------------------------
 
 
+class TestLabelDiscovery:
+    def test_list_labels(self):
+        provider = _make_provider()
+        provider.list_tags.return_value = {"INBOX": "INBOX", "Label_1": "Work"}
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = list_labels()
+        assert result == {"labels": {"INBOX": "INBOX", "Label_1": "Work"}}
+
+    def test_create_label(self):
+        provider = _make_provider()
+        provider.create_tag.return_value = {"id": "Label_x", "name": "A/B/C"}
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = create_label("A/B/C")
+        provider.create_tag.assert_called_once_with("A/B/C")
+        assert result == {"id": "Label_x", "name": "A/B/C"}
+
+    def test_create_label_not_supported(self):
+        provider = _make_provider()
+        provider.create_tag.side_effect = NotImplementedError()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = create_label("X")
+        assert "error" in result
+
+
 class TestLabels:
     def test_modify_labels_star(self):
         provider = _make_provider()
@@ -527,6 +645,30 @@ class TestCheckAuth:
             result = check_auth()
         assert result["authenticated"] is False
         assert "email" not in result
+
+    def test_check_auth_reports_readonly_mode(self, monkeypatch):
+        monkeypatch.setenv("IOBOX_MODE", "readonly")
+        with (
+            patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
+            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
+        ):
+            result = check_auth()
+        assert result["mode"] == "readonly"
+        assert result["available_write_ops"] is False
+        assert result["available_send_ops"] is False
+        assert "mode_hint" in result
+
+    def test_check_auth_reports_dangerous_mode(self, monkeypatch):
+        monkeypatch.setenv("IOBOX_MODE", "dangerous")
+        with (
+            patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
+            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
+        ):
+            result = check_auth()
+        assert result["mode"] == "dangerous"
+        assert result["available_write_ops"] is True
+        assert result["available_send_ops"] is True
+        assert "mode_hint" not in result
 
 
 # ---------------------------------------------------------------------------

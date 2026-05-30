@@ -176,7 +176,9 @@ class TestForwardEmail:
         mock_service = MagicMock()
         result = forward_email(mock_service, message_id="orig-1", to="bob@example.com")
 
-        mock_get.assert_called_once_with(mock_service, message_id="orig-1")
+        mock_get.assert_called_once_with(
+            mock_service, message_id="orig-1", preferred_content_type="text/html"
+        )
         mock_send.assert_called_once()
         assert result["id"] == "fwd-1"
 
@@ -206,6 +208,90 @@ class TestForwardEmail:
         raw_bytes = base64.urlsafe_b64decode(raw)
         msg = message_from_bytes(raw_bytes)
         assert "Please review" in msg.get_payload()
+
+
+class TestForwardPreservesAttachments:
+    """Forwarding must carry over the original message's attachments (P0 bug)."""
+
+    def test_compose_forward_reattaches_blobs(self):
+        original = {
+            "from": "sender@example.com",
+            "date": "Mon, 23 Mar 2025",
+            "subject": "Receipt",
+            "body": "See attached receipt",
+        }
+        blobs = [{"filename": "receipt.pdf", "mime_type": "application/pdf", "data": b"%PDF-fake"}]
+
+        result = compose_forward_message(original, to="hubdoc@example.com", attachment_blobs=blobs)
+
+        raw_bytes = base64.urlsafe_b64decode(result["raw"])
+        msg = message_from_bytes(raw_bytes)
+        assert msg.get_content_type() == "multipart/mixed"
+        filenames = [p.get_filename() for p in msg.get_payload()]
+        assert "receipt.pdf" in filenames
+
+    def test_compose_forward_html_body(self):
+        original = {
+            "from": "sender@example.com",
+            "date": "Mon, 23 Mar 2025",
+            "subject": "HTML Receipt",
+            "body": "<p>See attached</p>",
+            "content_type": "text/html",
+        }
+        result = compose_forward_message(original, to="bob@example.com")
+        raw_bytes = base64.urlsafe_b64decode(result["raw"])
+        msg = message_from_bytes(raw_bytes)
+        # HTML-only forward (no attachments) stays a single html part.
+        assert msg.get_content_type() == "text/html"
+        assert "Forwarded message" in msg.get_payload()
+
+    @patch("iobox.providers.google._sender.send_message")
+    @patch("iobox.providers.google._sender.download_attachment")
+    @patch("iobox.providers.google._sender.get_email_content")
+    def test_forward_email_downloads_and_reattaches(self, mock_get, mock_dl, mock_send):
+        mock_get.return_value = {
+            "message_id": "orig-1",
+            "from": "sender@example.com",
+            "date": "Mon, 23 Mar 2025",
+            "subject": "Receipt",
+            "body": "Body",
+            "attachments": [
+                {"id": "att-1", "filename": "receipt.pdf", "mime_type": "application/pdf"}
+            ],
+        }
+        mock_dl.return_value = b"%PDF-fake"
+        mock_send.return_value = {"id": "fwd-1"}
+
+        mock_service = MagicMock()
+        forward_email(mock_service, message_id="orig-1", to="hubdoc@example.com")
+
+        mock_dl.assert_called_once_with(mock_service, "orig-1", "att-1")
+        raw = mock_send.call_args[0][1]["raw"]
+        msg = message_from_bytes(base64.urlsafe_b64decode(raw))
+        filenames = [p.get_filename() for p in msg.get_payload()]
+        assert "receipt.pdf" in filenames
+
+    @patch("iobox.providers.google._sender.send_message")
+    @patch("iobox.providers.google._sender.download_attachment")
+    @patch("iobox.providers.google._sender.get_email_content")
+    def test_forward_email_skips_failed_attachment(self, mock_get, mock_dl, mock_send):
+        mock_get.return_value = {
+            "message_id": "orig-1",
+            "from": "sender@example.com",
+            "date": "Mon, 23 Mar 2025",
+            "subject": "Receipt",
+            "body": "Body",
+            "attachments": [
+                {"id": "att-1", "filename": "receipt.pdf", "mime_type": "application/pdf"}
+            ],
+        }
+        mock_dl.side_effect = RuntimeError("download failed")
+        mock_send.return_value = {"id": "fwd-1"}
+
+        mock_service = MagicMock()
+        # Must not raise — a failed attachment download is logged and skipped.
+        result = forward_email(mock_service, message_id="orig-1", to="bob@example.com")
+        assert result["id"] == "fwd-1"
 
 
 class TestComposeHtmlMessage:

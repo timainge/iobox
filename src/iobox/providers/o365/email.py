@@ -133,11 +133,28 @@ class OutlookProvider(EmailProvider):
         else:
             date_str = str(received) if received is not None else ""
 
+        def _recipients(recipients: Any) -> str:
+            """Join a python-o365 Recipients collection into a header-style string."""
+            if not recipients:
+                return ""
+            out = []
+            for r in recipients:
+                addr = getattr(r, "address", None)
+                if not addr:
+                    continue
+                name = getattr(r, "name", "") or ""
+                out.append(f"{name} <{addr}>" if name else addr)
+            return ", ".join(out)
+
         data: EmailData = {
             "message_id": msg.object_id or "",
             "thread_id": msg.conversation_id or "",
             "subject": msg.subject or "",
             "from_": from_,
+            "to": _recipients(getattr(msg, "to", None)),
+            "cc": _recipients(getattr(msg, "cc", None)),
+            "bcc": _recipients(getattr(msg, "bcc", None)),
+            "reply_to": _recipients(getattr(msg, "reply_to", None)),
             "date": date_str,
             "snippet": msg.body_preview or "",
             "labels": list(msg.categories) if msg.categories else [],
@@ -159,6 +176,8 @@ class OutlookProvider(EmailProvider):
                         filename=getattr(a, "name", ""),
                         mime_type=getattr(a, "content_type", "application/octet-stream"),
                         size=getattr(a, "size", 0),
+                        inline=bool(getattr(a, "is_inline", False)),
+                        content_id=getattr(a, "content_id", None),
                     )
                     for a in msg.attachments
                 ]
@@ -778,6 +797,26 @@ class OutlookProvider(EmailProvider):
                 if name:
                     result[name] = name
         return result
+
+    def create_tag(self, name: str) -> dict[str, str]:
+        """Register a master category named ``name``; returns ``{"id", "name"}``.
+
+        Outlook categories are free-form display-name strings — ``add_tag`` works
+        on any name without pre-registration — but creating the master category
+        makes it appear in the user's category picker. If it already exists, the
+        existing category is returned. Nested ``/`` names are not special in
+        Outlook; they are stored verbatim.
+        """
+        con = self._acct.con
+        url = f"{con.protocol.service_url}/me/outlook/masterCategories"
+        try:
+            resp = con.post(url, data={"displayName": name, "color": "preset0"})
+            if resp and hasattr(resp, "json"):
+                created = resp.json()
+                return {"id": created.get("id", name), "name": created.get("displayName", name)}
+        except Exception as exc:  # already exists or restricted — fall back to name
+            logger.warning(f"create_tag({name!r}) falling back to free-form category: {exc}")
+        return {"id": name, "name": name}
 
     # ------------------------------------------------------------------
     # 7. Batch operations — Graph $batch for bulk org mutations

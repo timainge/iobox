@@ -514,6 +514,25 @@ class TestTagOperations:
         mock_label_map.assert_called_once_with(provider._service)
         assert result == {"INBOX": "INBOX", "Label_1": "Work"}
 
+    @patch("iobox.providers.google._retrieval.modify_message_labels")
+    @patch("iobox.providers.google._retrieval.create_label")
+    @patch("iobox.providers.google._retrieval.resolve_label_name")
+    def test_add_tag_auto_creates_missing_label(
+        self, mock_resolve, mock_create, mock_modify, provider
+    ):
+        mock_resolve.side_effect = ValueError("not found")
+        mock_create.return_value = {"id": "Label_new", "name": "LifeAdmin/property"}
+        provider.add_tag("m1", "LifeAdmin/property")
+        mock_create.assert_called_once_with(provider._service, "LifeAdmin/property")
+        mock_modify.assert_called_once_with(provider._service, "m1", add_labels=["Label_new"])
+
+    @patch("iobox.providers.google._retrieval.create_label")
+    def test_create_tag(self, mock_create, provider):
+        mock_create.return_value = {"id": "Label_x", "name": "Bucket"}
+        result = provider.create_tag("Bucket")
+        mock_create.assert_called_once_with(provider._service, "Bucket")
+        assert result == {"id": "Label_x", "name": "Bucket"}
+
 
 # ------------------------------------------------------------------
 # Sync delegation
