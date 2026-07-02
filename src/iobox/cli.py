@@ -4,6 +4,7 @@ Command-line interface for the iobox application.
 This module provides a user-friendly CLI for interacting with iobox functionality.
 """
 
+import logging
 import os
 import sys
 from datetime import date, timedelta
@@ -28,6 +29,8 @@ from iobox.processing.markdown_converter import (
 )
 from iobox.providers import EmailData, EmailProvider, EmailQuery, get_provider
 from iobox.providers.google.auth import set_active_mode
+
+logger = logging.getLogger(__name__)
 
 # Create a Typer app
 app = typer.Typer(help="Gmail to Markdown converter")
@@ -961,13 +964,89 @@ def _resolve_slot(config: Any, ref: str) -> Any:
     raise typer.Exit(1)
 
 
+def _google_authenticated_email(auth: Any, services: list[str]) -> str | None:
+    """Return the email of the account the Google OAuth token belongs to.
+
+    Picks whichever service API is available under the granted scopes: Gmail's
+    ``getProfile`` when email is enabled, else Drive's ``about``, else the
+    primary calendar id.  Returns ``None`` if the address can't be determined.
+    """
+    try:
+        if "email" in services:
+            svc = auth.get_service("gmail", "v1")
+            profile = svc.users().getProfile(userId="me").execute()
+            return profile.get("emailAddress")
+        if "drive" in services:
+            svc = auth.get_service("drive", "v3")
+            about = svc.about().get(fields="user").execute()
+            return about.get("user", {}).get("emailAddress")
+        if "calendar" in services:
+            svc = auth.get_service("calendar", "v3")
+            primary = svc.calendarList().get(calendarId="primary").execute()
+            return primary.get("id")
+    except Exception as exc:  # noqa: BLE001 — best-effort identity probe
+        logger.warning("Could not determine authenticated Google account: %s", exc)
+    return None
+
+
+def _o365_authenticated_email(o365_account: Any) -> str | None:
+    """Return the email of the account the Microsoft token belongs to.
+
+    Returns ``None`` if the address can't be determined.
+    """
+    try:
+        user = o365_account.get_current_user_data()
+        if user is not None:
+            email = getattr(user, "mail", None) or getattr(user, "user_principal_name", None)
+            if email:
+                return str(email)
+    except Exception as exc:  # noqa: BLE001 — best-effort identity probe
+        logger.warning("Could not determine authenticated Microsoft account: %s", exc)
+    return getattr(o365_account, "username", None)
+
+
+def _verify_authenticated_account(entry: Any, authed_email: str | None) -> None:
+    """Ensure the authenticated account matches the requested one.
+
+    The requested account (``entry.account``) is used as the session slug and
+    token namespace, so an authenticated session for a *different* account —
+    caused by a typo in the CLI argument or picking the wrong account in the
+    browser — would be silently stored under the wrong name.  On mismatch the
+    freshly-written token is discarded and a ``ValueError`` is raised so the
+    caller aborts and the user can retry.
+    """
+    expected = (entry.account or "").strip().lower()
+    actual = (authed_email or "").strip().lower()
+
+    if not actual:
+        typer.echo(
+            "Warning: could not verify the authenticated account; proceeding without a check.",
+            err=True,
+        )
+        return
+
+    if actual != expected:
+        _delete_token_files(entry)
+        raise ValueError(
+            f"authenticated account '{authed_email}' does not match the requested "
+            f"account '{entry.account}'. The token has been discarded — re-run and sign "
+            f"in as '{entry.account}', or fix the account argument if it was a typo."
+        )
+
+
 def _authenticate_service_entry(entry: Any) -> None:
-    """Trigger OAuth for a service session entry."""
+    """Trigger OAuth for a service session entry and verify the account.
+
+    After the OAuth flow completes, the authenticated account's email is checked
+    against ``entry.account`` (case-insensitively).  A mismatch discards the
+    token and raises ``ValueError`` — see :func:`_verify_authenticated_account`.
+    """
     import iobox.space_config as sc
     from iobox.modes import _tier_for_mode, get_google_scopes
 
     creds_dir = str(sc.IOBOX_HOME)
 
+    authed_email: str | None = None
     if entry.service == "google":
         from iobox.providers.google.auth import GoogleAuth
 
@@ -980,10 +1059,14 @@ def _authenticate_service_entry(entry: Any) -> None:
             tier=tier,
         )
         auth.get_credentials()
+        authed_email = _google_authenticated_email(auth, entry.scopes)
     elif entry.service == "o365":
         from iobox.providers.o365.auth import get_outlook_account
 
-        get_outlook_account(account=entry.account)
+        o365_account = get_outlook_account(account=entry.account)
+        authed_email = _o365_authenticated_email(o365_account)
+
+    _verify_authenticated_account(entry, authed_email)
 
 
 def _delete_token_files(entry: Any) -> bool:

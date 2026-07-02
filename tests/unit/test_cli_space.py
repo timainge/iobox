@@ -473,3 +473,121 @@ class TestAuthStatusDeprecation:
             result = runner.invoke(app, ["auth-status"])
         assert "deprecated" in result.output.lower()
         assert "space status" in result.output
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TestAuthenticatedAccountVerification
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestAuthenticatedAccountVerification:
+    """The account the user authenticates as must match the CLI argument."""
+
+    def _make_entry(self, account: str = "tim@gmail.com") -> Any:
+        from iobox.space_config import ServiceEntry
+
+        return ServiceEntry(
+            number=1,
+            service="google",
+            account=account,
+            scopes=["email"],
+            mode="standard",
+        )
+
+    def test_matching_account_passes(self) -> None:
+        from iobox.cli import _verify_authenticated_account
+
+        entry = self._make_entry("tim@gmail.com")
+        # Should not raise.
+        _verify_authenticated_account(entry, "tim@gmail.com")
+
+    def test_match_is_case_insensitive(self) -> None:
+        from iobox.cli import _verify_authenticated_account
+
+        entry = self._make_entry("Tim@Gmail.com")
+        _verify_authenticated_account(entry, "tim@gmail.com")
+
+    def test_mismatch_raises_and_deletes_token(self) -> None:
+        from iobox.cli import _verify_authenticated_account
+
+        entry = self._make_entry("tim@gmail.com")
+        with patch("iobox.cli._delete_token_files") as mock_delete:
+            with pytest.raises(ValueError, match="does not match"):
+                _verify_authenticated_account(entry, "someone-else@gmail.com")
+        mock_delete.assert_called_once_with(entry)
+
+    def test_undeterminable_account_warns_and_proceeds(self) -> None:
+        from iobox.cli import _verify_authenticated_account
+
+        entry = self._make_entry("tim@gmail.com")
+        with patch("iobox.cli._delete_token_files") as mock_delete:
+            # None email → cannot verify → must not raise or delete.
+            _verify_authenticated_account(entry, None)
+        mock_delete.assert_not_called()
+
+    def test_space_add_rejects_mismatched_account(self) -> None:
+        _invoke("space", "create", "personal")
+
+        fake_auth = MagicMock()
+        with (
+            patch("iobox.providers.google.auth.GoogleAuth", return_value=fake_auth),
+            patch(
+                "iobox.cli._google_authenticated_email",
+                return_value="wrong@gmail.com",
+            ),
+        ):
+            result = _invoke("space", "add", "google", "tim@gmail.com", "--email")
+
+        assert result.exit_code != 0
+        assert "does not match" in result.output
+
+        from iobox.space_config import load_space
+
+        config = load_space("personal")
+        assert len(config.services) == 0
+
+    def test_space_add_accepts_matching_account(self) -> None:
+        _invoke("space", "create", "personal")
+
+        fake_auth = MagicMock()
+        with (
+            patch("iobox.providers.google.auth.GoogleAuth", return_value=fake_auth),
+            patch(
+                "iobox.cli._google_authenticated_email",
+                return_value="tim@gmail.com",
+            ),
+        ):
+            result = _invoke("space", "add", "google", "tim@gmail.com", "--email")
+
+        assert result.exit_code == 0
+
+        from iobox.space_config import load_space
+
+        config = load_space("personal")
+        assert len(config.services) == 1
+        assert config.services[0].account == "tim@gmail.com"
+
+    def test_google_email_probe_uses_gmail_profile(self) -> None:
+        from iobox.cli import _google_authenticated_email
+
+        auth = MagicMock()
+        auth.get_service.return_value.users.return_value.getProfile.return_value.execute.return_value = {  # noqa: E501
+            "emailAddress": "probed@gmail.com"
+        }
+        assert _google_authenticated_email(auth, ["email"]) == "probed@gmail.com"
+
+    def test_google_email_probe_falls_back_to_drive(self) -> None:
+        from iobox.cli import _google_authenticated_email
+
+        auth = MagicMock()
+        auth.get_service.return_value.about.return_value.get.return_value.execute.return_value = {
+            "user": {"emailAddress": "drive-user@gmail.com"}
+        }
+        assert _google_authenticated_email(auth, ["drive"]) == "drive-user@gmail.com"
+
+    def test_google_email_probe_returns_none_on_error(self) -> None:
+        from iobox.cli import _google_authenticated_email
+
+        auth = MagicMock()
+        auth.get_service.side_effect = RuntimeError("api down")
+        assert _google_authenticated_email(auth, ["email"]) is None
