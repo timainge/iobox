@@ -140,4 +140,8 @@ dev-dependencies = [
     "types-PyYAML",
     "types-python-dateutil",
     "pre-commit>=4.5.1",
+    # Also declared as the `mcp` extra. Duplicated here so a plain `uv sync`
+    # cannot uninstall it out from under the local iobox-mcp entry point that
+    # Claude Desktop spawns. Dev-dependencies never reach the published wheel.
+    "mcp>=1.2",
 ]

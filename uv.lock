@@ -784,6 +784,7 @@ semantic = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mcp" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -828,6 +829,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mcp", specifier = ">=1.2" },
     { name = "mypy" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pytest" },
