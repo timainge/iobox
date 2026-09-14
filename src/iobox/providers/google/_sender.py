@@ -147,17 +147,23 @@ def compose_forward_message(
     orig_subject = original_email.get("subject", "No Subject")
     orig_body = original_email.get("body", "") or original_email.get("content", "")
     is_html = original_email.get("content_type") == "text/html"
+    comment_is_html = bool(additional_text and additional_text.lstrip().startswith("<"))
 
-    if is_html:
+    if is_html or comment_is_html:
         header_lines = [
             "---------- Forwarded message ----------",
             f"From: {orig_from}",
             f"Date: {orig_date}",
             f"Subject: {orig_subject}",
         ]
-        prefix = f"<p>{additional_text}</p>" if additional_text else ""
+        if additional_text:
+            prefix = additional_text if comment_is_html else f"<p>{additional_text}</p>"
+        else:
+            prefix = ""
         header_block = "<br>".join(header_lines)
-        body = f"{prefix}<div>{header_block}</div><hr>{orig_body}"
+        # An HTML comment forces an HTML forward even for a plain-text original.
+        forwarded_body = orig_body if is_html else f"<pre>{orig_body}</pre>"
+        body = f"{prefix}<div>{header_block}</div><hr>{forwarded_body}"
         content_type = "html"
     else:
         parts = []
