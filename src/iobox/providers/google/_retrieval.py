@@ -7,6 +7,7 @@ from the Gmail API.
 
 import base64
 import logging
+import time
 from typing import Any
 
 from googleapiclient.errors import HttpError
@@ -16,6 +17,77 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # Module-level cache for label ID → display name mapping.
 # Populated lazily by get_label_map() and shared across calls within one session.
 _label_cache: dict[str, str] = {}
+
+# Gmail rejects bursts of concurrent requests per user with 429
+# "Too many concurrent requests for user", even inside a single batch.
+# Keep batches small and retry the rejected sub-requests with backoff.
+_BATCH_CHUNK_SIZE = 20
+_BATCH_MAX_RETRIES = 4
+_BATCH_RETRY_BASE_DELAY = 0.5
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _is_retryable(exception: Exception) -> bool:
+    status = getattr(getattr(exception, "resp", None), "status", None)
+    try:
+        return int(status) in _RETRYABLE_STATUSES  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+
+
+def batch_get_messages(
+    service: Any, message_ids: list[str], **get_kwargs: Any
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Fetch ``users.messages.get`` for many IDs via batched requests.
+
+    Sub-requests that fail with a rate-limit or transient server error are
+    retried with exponential backoff.
+
+    Args:
+        service: Authenticated Gmail API service
+        message_ids: Message IDs to fetch
+        **get_kwargs: Extra arguments for ``messages().get`` (e.g. ``format``)
+
+    Returns:
+        ``(results, errors)`` — raw message resources and error strings, keyed
+        by message ID.
+    """
+    results: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    retryable: set[str] = set()
+
+    def callback(request_id: str, response: Any, exception: Exception | None) -> None:
+        if exception:
+            errors[request_id] = str(exception)
+            if _is_retryable(exception):
+                retryable.add(request_id)
+        else:
+            results[request_id] = response
+
+    pending = list(dict.fromkeys(message_ids))
+    for attempt in range(_BATCH_MAX_RETRIES + 1):
+        if attempt:
+            time.sleep(_BATCH_RETRY_BASE_DELAY * 2 ** (attempt - 1))
+        for msg_id in pending:
+            errors.pop(msg_id, None)
+        retryable.clear()
+
+        for i in range(0, len(pending), _BATCH_CHUNK_SIZE):
+            chunk = pending[i : i + _BATCH_CHUNK_SIZE]
+            batch = service.new_batch_http_request(callback=callback)
+            for msg_id in chunk:
+                batch.add(
+                    service.users().messages().get(userId="me", id=msg_id, **get_kwargs),
+                    request_id=msg_id,
+                )
+            batch.execute()
+
+        pending = [m for m in pending if m in retryable]
+        if not pending:
+            break
+        logging.info(f"Retrying {len(pending)} rate-limited message fetches")
+
+    return results, errors
 
 
 def get_label_map(service: Any) -> dict[str, str]:
@@ -176,24 +248,7 @@ def batch_get_emails(
         List of email data dicts in same order as input IDs.
         Failed fetches are returned as dicts with 'error' key.
     """
-    results: dict[str, Any] = {}
-    errors: dict[str, str] = {}
-
-    def callback(request_id: str, response: Any, exception: Exception | None) -> None:
-        if exception:
-            errors[request_id] = str(exception)
-        else:
-            results[request_id] = response
-
-    for i in range(0, len(message_ids), 50):
-        chunk = message_ids[i : i + 50]
-        batch = service.new_batch_http_request(callback=callback)
-        for msg_id in chunk:
-            batch.add(
-                service.users().messages().get(userId="me", id=msg_id, format=format),
-                request_id=msg_id,
-            )
-        batch.execute()
+    results, errors = batch_get_messages(service, message_ids, format=format)
 
     email_list = []
     for msg_id in message_ids:

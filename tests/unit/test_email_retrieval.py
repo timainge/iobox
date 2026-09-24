@@ -640,8 +640,8 @@ class TestBatchGetEmails:
         assert result[4]["message_id"] == "msg5"
         assert "error" in result[4]
 
-    def test_batch_get_emails_chunks_of_50(self, mock_gmail_service):
-        """More than 50 message IDs triggers multiple batch executions."""
+    def test_batch_get_emails_chunks(self, mock_gmail_service):
+        """More IDs than the chunk size triggers multiple batch executions."""
         msg_ids = [f"msg-{i}" for i in range(75)]
         responses = {mid: _make_full_message(mid) for mid in msg_ids}
 
@@ -672,7 +672,63 @@ class TestBatchGetEmails:
 
         result = batch_get_emails(mock_gmail_service, msg_ids)
 
-        # Should have created 2 batches (50 + 25)
-        assert mock_gmail_service.new_batch_http_request.call_count == 2
+        # Should have created 4 batches (20 + 20 + 20 + 15)
+        assert mock_gmail_service.new_batch_http_request.call_count == 4
         assert len(result) == 75
         assert all("error" not in item for item in result)
+
+    def test_batch_get_emails_retries_rate_limited(self, mock_gmail_service, monkeypatch):
+        """429 'Too many concurrent requests' sub-requests are retried, not returned blank."""
+        from googleapiclient.errors import HttpError
+
+        monkeypatch.setattr(er, "_BATCH_RETRY_BASE_DELAY", 0)
+        msg_ids = ["msg1", "msg2", "msg3"]
+        responses = {mid: _make_full_message(mid) for mid in msg_ids}
+        rate_limited_once = {"msg2"}
+        attempts: list[list[str]] = []
+
+        def make_mock_batch(*args, **kwargs):
+            mock_batch = MagicMock()
+            callback = kwargs["callback"]
+            ids_in_batch: list[str] = []
+            mock_batch.add.side_effect = lambda request, request_id=None: ids_in_batch.append(
+                request_id
+            )
+
+            def fake_execute():
+                attempts.append(list(ids_in_batch))
+                for mid in ids_in_batch:
+                    if mid in rate_limited_once:
+                        rate_limited_once.discard(mid)
+                        callback(mid, None, HttpError(MagicMock(status=429), b"rate limited"))
+                    else:
+                        callback(mid, responses[mid], None)
+
+            mock_batch.execute.side_effect = fake_execute
+            return mock_batch
+
+        mock_gmail_service.new_batch_http_request.side_effect = make_mock_batch
+
+        result = batch_get_emails(mock_gmail_service, msg_ids)
+
+        assert attempts == [["msg1", "msg2", "msg3"], ["msg2"]]
+        assert [r["message_id"] for r in result] == msg_ids
+        assert all("error" not in r for r in result)
+
+    def test_batch_get_emails_does_not_retry_404(self, mock_gmail_service, monkeypatch):
+        from googleapiclient.errors import HttpError
+
+        monkeypatch.setattr(er, "_BATCH_RETRY_BASE_DELAY", 0)
+        mock_batch = MagicMock()
+        mock_gmail_service.new_batch_http_request.return_value = mock_batch
+
+        def fake_execute():
+            callback = mock_gmail_service.new_batch_http_request.call_args[1]["callback"]
+            callback("gone", None, HttpError(MagicMock(status=404), b"not found"))
+
+        mock_batch.execute.side_effect = fake_execute
+
+        result = batch_get_emails(mock_gmail_service, ["gone"])
+
+        assert mock_batch.execute.call_count == 1
+        assert "error" in result[0]

@@ -101,6 +101,33 @@ def convert_html_to_markdown(html_content: str) -> str:
         return strip_html_tags(html_content)
 
 
+def convert_html_to_text(html_content: str) -> str:
+    """
+    Convert HTML content to readable plain text (no links, images or emphasis).
+
+    Args:
+        html_content: HTML content to convert
+
+    Returns:
+        str: Plain text content
+    """
+    h = html2text.HTML2Text()
+
+    h.ignore_links = True
+    h.ignore_images = True
+    h.ignore_emphasis = True
+    h.body_width = 0
+    h.unicode_snob = True
+    h.single_line_break = False
+
+    try:
+        text: str = h.handle(html_content)
+        return _clean_email_markdown(text)
+    except Exception as e:
+        logging.warning(f"Error converting HTML to text: {e}")
+        return strip_html_tags(html_content)
+
+
 def _clean_email_markdown(markdown_content: str) -> str:
     """
     Clean up common email HTML artifacts in markdown content.

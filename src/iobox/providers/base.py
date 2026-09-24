@@ -61,6 +61,7 @@ class EmailData(EmailMetadata, total=False):
     body: str
     content_type: str  # 'text/plain' or 'text/html'
     attachments: list[AttachmentInfo]
+    error: str  # set when this message could not be fetched
 
 
 @dataclass

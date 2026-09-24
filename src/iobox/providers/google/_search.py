@@ -11,6 +11,8 @@ from typing import Any
 
 from googleapiclient.errors import HttpError
 
+from iobox.providers.google._retrieval import batch_get_messages
+
 # Re-export public retrieval functions for backward compatibility
 from iobox.providers.google._retrieval import (
     download_attachment as download_attachment,  # noqa: F401
@@ -37,31 +39,12 @@ def batch_get_metadata(
         List of metadata dicts (message_id, subject, from, date, snippet, labels)
         in the same order as input IDs. Failed fetches include an 'error' key.
     """
-    results: dict[str, Any] = {}
-    errors: dict[str, str] = {}
-
-    def callback(request_id: str, response: Any, exception: Exception | None) -> None:
-        if exception:
-            errors[request_id] = str(exception)
-        else:
-            results[request_id] = response
-
-    for i in range(0, len(message_ids), 50):
-        chunk = message_ids[i : i + 50]
-        batch = service.new_batch_http_request(callback=callback)
-        for msg_id in chunk:
-            batch.add(
-                service.users()
-                .messages()
-                .get(
-                    userId="me",
-                    id=msg_id,
-                    format="metadata",
-                    metadataHeaders=["From", "To", "Cc", "Bcc", "Reply-To", "Subject", "Date"],
-                ),
-                request_id=msg_id,
-            )
-        batch.execute()
+    results, errors = batch_get_messages(
+        service,
+        message_ids,
+        format="metadata",
+        metadataHeaders=["From", "To", "Cc", "Bcc", "Reply-To", "Subject", "Date"],
+    )
 
     metadata_list = []
     for msg_id in message_ids:
@@ -69,7 +52,9 @@ def batch_get_metadata(
             metadata_list.append({"message_id": msg_id, "error": errors[msg_id]})
         elif msg_id in results:
             msg = results[msg_id]
-            headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            headers = {
+                h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])
+            }
             raw_labels = msg.get("labelIds", [])
             resolved_labels = (
                 [label_map.get(lid, lid) for lid in raw_labels]
@@ -80,13 +65,13 @@ def batch_get_metadata(
                 {
                     "message_id": msg_id,
                     "thread_id": msg.get("threadId", ""),
-                    "subject": headers.get("Subject", "No Subject"),
-                    "from": headers.get("From", "Unknown"),
-                    "to": headers.get("To", ""),
-                    "cc": headers.get("Cc", ""),
-                    "bcc": headers.get("Bcc", ""),
-                    "reply_to": headers.get("Reply-To", ""),
-                    "date": headers.get("Date", ""),
+                    "subject": headers.get("subject", "No Subject"),
+                    "from": headers.get("from", "Unknown"),
+                    "to": headers.get("to", ""),
+                    "cc": headers.get("cc", ""),
+                    "bcc": headers.get("bcc", ""),
+                    "reply_to": headers.get("reply-to", ""),
+                    "date": headers.get("date", ""),
                     "snippet": msg.get("snippet", ""),
                     "labels": resolved_labels,  # type: ignore[dict-item]  # resolved_labels may contain list values from batch label resolution
                 }

@@ -176,6 +176,20 @@ class TestGetEmail:
         assert "Hello" in result["body"]
         assert "<p>" not in result["body"]
 
+    def test_get_email_text_converts_html_only_body(self):
+        """HTML-only emails (no text/plain part) must still yield plain text."""
+        provider = _make_provider()
+        provider.get_email_content.return_value = {
+            "message_id": "m1",
+            "from_": "x",
+            "body": '<p>Hello <b>world</b> <a href="https://x.com">link</a></p>',
+            "content_type": "text/html",
+        }
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_email("m1", body="text")
+        assert result["content_type"] == "text/plain"
+        assert result["body"] == "Hello world link"
+
     def test_get_email_truncates_body(self):
         provider = _make_provider()
         provider.get_email_content.return_value = {

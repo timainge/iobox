@@ -189,6 +189,12 @@ class TestToEmailData:
         data = provider._to_email_data(raw)
         assert data["from_"] == "Carol <carol@z.com>"
 
+    def test_error_is_preserved(self, provider):
+        """A failed batch fetch must not become a silently blank row."""
+        data = provider._to_email_data({"message_id": "m1", "error": "HttpError 429"})
+        assert data["message_id"] == "m1"
+        assert data["error"] == "HttpError 429"
+
     def test_defaults_for_missing_keys(self, provider):
         data = provider._to_email_data({})
         assert data["message_id"] == ""

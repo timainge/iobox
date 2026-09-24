@@ -135,6 +135,11 @@ class GmailProvider(EmailProvider):
         if raw.get("reply_to"):
             data["reply_to"] = raw["reply_to"]
 
+        # Per-message fetch failure — surface it rather than returning a
+        # silently blank row.
+        if raw.get("error"):
+            data["error"] = raw["error"]
+
         # Full-retrieval fields — absent in metadata-only search results.
         if "body" in raw:
             data["body"] = raw["body"]

@@ -194,9 +194,14 @@ def _apply_body_mode(data: dict[str, Any], mode: str, max_body_chars: int | None
     """Apply a ``get_email`` body mode (none|text|html|markdown) + truncation.
 
     Operates on an already-fetched, ``_email_data_to_dict``-normalised dict.
-    ``markdown`` converts an HTML body; ``none`` drops the body entirely.
+    ``markdown`` converts an HTML body; ``text`` converts an HTML body to plain
+    text (HTML-only emails and Outlook bodies have no text/plain part);
+    ``none`` drops the body entirely.
     """
-    from iobox.processing.markdown_converter import convert_html_to_markdown
+    from iobox.processing.markdown_converter import (
+        convert_html_to_markdown,
+        convert_html_to_text,
+    )
 
     raw_body = data.get("body", "") or ""
     fetched_type = data.get("content_type", "text/plain")
@@ -211,6 +216,9 @@ def _apply_body_mode(data: dict[str, Any], mode: str, max_body_chars: int | None
             convert_html_to_markdown(raw_body) if fetched_type == "text/html" else raw_body
         )
         data["content_type"] = "text/markdown"
+    elif mode == "text" and fetched_type == "text/html":
+        data["body"] = convert_html_to_text(raw_body)
+        data["content_type"] = "text/plain"
     else:
         data["body"] = raw_body
 
