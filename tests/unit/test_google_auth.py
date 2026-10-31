@@ -529,3 +529,13 @@ class TestTierForMode:
         from iobox.modes import _tier_for_mode
 
         assert _tier_for_mode("dangerous") == "standard"
+
+
+class TestAccountValidation:
+    def test_path_like_account_rejected(self, tmp_path):
+        import pytest
+
+        from iobox.providers.google.auth import GoogleAuth
+
+        with pytest.raises(ValueError, match="Invalid account"):
+            GoogleAuth(account="../../evil", scopes=[], credentials_dir=str(tmp_path))

@@ -297,6 +297,9 @@ def get_backend(
 
 
 def _get_index_path(workspace: str, credentials_dir: str | None = None) -> Path:
+    from iobox.space_config import validate_space_name
+
+    validate_space_name(workspace)  # the name becomes a directory under indexes/
     base = Path(credentials_dir) if credentials_dir else Path.home() / ".iobox"
     path = base / "indexes" / workspace
     path.mkdir(parents=True, exist_ok=True)

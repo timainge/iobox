@@ -661,3 +661,46 @@ class TestAuthenticatedAccountVerification:
         auth = MagicMock()
         auth.get_service.side_effect = RuntimeError("api down")
         assert _google_authenticated_email(auth, ["email"]) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Validation and slug uniqueness wired into the CLI (SEC-09, WS-04, WS-09)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestSpaceValidationInCli:
+    def test_create_rejects_path_like_name(self) -> None:
+        import iobox.space_config as sc
+
+        result = _invoke("space", "create", "../../escaped")
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        assert not (sc.IOBOX_HOME.parent / "escaped.toml").exists()
+
+    def test_add_gives_colliding_account_a_unique_slug(self, mock_google_auth: Any) -> None:
+        from iobox.space_config import load_space
+
+        _invoke("space", "create", "personal")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
+        result = _invoke("space", "add", "google", "tim@gmail.co.uk", "--email")
+
+        assert result.exit_code == 0, result.output
+        slugs = [s.slug for s in load_space("personal").services]
+        assert slugs == ["tim-gmail", "tim-gmail-2"]
+
+    def test_add_rejects_unsafe_account(self, mock_google_auth: Any) -> None:
+        _invoke("space", "create", "personal")
+        result = _invoke("space", "add", "google", "../../evil", "--email")
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        mock_google_auth.assert_not_called()
+
+    def test_status_reports_malformed_config_cleanly(self) -> None:
+        import iobox.space_config as sc
+
+        _invoke("space", "create", "personal")
+        (sc.WORKSPACES_DIR / "personal.toml").write_text("[[services]]\nservice = 'gmail'\n")
+        result = _invoke("space", "status")
+        assert result.exit_code == 1
+        assert "Error:" in result.output
+        assert "Traceback" not in result.output

@@ -1263,7 +1263,14 @@ def space_create(
         list_spaces,
         save_space,
         set_active_space,
+        validate_space_name,
     )
+
+    try:
+        validate_space_name(name)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from None
 
     if name in list_spaces():
         typer.echo(f"Space '{name}' already exists.", err=True)
@@ -1325,7 +1332,6 @@ def space_status() -> None:
         get_active_space,
         is_authenticated,
         load_session,
-        load_space,
     )
 
     active = get_active_space()
@@ -1333,7 +1339,7 @@ def space_status() -> None:
         typer.echo("No active space. Run `iobox space create NAME` to create one.")
         return
 
-    config = load_space(active)
+    config = _load_space_or_exit(active)
     session = load_session(active)  # cache for last_sync / error annotations
 
     console = Console()
@@ -1379,8 +1385,8 @@ def space_add(
     from iobox.space_config import (
         ServiceEntry,
         get_active_space,
-        load_space,
         save_space,
+        unique_slug,
     )
 
     service = service.lower().strip()
@@ -1413,7 +1419,7 @@ def space_add(
         typer.echo("No active space. Run `iobox space create NAME` first.", err=True)
         raise typer.Exit(1)
 
-    config = load_space(active)
+    config = _load_space_or_exit(active)
 
     # One session per (service, account): a second entry would share the same
     # token files and slug, and only one of them could ever be used.
@@ -1438,13 +1444,18 @@ def space_add(
 
     mode = "readonly" if read else "standard"
     number = max((s.number for s in config.services), default=0) + 1
-    entry = ServiceEntry(
-        number=number,
-        service=service,  # type: ignore[arg-type]
-        account=account,
-        scopes=scopes,
-        mode=mode,  # type: ignore[arg-type]
-    )
+    try:
+        entry = ServiceEntry(
+            number=number,
+            service=service,  # type: ignore[arg-type]
+            account=account,
+            scopes=scopes,
+            mode=mode,  # type: ignore[arg-type]
+            slug=unique_slug(config, account),
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from None
 
     typer.echo(f"Opening browser for OAuth... (service: {service}, account: {account})")
     try:
@@ -1468,14 +1479,14 @@ def space_login(
     ref: str = typer.Argument(..., help="Session reference: number, id, or slug"),
 ) -> None:
     """Re-authenticate a service session."""
-    from iobox.space_config import get_active_space, load_space
+    from iobox.space_config import get_active_space
 
     active = get_active_space()
     if not active:
         typer.echo("No active space.", err=True)
         raise typer.Exit(1)
 
-    config = load_space(active)
+    config = _load_space_or_exit(active)
     entry = _resolve_slot(config, ref)
 
     typer.echo(f"Re-authenticating #{entry.number} ({entry.service}/{entry.account})...")
@@ -1493,14 +1504,14 @@ def space_logout(
     ref: str = typer.Argument(..., help="Session reference: number, id, or slug"),
 ) -> None:
     """Revoke the token for a service session (keeps the config)."""
-    from iobox.space_config import get_active_space, load_space
+    from iobox.space_config import get_active_space
 
     active = get_active_space()
     if not active:
         typer.echo("No active space.", err=True)
         raise typer.Exit(1)
 
-    config = load_space(active)
+    config = _load_space_or_exit(active)
     entry = _resolve_slot(config, ref)
 
     deleted = _delete_token_files(entry)
@@ -1519,14 +1530,14 @@ def space_remove(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """Remove a service session from the active space."""
-    from iobox.space_config import get_active_space, load_space, save_space
+    from iobox.space_config import get_active_space, save_space
 
     active = get_active_space()
     if not active:
         typer.echo("No active space.", err=True)
         raise typer.Exit(1)
 
-    config = load_space(active)
+    config = _load_space_or_exit(active)
     entry = _resolve_slot(config, ref)
 
     if not yes:
@@ -1547,7 +1558,7 @@ def space_remove(
 
 def _get_workspace(workspace_name: str | None = None) -> Any:
     """Load and return a Workspace from the active (or named) space config."""
-    from iobox.space_config import IOBOX_HOME, get_active_space, load_space
+    from iobox.space_config import IOBOX_HOME, get_active_space
     from iobox.workspace import Workspace
 
     name = workspace_name or get_active_space()
@@ -1555,7 +1566,7 @@ def _get_workspace(workspace_name: str | None = None) -> Any:
         typer.echo("No active space. Run `iobox space create NAME` first.", err=True)
         raise typer.Exit(1)
 
-    config = load_space(name)
+    config = _load_space_or_exit(name)
     return Workspace.from_config(config, credentials_dir=str(IOBOX_HOME))
 
 
@@ -1581,6 +1592,19 @@ def _resource_filename(title: str | None, resource_id: str, kind: str) -> str:
 
     slug = slugify_text(title or "").strip("-_")
     return f"{slug or kind}_{_short_id(resource_id)}.md"
+
+
+def _load_space_or_exit(name: str) -> Any:
+    """Load a space config, turning missing/invalid configs into a clean CLI error."""
+    from iobox.space_config import load_space
+
+    try:
+        return load_space(name)
+    except FileNotFoundError:
+        typer.echo(f"Space '{name}' not found. Run `iobox space list` to see spaces.", err=True)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(1)
 
 
 def _require_known_slot(slots: list[Any], provider: str | None) -> None:
@@ -1968,14 +1992,14 @@ def workspace_status(
     workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
 ) -> None:
     """Show provider status for the active workspace."""
-    from iobox.space_config import get_active_space, load_space
+    from iobox.space_config import get_active_space
 
     name = workspace_name or get_active_space()
     if not name:
         typer.echo("No active space. Run `iobox space create NAME` first.", err=True)
         raise typer.Exit(1)
 
-    config = load_space(name)
+    config = _load_space_or_exit(name)
     typer.echo(f"Workspace: {config.name}")
     typer.echo(f"{'#':<4} {'Service':<10} {'Account':<30} {'Scopes':<30} {'Mode'}")
     typer.echo("-" * 80)

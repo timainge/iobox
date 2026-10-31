@@ -81,7 +81,10 @@ class GoogleAuth:
         tier: str = "readonly",
         token_store: TokenStore | None = None,
     ) -> None:
-        self.account = account
+        from iobox.space_config import validate_account
+
+        # The account names a directory under tokens/; reject path-like values.
+        self.account = validate_account(account)
         self.scopes: list[str] = scopes or []
         self.tier = tier
         self.credentials_dir = Path(credentials_dir or os.getcwd())
@@ -329,7 +332,9 @@ def _scope_tier_for_mode(mode: AccessMode) -> str:
 
 def _get_token_dir(account: str) -> str:
     """Return the directory path for an account's tokens."""
-    return os.path.join(CREDENTIALS_DIR, "tokens", account)
+    from iobox.space_config import validate_account
+
+    return os.path.join(CREDENTIALS_DIR, "tokens", validate_account(account))
 
 
 def _get_token_path(account: str, scope_tier: str) -> str:

@@ -775,3 +775,12 @@ class TestCosineScores:
         results = idx.search([1.0, 0.0, 0.0, 0.0], top_k=1, filter_types=["event"])
         assert [r[0] for r in results] == ["ev"]
         idx.close()
+
+
+class TestIndexPathValidation:
+    def test_path_like_workspace_rejected(self, tmp_path):
+        from iobox.processing.embed import _get_index_path
+
+        with pytest.raises(ValueError):
+            _get_index_path("../../escaped", credentials_dir=str(tmp_path))
+        assert not (tmp_path.parent / "escaped").exists()
