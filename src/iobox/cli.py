@@ -1061,9 +1061,15 @@ def _authenticate_service_entry(entry: Any) -> None:
         auth.get_credentials()
         authed_email = _google_authenticated_email(auth, entry.scopes)
     elif entry.service == "o365":
-        from iobox.providers.o365.auth import get_outlook_account
+        from iobox.providers.o365.auth import MicrosoftAuth, get_microsoft_scopes
 
-        o365_account = get_outlook_account(account=entry.account)
+        # Same token location and scopes that Workspace.from_config reads.
+        ms_auth = MicrosoftAuth(
+            account=entry.account,
+            scopes=get_microsoft_scopes(entry.scopes, entry.mode),
+            credentials_dir=creds_dir,
+        )
+        o365_account = ms_auth.get_account()
         authed_email = _o365_authenticated_email(o365_account)
 
     _verify_authenticated_account(entry, authed_email)
@@ -1087,10 +1093,11 @@ def _delete_token_files(entry: Any) -> bool:
             token_file.unlink()
             deleted = True
     elif entry.service == "o365":
-        token_file = token_base / "o365_token.txt"
-        if token_file.exists():
-            token_file.unlink()
-            deleted = True
+        for name in ("microsoft_token.txt", "o365_token.txt"):
+            token_file = token_base / name
+            if token_file.exists():
+                token_file.unlink()
+                deleted = True
 
     return deleted
 

@@ -123,7 +123,7 @@ Added service session #1 (google/you@gmail.com) — authenticated ✓
   scopes: email, calendar, drive
 ```
 
-Google tokens are stored at `~/.iobox/tokens/ACCOUNT/token_{readonly|standard}.json`; the Google OAuth client is read from `GOOGLE_APPLICATION_CREDENTIALS` or `~/.iobox/credentials.json`. `o365` needs `OUTLOOK_CLIENT_ID` set. See [Connect Google](../get-started/connect-google.md) and [Connect Microsoft](../get-started/connect-microsoft.md).
+Google tokens are stored at `~/.iobox/tokens/ACCOUNT/token_{readonly|standard}.json`; the Google OAuth client is read from `GOOGLE_APPLICATION_CREDENTIALS` or `~/.iobox/credentials.json`. `o365` needs `OUTLOOK_CLIENT_ID` set; its token is stored at `~/.iobox/tokens/ACCOUNT/microsoft_token.txt`. See [Connect Google](../get-started/connect-google.md) and [Connect Microsoft](../get-started/connect-microsoft.md).
 
 To change a session's services or mode, [`remove`](#remove) it and `add` it again; `login` reuses the existing settings.
 

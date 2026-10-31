@@ -356,6 +356,24 @@ class TestSpaceLogout:
         assert result.exit_code == 0
         assert not token_file.exists()
 
+    def test_logout_deletes_o365_tokens(self, mock_google_auth: Any) -> None:
+        import iobox.space_config as sc
+
+        _invoke("space", "create", "personal")
+        _invoke("space", "add", "o365", "corp@company.com", "--email")
+
+        token_dir = sc.IOBOX_HOME / "tokens" / "corp@company.com"
+        token_dir.mkdir(parents=True, exist_ok=True)
+        current = token_dir / "microsoft_token.txt"
+        legacy = token_dir / "o365_token.txt"
+        current.write_text("{}")
+        legacy.write_text("{}")
+
+        result = _invoke("space", "logout", "1")
+        assert result.exit_code == 0
+        assert not current.exists()
+        assert not legacy.exists()
+
     def test_logout_no_token_is_graceful(self, mock_google_auth: Any) -> None:
         _invoke("space", "create", "personal")
         _invoke("space", "add", "google", "tim@gmail.com", "--email")
@@ -566,6 +584,30 @@ class TestAuthenticatedAccountVerification:
         config = load_space("personal")
         assert len(config.services) == 1
         assert config.services[0].account == "tim@gmail.com"
+
+    def test_o365_auth_uses_workspace_token_location_and_scopes(self) -> None:
+        import iobox.space_config as sc
+        from iobox.cli import _authenticate_service_entry
+        from iobox.space_config import ServiceEntry
+
+        entry = ServiceEntry(
+            number=1,
+            service="o365",
+            account="corp@company.com",
+            scopes=["email", "calendar"],
+            mode="readonly",
+        )
+        with (
+            patch("iobox.providers.o365.auth.MicrosoftAuth") as mock_auth_cls,
+            patch("iobox.cli._o365_authenticated_email", return_value="corp@company.com"),
+        ):
+            _authenticate_service_entry(entry)
+
+        kwargs = mock_auth_cls.call_args.kwargs
+        assert kwargs["account"] == "corp@company.com"
+        assert kwargs["credentials_dir"] == str(sc.IOBOX_HOME)
+        assert kwargs["scopes"] == ["basic", "Mail.Read", "Calendars.Read"]
+        mock_auth_cls.return_value.get_account.assert_called_once()
 
     def test_google_email_probe_uses_gmail_profile(self) -> None:
         from iobox.cli import _google_authenticated_email
