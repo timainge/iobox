@@ -365,5 +365,84 @@ class TestConvertMessageToMarkdown:
             }
             result = convert_message_to_markdown(msg)  # type: ignore[arg-type]
 
-        mock_conv.assert_called_once_with(msg)
+        mock_conv.assert_called_once()
+        passed = mock_conv.call_args[0][0]
+        assert passed["from"] == "alice@x.com"
+        assert passed["subject"] == "Hello"
+        assert passed["message_id"] == "m1"
         assert result == "# Subject\n\nbody"
+
+
+class TestEmailResourceToMarkdown:
+    """DATA-12: Email resources render real sender/subject/date, not placeholders."""
+
+    def _email_resource(self) -> dict:
+        return {
+            "id": "msg-42",
+            "provider_id": "gmail",
+            "resource_type": "email",
+            "title": "Quarterly numbers",
+            "created_at": "2026-01-05T09:00:00Z",
+            "modified_at": "2026-01-05T09:00:00Z",
+            "url": None,
+            "from_": "Alice <alice@example.com>",
+            "to": ["bob@example.com", "carol@example.com"],
+            "cc": ["dan@example.com"],
+            "thread_id": None,
+            "snippet": "snip",
+            "labels": ["INBOX"],
+            "body": "Hello team",
+            "content_type": "text/plain",
+            "attachments": [],
+        }
+
+    def _frontmatter(self, md: str) -> dict:
+        import yaml
+
+        lines = md.split("\n")
+        end = lines[1:].index("---") + 1
+        return yaml.safe_load("\n".join(lines[1:end]))
+
+    def test_maps_resource_keys(self) -> None:
+        md = convert_resource_to_markdown(self._email_resource())  # type: ignore[arg-type]
+        fm = self._frontmatter(md)
+        assert fm["from"] == "Alice <alice@example.com>"
+        assert fm["subject"] == "Quarterly numbers"
+        assert fm["date"] == "2026-01-05T09:00:00Z"
+        assert fm["message_id"] == "msg-42"
+        assert fm["to"] == "bob@example.com, carol@example.com"
+        assert fm["cc"] == "dan@example.com"
+        assert fm["thread_id"] == ""
+        assert "Unknown" not in md
+        assert "No Subject" not in md
+        assert "# Quarterly numbers" in md
+        assert "Hello team" in md
+
+    def test_email_data_from_underscore(self) -> None:
+        msg = {
+            "message_id": "m1",
+            "subject": "Hi",
+            "from_": "x@example.com",
+            "date": "Mon, 05 Jan 2026 09:00:00 +0000",
+            "labels": [],
+            "thread_id": "t1",
+            "snippet": "",
+            "body": "b",
+        }
+        fm = self._frontmatter(convert_message_to_markdown(msg))  # type: ignore[arg-type]
+        assert fm["from"] == "x@example.com"
+        assert fm["date"] == "Mon, 05 Jan 2026 09:00:00 +0000"
+
+    def test_existing_keys_not_overwritten(self) -> None:
+        res = self._email_resource()
+        res["subject"] = "Explicit"
+        res["from"] = "explicit@example.com"
+        fm = self._frontmatter(convert_resource_to_markdown(res))  # type: ignore[arg-type]
+        assert fm["subject"] == "Explicit"
+        assert fm["from"] == "explicit@example.com"
+
+    def test_does_not_mutate_input(self) -> None:
+        res = self._email_resource()
+        convert_resource_to_markdown(res)  # type: ignore[arg-type]
+        assert res["to"] == ["bob@example.com", "carol@example.com"]
+        assert "from" not in res
