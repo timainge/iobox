@@ -649,3 +649,82 @@ class TestNoImportTimeLoggingConfig:
 
         assert file_manager.logger.name == "iobox.processing.file_manager"
         assert markdown_converter.logger.name == "iobox.processing.markdown_converter"
+
+
+class TestSanitizeFilenameEdgeCases:
+    """DATA-14: byte-length limits, extensions, dot names, reserved names."""
+
+    def test_truncates_by_utf8_bytes(self):
+        name = "日" * 200 + ".pdf"  # 600 bytes of stem
+        result = sanitize_filename(name)
+        assert len(result.encode("utf-8")) <= 240
+        assert result.endswith(".pdf")
+        result.encode("utf-8").decode("utf-8")  # no split characters
+
+    def test_does_not_split_multibyte_character(self):
+        name = "a" + "é" * 200 + ".txt"
+        result = sanitize_filename(name)
+        assert len(result.encode("utf-8")) <= 240
+        assert result.endswith(".txt")
+        assert "�" not in result
+
+    def test_long_extension_is_capped(self):
+        name = "report." + "x" * 400
+        result = sanitize_filename(name)
+        assert len(result.encode("utf-8")) <= 240
+        assert result.startswith("report")
+
+    @pytest.mark.parametrize("name", ["", ".", "..", "...", "   ", " . ", None])
+    def test_dot_and_empty_names_use_fallback(self, name):
+        assert sanitize_filename(name) == "attachment"
+
+    def test_custom_fallback(self):
+        assert sanitize_filename("..", fallback="x") == "x"
+
+    def test_strips_trailing_dots_and_spaces(self):
+        assert sanitize_filename("report.pdf. . ") == "report.pdf"
+        assert sanitize_filename("  name.txt") == "name.txt"
+
+    @pytest.mark.parametrize("name", ["CON.tar.gz", "nul.txt", "com1", "LPT9.a.b", "aux .txt"])
+    def test_reserved_names_checked_before_first_dot(self, name):
+        assert sanitize_filename(name).startswith("_")
+
+    @pytest.mark.parametrize("name", ["CONSOLE.txt", "icon.png", "com10.txt"])
+    def test_non_reserved_names_unchanged(self, name):
+        assert sanitize_filename(name) == name
+
+    def test_path_separators_removed(self):
+        result = sanitize_filename("../../etc/passwd")
+        assert "/" not in result
+        assert result != ".."
+
+
+class TestAttachmentPathContainment:
+    """SEC-12: message IDs are sanitised and attachment paths stay in output_dir."""
+
+    @pytest.mark.parametrize("email_id", ["../../evil", "..", "a/../../b", "/abs/path", ""])
+    def test_traversal_ids_stay_inside(self, tmp_path, email_id):
+        out = tmp_path / "out"
+        out.mkdir()
+        attachments_dir = create_attachments_directory(str(out), email_id)
+        real = os.path.realpath(attachments_dir)
+        assert real.startswith(os.path.realpath(str(out / "attachments")) + os.sep)
+        assert os.path.isdir(real)
+
+    def test_dotdot_id_uses_fallback(self, tmp_path):
+        attachments_dir = create_attachments_directory(str(tmp_path), "..")
+        assert os.path.basename(attachments_dir) == "unknown-message"
+
+    def test_save_attachment_with_traversal_id(self, tmp_path):
+        out = tmp_path / "out"
+        path = save_attachment(b"x", "../../a.txt", "../../../m", str(out))
+        assert os.path.realpath(path).startswith(os.path.realpath(str(out)) + os.sep)
+
+    def test_symlinked_attachments_dir_escaping_is_rejected(self, tmp_path):
+        out = tmp_path / "out"
+        (out / "attachments").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (out / "attachments" / "msg").symlink_to(outside)
+        with pytest.raises(ValueError, match="outside output directory"):
+            create_attachments_directory(str(out), "msg")

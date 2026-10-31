@@ -196,62 +196,78 @@ def handle_duplicate_filename(filepath: str) -> str:
     return filepath
 
 
-def sanitize_filename(filename: str) -> str:
+_WINDOWS_RESERVED_NAMES = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{i}" for i in range(1, 10)]
+    + [f"LPT{i}" for i in range(1, 10)]
+)
+
+MAX_FILENAME_BYTES = 240  # safely under the common 255-byte filesystem limit
+MAX_EXTENSION_BYTES = 16
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Truncate *text* to at most *max_bytes* UTF-8 bytes without splitting a character."""
+    return text.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
+
+
+def sanitize_filename(filename: str, fallback: str = "attachment") -> str:
     """
     Sanitize a filename to make it safe for the filesystem.
 
+    - Characters other than word characters, ``-``, ``.`` and space become ``_``
+      (so path separators can never survive).
+    - Trailing dots/spaces and leading spaces are stripped (Windows drops them).
+    - ``""``, ``"."`` and ``".."`` (or anything that reduces to them) become
+      *fallback*.
+    - Windows reserved device names are checked against the part before the
+      first dot (``CON.tar.gz`` is reserved) and prefixed with ``_``.
+    - The result is at most ``MAX_FILENAME_BYTES`` UTF-8 bytes; the extension
+      is kept (capped at ``MAX_EXTENSION_BYTES``) and the stem is truncated on
+      a character boundary.
+
     Args:
         filename: Original filename
+        fallback: Name to use when nothing usable remains
 
     Returns:
         str: Sanitized filename
     """
-    # Replace any character that's not alphanumeric, dash, underscore, dot, or space
-    # with underscore
-    sanitized = re.sub(r"[^\w\-\. ]", "_", filename)
+    sanitized = re.sub(r"[^\w\-\. ]", "_", str(filename or ""))
+    sanitized = sanitized.strip(" ").rstrip(". ")
 
-    # Handle reserved filenames in Windows
-    reserved_names = [
-        "CON",
-        "PRN",
-        "AUX",
-        "NUL",
-        "COM1",
-        "COM2",
-        "COM3",
-        "COM4",
-        "COM5",
-        "COM6",
-        "COM7",
-        "COM8",
-        "COM9",
-        "LPT1",
-        "LPT2",
-        "LPT3",
-        "LPT4",
-        "LPT5",
-        "LPT6",
-        "LPT7",
-        "LPT8",
-        "LPT9",
-    ]
+    if sanitized in ("", ".", ".."):
+        sanitized = fallback
 
-    basename = os.path.splitext(sanitized)[0].upper()
-    if basename in reserved_names:
+    stem = sanitized.split(".", 1)[0].rstrip(" ").upper()
+    if stem in _WINDOWS_RESERVED_NAMES:
         sanitized = f"_{sanitized}"
 
-    # Ensure the filename is not too long
-    max_length = 240  # Safely under most filesystem limits
-    if len(sanitized) > max_length:
+    if len(sanitized.encode("utf-8")) > MAX_FILENAME_BYTES:
         base, ext = os.path.splitext(sanitized)
-        sanitized = f"{base[: max_length - len(ext)]}{ext}"
+        if len(ext.encode("utf-8")) > MAX_EXTENSION_BYTES:
+            ext = _truncate_utf8(ext, MAX_EXTENSION_BYTES)
+        base = _truncate_utf8(base, MAX_FILENAME_BYTES - len(ext.encode("utf-8")))
+        sanitized = f"{base}{ext}".rstrip(". ") or fallback
 
     return sanitized
+
+
+def _ensure_within(path: str, root: str) -> None:
+    """Raise ``ValueError`` if *path* does not resolve to a location inside *root*."""
+    real_root = os.path.realpath(root)
+    real_path = os.path.realpath(path)
+    if os.path.commonpath([real_root, real_path]) != real_root:
+        raise ValueError(f"Refusing to write outside output directory: {path!r}")
 
 
 def create_attachments_directory(output_dir: str, email_id: str) -> str:
     """
     Create a directory for storing email attachments.
+
+    The message ID is sanitised (see :func:`sanitize_filename`) before being
+    used as a directory name, and the final path is verified to stay inside
+    *output_dir*.
 
     Args:
         output_dir: Base output directory where markdown files are stored
@@ -259,9 +275,13 @@ def create_attachments_directory(output_dir: str, email_id: str) -> str:
 
     Returns:
         str: Path to the attachments directory
+
+    Raises:
+        ValueError: If the resulting path would escape *output_dir*.
     """
-    # Create a subdirectory for attachments using the email ID
-    attachments_dir = os.path.join(output_dir, "attachments", email_id)
+    safe_id = sanitize_filename(email_id, fallback="unknown-message")
+    attachments_dir = os.path.join(output_dir, "attachments", safe_id)
+    _ensure_within(attachments_dir, output_dir)
 
     try:
         os.makedirs(attachments_dir, exist_ok=True)
@@ -293,6 +313,7 @@ def save_attachment(attachment_data: bytes, filename: str, email_id: str, output
 
     # Create full path
     filepath = os.path.join(attachments_dir, safe_filename)
+    _ensure_within(filepath, attachments_dir)
 
     # Handle duplicate filenames
     if check_file_exists(filepath):
