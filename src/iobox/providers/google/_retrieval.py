@@ -7,6 +7,7 @@ from the Gmail API.
 
 import base64
 import logging
+import re
 import threading
 import time
 import weakref
@@ -40,6 +41,7 @@ def clear_label_cache(service: Any | None = None) -> None:
             _label_caches.clear()
         else:
             _label_caches.pop(service, None)
+
 
 # Gmail rejects bursts of concurrent requests per user with 429
 # "Too many concurrent requests for user", even inside a single batch.
@@ -284,7 +286,11 @@ def batch_get_emails(
             email_list.append({"message_id": msg_id, "error": errors[msg_id]})
         elif msg_id in results:
             message = results[msg_id]
-            email_data = _process_message_response(message, preferred_content_type, label_map)
+            try:
+                email_data = _process_message_response(message, preferred_content_type, label_map)
+            except Exception as e:  # one malformed message must not sink the batch
+                logging.warning(f"Failed to process message {msg_id}: {e}")
+                email_data = {"message_id": msg_id, "error": f"Failed to process message: {e}"}
             email_list.append(email_data)
         else:
             email_list.append({"message_id": msg_id, "error": "Not found in batch response"})
@@ -607,7 +613,7 @@ def _extract_content_from_payload(
         tuple: (content, content_type)
     """
     if "body" in payload and "data" in payload["body"] and "parts" not in payload:
-        content = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8")
+        content = _decode_part_body(payload)
         return content, payload.get("mimeType", "text/plain")
 
     if "parts" not in payload:
@@ -616,11 +622,66 @@ def _extract_content_from_payload(
     return _extract_content_from_parts(payload["parts"], preferred_type)
 
 
+_CHARSET_RE = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.IGNORECASE)
+
+
+def _part_headers(part: dict[str, Any]) -> dict[str, str]:
+    return {h["name"].lower(): h["value"] for h in part.get("headers", []) or []}
+
+
+def _part_charset(part: dict[str, Any]) -> str:
+    """Return the charset declared in the part's Content-Type header (default utf-8)."""
+    match = _CHARSET_RE.search(_part_headers(part).get("content-type", ""))
+    return match.group(1) if match else "utf-8"
+
+
+def _decode_part_body(part: dict[str, Any]) -> str:
+    """Base64url-decode a part's body and decode it with its declared charset.
+
+    Undecodable bytes are replaced rather than raising, and an unknown charset
+    falls back to UTF-8, so one oddly-encoded message can't abort a batch.
+    """
+    raw = base64.urlsafe_b64decode(part["body"]["data"])
+    charset = _part_charset(part)
+    try:
+        return raw.decode(charset, errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _is_attachment_part(part: dict[str, Any]) -> bool:
+    """True for parts that are attachments rather than message body text."""
+    disposition = _part_headers(part).get("content-disposition", "").strip().lower()
+    return disposition.startswith("attachment") or bool(part.get("filename"))
+
+
+def _collect_text_parts(parts: list[dict[str, Any]], plain: list[str], html: list[str]) -> None:
+    for part in parts:
+        if _is_attachment_part(part):
+            continue
+        if "parts" in part:
+            _collect_text_parts(part["parts"], plain, html)
+            continue
+        if "data" not in part.get("body", {}):
+            continue
+        mime = part.get("mimeType", "")
+        if mime == "text/plain":
+            plain.append(_decode_part_body(part))
+        elif mime == "text/html":
+            html.append(_decode_part_body(part))
+
+
 def _extract_content_from_parts(
     parts: list[dict[str, Any]], preferred_type: str = "text/plain"
 ) -> tuple[str, str]:
     """
     Extract content from multipart message parts.
+
+    Every non-attachment ``text/plain`` / ``text/html`` leaf is collected (in
+    order) and same-type parts are joined, so bodies split around inline
+    images aren't truncated to their last fragment. Parts with an
+    ``attachment`` disposition (or a filename) are skipped — an attached
+    ``.txt`` or ``.html`` file is not the message body.
 
     Args:
         parts: List of message parts
@@ -629,22 +690,11 @@ def _extract_content_from_parts(
     Returns:
         tuple: (content, content_type)
     """
-    plain_content = ""
-    html_content = ""
-
-    for part in parts:
-        if part["mimeType"] == "text/plain" and "data" in part.get("body", {}):
-            plain_content = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
-
-        if part["mimeType"] == "text/html" and "data" in part.get("body", {}):
-            html_content = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
-
-        if "parts" in part and not (plain_content or html_content):
-            nested_content, nested_type = _extract_content_from_parts(part["parts"], preferred_type)
-            if nested_type == "text/plain" and not plain_content:
-                plain_content = nested_content
-            elif nested_type == "text/html" and not html_content:
-                html_content = nested_content
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+    _collect_text_parts(parts, plain_parts, html_parts)
+    plain_content = "\n".join(plain_parts)
+    html_content = "\n".join(html_parts)
 
     if preferred_type == "text/html" and html_content:
         return html_content, "text/html"

@@ -775,3 +775,120 @@ class TestBatchGetEmails:
 
         assert mock_batch.execute.call_count == 1
         assert "error" in result[0]
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode()
+
+
+def _part(mime: str, data: bytes, headers: dict | None = None, filename: str = "") -> dict:
+    return {
+        "mimeType": mime,
+        "filename": filename,
+        "headers": [{"name": k, "value": v} for k, v in (headers or {}).items()],
+        "body": {"data": _b64(data), "size": len(data)},
+    }
+
+
+class TestBodyDecoding:
+    """DATA-05: bodies decoded with the part's charset; bad bytes don't raise."""
+
+    def test_single_part_latin1_charset(self) -> None:
+        payload = _part(
+            "text/plain",
+            "café".encode("latin-1"),
+            {"Content-Type": 'text/plain; charset="ISO-8859-1"'},
+        )
+        content, ctype = er._extract_content_from_payload(payload)
+        assert content == "café"
+        assert ctype == "text/plain"
+
+    def test_multipart_windows1252_charset(self) -> None:
+        payload = {
+            "mimeType": "multipart/alternative",
+            "parts": [
+                _part(
+                    "text/plain",
+                    "“quoted”".encode("cp1252"),
+                    {"Content-Type": "text/plain; charset=windows-1252"},
+                )
+            ],
+        }
+        content, _ = er._extract_content_from_payload(payload)
+        assert content == "“quoted”"
+
+    def test_invalid_bytes_are_replaced_not_raised(self) -> None:
+        payload = _part("text/plain", b"ok \xff\xfe bad", {"Content-Type": "text/plain"})
+        content, _ = er._extract_content_from_payload(payload)
+        assert content.startswith("ok ")
+        assert "�" in content
+
+    def test_unknown_charset_falls_back_to_utf8(self) -> None:
+        payload = _part(
+            "text/plain", "hé".encode(), {"Content-Type": "text/plain; charset=x-bogus"}
+        )
+        content, _ = er._extract_content_from_payload(payload)
+        assert content == "hé"
+
+    def test_batch_bad_message_becomes_error_entry(self, mocker) -> None:
+        good = {
+            "id": "good",
+            "payload": {"headers": [], **_part("text/plain", b"hello")},
+        }
+        bad = {"id": "bad"}  # no payload → processing raises
+        mocker.patch.object(er, "batch_get_messages", return_value=({"good": good, "bad": bad}, {}))
+        result = batch_get_emails(MagicMock(), ["good", "bad"])
+        assert result[0]["body"] == "hello"
+        assert result[1]["message_id"] == "bad"
+        assert "error" in result[1]
+
+
+class TestMultipartAssembly:
+    """DATA-09: same-type parts are joined; attachments aren't the body."""
+
+    def test_split_plain_parts_are_joined(self) -> None:
+        parts = [
+            _part("text/plain", b"first half"),
+            _part("image/png", b"\x89PNG", {"Content-Disposition": "inline"}, "pic.png"),
+            _part("text/plain", b"second half"),
+        ]
+        content, ctype = er._extract_content_from_parts(parts)
+        assert "first half" in content and "second half" in content
+        assert ctype == "text/plain"
+
+    def test_attached_text_file_is_not_body(self) -> None:
+        parts = [
+            _part("text/plain", b"real body"),
+            _part(
+                "text/plain",
+                b"attached notes",
+                {"Content-Disposition": 'attachment; filename="notes.txt"'},
+                "notes.txt",
+            ),
+        ]
+        content, _ = er._extract_content_from_parts(parts)
+        assert content == "real body"
+
+    def test_attached_html_not_preferred_body(self) -> None:
+        parts = [
+            _part("text/plain", b"plain body"),
+            _part(
+                "text/html",
+                b"<p>attached page</p>",
+                {"Content-Disposition": "attachment"},
+                "page.html",
+            ),
+        ]
+        content, ctype = er._extract_content_from_parts(parts, "text/html")
+        assert (content, ctype) == ("plain body", "text/plain")
+
+    def test_nested_alternative_inside_mixed(self) -> None:
+        parts = [
+            {
+                "mimeType": "multipart/alternative",
+                "parts": [_part("text/plain", b"plain"), _part("text/html", b"<b>html</b>")],
+            },
+            _part("application/pdf", b"%PDF", {"Content-Disposition": "attachment"}, "a.pdf"),
+        ]
+        assert er._extract_content_from_parts(parts, "text/html") == ("<b>html</b>", "text/html")
+        assert er._extract_content_from_parts(parts, "text/plain") == ("plain", "text/plain")
