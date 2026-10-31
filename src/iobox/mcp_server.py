@@ -33,7 +33,7 @@ from iobox.providers.google.auth import (
     check_auth_status,
     set_active_mode,
 )
-from iobox.utils import parse_date_range, slugify_text
+from iobox.utils import parse_date_range, resource_filename, slugify_text
 
 mcp = FastMCP("iobox")
 
@@ -1743,8 +1743,7 @@ def save_event(
         event = slot.provider.get_event(event_id)
         md = convert_event_to_markdown(event)
         out = _confine_output_dir(output_dir)
-        title_slug = slugify_text(event.get("title", "event"))
-        filename = f"{title_slug}_{event_id}.md"
+        filename = resource_filename(event.get("title"), event_id, "event")
         filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(md)
@@ -2036,8 +2035,9 @@ def save_file(
         file_meta = slot.provider.get_file(file_id)
         md = convert_file_to_markdown(file_meta)
         out = _confine_output_dir(output_dir)
-        name_slug = slugify_text(file_meta.get("title") or file_meta.get("name", "file"))
-        filename = f"{name_slug}_{file_id}.md"
+        filename = resource_filename(
+            file_meta.get("title") or file_meta.get("name"), file_id, "file"
+        )
         filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(md)

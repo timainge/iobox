@@ -162,3 +162,22 @@ class TestSubjectFallback:
 
     def test_slugify_none(self):
         assert slugify_text(None) == ""
+
+
+class TestResourceFilename:
+    def test_title_and_short_id(self):
+        from iobox.utils import resource_filename
+
+        assert resource_filename("Team Standup", "abc123", "event") == "team-standup_abc123.md"
+
+    def test_symbol_only_title_falls_back_to_kind(self):
+        from iobox.utils import resource_filename
+
+        assert resource_filename("!!!", "abc123", "event") == "event_abc123.md"
+
+    def test_unsafe_or_long_id_is_hashed(self):
+        from iobox.utils import resource_filename
+
+        name = resource_filename("Doc", "AAMkAGI2/../x==" * 3, "file")
+        assert name.startswith("doc_") and name.endswith(".md")
+        assert "/" not in name and len(name) == len("doc_") + 10 + len(".md")

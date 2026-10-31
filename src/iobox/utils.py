@@ -138,3 +138,25 @@ def parse_date_range(
     if end_date:
         before = _parse_ymd(end_date) + timedelta(days=1)
     return after, before
+
+
+def _short_id(resource_id: str) -> str:
+    """Return a short, filename-safe token that identifies *resource_id*.
+
+    Short ids made of safe characters are used as-is; anything else (long or
+    punctuation-heavy ids such as Outlook ImmutableIds, which share long
+    prefixes) is reduced to a stable 10-character hash.
+    """
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,16}", resource_id):
+        return resource_id
+    return hashlib.sha1(resource_id.encode("utf-8")).hexdigest()[:10]
+
+
+def resource_filename(title: str | None, resource_id: str, kind: str) -> str:
+    """Build a Markdown filename ``{slug}_{short-id}.md`` for an event or file.
+
+    The id suffix keeps resources with the same title from overwriting each
+    other; an empty or unsluggable title falls back to ``{kind}_{short-id}.md``.
+    """
+    slug = slugify_text(title or "").strip("-_")
+    return f"{slug or kind}_{_short_id(resource_id)}.md"
