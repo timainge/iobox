@@ -376,7 +376,7 @@ class TestSendForwardDrafts:
     @patch("iobox.providers.google._sender.compose_message")
     def test_send_message(self, mock_compose, mock_send, provider):
         mock_compose.return_value = {"raw": "encoded"}
-        mock_send.return_value = {"id": "sent1"}
+        mock_send.return_value = {"id": "sent1", "threadId": "t1", "labelIds": ["SENT"]}
         result = provider.send_message(
             to="bob@x.com",
             subject="Hi",
@@ -396,7 +396,7 @@ class TestSendForwardDrafts:
             attachments=["/tmp/file.pdf"],
         )
         mock_send.assert_called_once_with(provider._service, {"raw": "encoded"})
-        assert result == {"id": "sent1"}
+        assert result == {"message_id": "sent1", "status": "sent", "thread_id": "t1"}
 
     @patch("iobox.providers.google._sender.forward_email")
     def test_forward_message(self, mock_fwd, provider):
@@ -408,13 +408,13 @@ class TestSendForwardDrafts:
             to="fwd@x.com",
             additional_text="FYI",
         )
-        assert result == {"id": "fwd1"}
+        assert result == {"message_id": "fwd1", "status": "forwarded"}
 
     @patch("iobox.providers.google._sender.create_draft")
     @patch("iobox.providers.google._sender.compose_message")
     def test_create_draft(self, mock_compose, mock_create, provider):
         mock_compose.return_value = {"raw": "encoded"}
-        mock_create.return_value = {"id": "draft1"}
+        mock_create.return_value = {"id": "draft1", "message": {"id": "m9", "threadId": "t9"}}
         result = provider.create_draft(to="a@b.com", subject="Draft", body="body", cc="c@d.com")
         mock_compose.assert_called_once_with(
             to="a@b.com",
@@ -426,7 +426,7 @@ class TestSendForwardDrafts:
             attachments=None,
         )
         mock_create.assert_called_once_with(provider._service, {"raw": "encoded"})
-        assert result == {"id": "draft1"}
+        assert result == {"message_id": "draft1", "status": "draft", "thread_id": "t9"}
 
     @patch("iobox.providers.google._sender.list_drafts")
     def test_list_drafts(self, mock_list, provider):
@@ -440,14 +440,14 @@ class TestSendForwardDrafts:
         mock_send.return_value = {"id": "sent_draft"}
         result = provider.send_draft("d1")
         mock_send.assert_called_once_with(provider._service, "d1")
-        assert result == {"id": "sent_draft"}
+        assert result == {"message_id": "sent_draft", "status": "sent", "draft_id": "d1"}
 
     @patch("iobox.providers.google._sender.delete_draft")
     def test_delete_draft(self, mock_del, provider):
         mock_del.return_value = {"status": "deleted"}
         result = provider.delete_draft("d1")
         mock_del.assert_called_once_with(provider._service, "d1")
-        assert result == {"status": "deleted"}
+        assert result == {"message_id": "d1", "status": "deleted"}
 
 
 # ------------------------------------------------------------------
