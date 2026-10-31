@@ -1307,3 +1307,42 @@ class TestForwardBatchSafety:
             )
         assert result.exit_code == 0
         provider.forward_message.assert_called_once()
+
+
+class TestLabelValidation:
+    """label rejects no-op and contradictory flag combinations (CLI-03)."""
+
+    def _invoke(self, args: list[str]):
+        provider = _mock_provider(search_emails=[{"message_id": "m1"}])
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(app, ["label", *args])
+        return result, provider
+
+    def test_no_operation_flag_errors(self):
+        result, provider = self._invoke(["-q", "from:x@y.com"])
+        assert result.exit_code == 1
+        assert "Specify at least one operation" in result.stderr
+        provider.search_emails.assert_not_called()
+
+    def test_no_operation_flag_single_mode(self):
+        result, provider = self._invoke(["--message-id", "m1"])
+        assert result.exit_code == 1
+        assert "Labels updated" not in result.output
+
+    def test_mark_read_and_unread_rejected(self):
+        result, provider = self._invoke(["--message-id", "m1", "--mark-read", "--mark-unread"])
+        assert result.exit_code == 1
+        assert "--mark-read and --mark-unread cannot be used together" in result.stderr
+        provider.mark_read.assert_not_called()
+
+    def test_star_and_unstar_rejected(self):
+        result, provider = self._invoke(["-q", "x", "--star", "--unstar"])
+        assert result.exit_code == 1
+        assert "--star and --unstar cannot be used together" in result.stderr
+        provider.set_star.assert_not_called()
+
+    def test_valid_combination_allowed(self):
+        result, provider = self._invoke(["--message-id", "m1", "--mark-read", "--star"])
+        assert result.exit_code == 0
+        provider.mark_read.assert_called_once_with("m1", read=True)
+        provider.set_star.assert_called_once_with("m1", starred=True)

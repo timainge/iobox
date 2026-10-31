@@ -902,6 +902,21 @@ def label(
             typer.echo("Error: You must specify --message-id or --query (-q)")
             raise typer.Exit(code=1)
 
+        if not any((mark_read, mark_unread, star, unstar, archive, add, remove)):
+            typer.echo(
+                "Error: Specify at least one operation: --mark-read, --mark-unread, "
+                "--star, --unstar, --archive, --add, --remove",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        for flag_a, flag_b, on_a, on_b in (
+            ("--mark-read", "--mark-unread", mark_read, mark_unread),
+            ("--star", "--unstar", star, unstar),
+        ):
+            if on_a and on_b:
+                typer.echo(f"Error: {flag_a} and {flag_b} cannot be used together.", err=True)
+                raise typer.Exit(code=1)
+
         provider = _get_provider(ctx)
 
         def _apply_label_ops(mid: str) -> None:

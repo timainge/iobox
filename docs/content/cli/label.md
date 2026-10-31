@@ -29,7 +29,7 @@ iobox [--provider gmail|outlook] [--account NAME] label [OPTIONS]
 | `--add` | | TEXT | `None` | Add a label by name (created if it doesn't exist in Gmail; Outlook: category) |
 | `--remove` | | TEXT | `None` | Remove a label by name (Outlook: category) |
 
-One of `--message-id` or `--query` is required; `--message-id` wins if both are given. Several operation flags can be combined; batch mode applies them without a confirmation prompt.
+One of `--message-id` or `--query` is required; `--message-id` wins if both are given. At least one operation flag is required, and several can be combined; `--mark-read` with `--mark-unread`, or `--star` with `--unstar`, is rejected as contradictory. Batch mode applies the operations without a confirmation prompt.
 
 ## Examples
 
