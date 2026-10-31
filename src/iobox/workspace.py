@@ -521,6 +521,7 @@ class Workspace:
                         account=entry.account,
                         scopes=ms_scopes,
                         credentials_dir=creds_dir,
+                        mode=entry.mode,
                     )
                     google_auth_cache[ms_cache_key] = ms_auth
 

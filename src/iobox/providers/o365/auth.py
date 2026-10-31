@@ -48,6 +48,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from iobox.auth_policy import require_interactive_auth
 from iobox.providers.token_store import FilesystemTokenStore, TokenStore
 
 load_dotenv()
@@ -395,7 +396,10 @@ class MicrosoftAuth:
                 "O365 package required for Outlook support. "
                 "Install with: pip install 'iobox[outlook]'"
             )
-        self.account = account
+        from iobox.space_config import validate_account
+
+        # The account names a directory under tokens/; reject path-like values.
+        self.account = validate_account(account)
         self.scopes: list[str] = list(scopes) if scopes else ["basic", "Mail.Read"]
         self._credentials_dir = Path(credentials_dir or Path.home() / ".iobox")
         self.client_id: str = client_id or os.environ.get("OUTLOOK_CLIENT_ID") or ""
@@ -566,6 +570,7 @@ class MicrosoftAuth:
         return scopes_cover(granted, requested)
 
     def _run_auth_flow(self, o365_account: Any, scopes: list[str] | None = None) -> bool:
+        require_interactive_auth(self.account)
         requested = scopes or self.scopes
         if self.device_code:
             return _device_code_flow(o365_account, requested)

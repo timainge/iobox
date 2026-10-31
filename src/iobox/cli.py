@@ -1214,6 +1214,7 @@ def _authenticate_service_entry(entry: Any) -> None:
             account=entry.account,
             scopes=get_microsoft_scopes(entry.scopes, entry.mode),
             credentials_dir=creds_dir,
+            mode=entry.mode,
         )
         o365_account = ms_auth.get_account()
         authed_email = _o365_authenticated_email(o365_account)
@@ -1239,7 +1240,12 @@ def _delete_token_files(entry: Any) -> bool:
             token_file.unlink()
             deleted = True
     elif entry.service == "o365":
-        for name in ("microsoft_token.txt", "o365_token.txt"):
+        tier = _tier_for_mode(entry.mode)
+        names = [f"microsoft_token_{tier}.txt"]
+        if tier == "standard":
+            # Pre-tier files would be migrated back into the standard tier.
+            names += ["microsoft_token.txt", "o365_token.txt"]
+        for name in names:
             token_file = token_base / name
             if token_file.exists():
                 token_file.unlink()

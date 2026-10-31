@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -46,3 +46,21 @@ class TestInteractiveAuthPolicy:
         ):
             srv.main()
         assert not interactive_auth_allowed()
+
+
+class TestMicrosoftInteractivePolicy:
+    def test_microsoft_auth_refuses_flow_when_disabled(self, tmp_path) -> None:
+        pytest.importorskip("O365")
+        from iobox.providers.o365.auth import MicrosoftAuth
+
+        auth = MicrosoftAuth(
+            account="corp@company.com",
+            scopes=["basic", "Mail.Read"],
+            credentials_dir=str(tmp_path),
+            client_id="00000000-0000-0000-0000-000000000000",
+        )
+        set_interactive_auth(False)
+        account = MagicMock()
+        with pytest.raises(InteractiveAuthRequired):
+            auth._run_auth_flow(account)
+        account.authenticate.assert_not_called()

@@ -501,8 +501,18 @@ class TestTokenFileProbes:
         assert path == sc.IOBOX_HOME / "tokens" / "tim@gmail.com" / "token_readonly.json"
 
     def test_token_file_for_o365(self) -> None:
-        path = token_file_for(self._entry("o365"))
-        assert path == sc.IOBOX_HOME / "tokens" / "tim@gmail.com" / "microsoft_token.txt"
+        base = sc.IOBOX_HOME / "tokens" / "tim@gmail.com"
+        assert token_file_for(self._entry("o365")) == base / "microsoft_token_standard.txt"
+        assert (
+            token_file_for(self._entry("o365", mode="readonly"))
+            == base / "microsoft_token_readonly.txt"
+        )
+
+    def test_o365_readonly_does_not_inherit_legacy_write_token(self) -> None:
+        legacy = token_file_for(self._entry("o365")).parent / "microsoft_token.txt"
+        self._touch(legacy)
+        assert is_authenticated(self._entry("o365")) is True
+        assert is_authenticated(self._entry("o365", mode="readonly")) is False
 
     def test_unauthenticated_when_no_token_file(self) -> None:
         assert is_authenticated(self._entry("google")) is False

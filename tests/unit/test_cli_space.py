@@ -635,6 +635,7 @@ class TestAuthenticatedAccountVerification:
         assert kwargs["account"] == "corp@company.com"
         assert kwargs["credentials_dir"] == str(sc.IOBOX_HOME)
         assert kwargs["scopes"] == ["basic", "Mail.Read", "Calendars.Read"]
+        assert kwargs["mode"] == "readonly"
         mock_auth_cls.return_value.get_account.assert_called_once()
 
     def test_google_email_probe_uses_gmail_profile(self) -> None:
@@ -704,3 +705,23 @@ class TestSpaceValidationInCli:
         assert result.exit_code == 1
         assert "Error:" in result.output
         assert "Traceback" not in result.output
+
+
+class TestO365Logout:
+    def test_logout_readonly_keeps_standard_token(self, mock_google_auth: Any) -> None:
+        import iobox.space_config as sc
+
+        _invoke("space", "create", "personal")
+        _invoke("space", "add", "o365", "corp@company.com", "--email", "--read")
+        token_dir = sc.IOBOX_HOME / "tokens" / "corp@company.com"
+        token_dir.mkdir(parents=True, exist_ok=True)
+        readonly = token_dir / "microsoft_token_readonly.txt"
+        standard = token_dir / "microsoft_token_standard.txt"
+        readonly.write_text("{}")
+        standard.write_text("{}")
+
+        result = _invoke("space", "logout", "1")
+
+        assert result.exit_code == 0
+        assert not readonly.exists()
+        assert standard.exists()

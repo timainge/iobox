@@ -287,7 +287,8 @@ def token_file_for(entry: ServiceEntry) -> Path:
         tier = "readonly" if entry.mode == "readonly" else "standard"
         return base / f"token_{tier}.json"
     if entry.service == "o365":
-        return base / "microsoft_token.txt"
+        tier = "readonly" if entry.mode == "readonly" else "standard"
+        return base / f"microsoft_token_{tier}.txt"
     return base / "unknown"
 
 
@@ -295,8 +296,10 @@ def is_authenticated(entry: ServiceEntry) -> bool:
     """Whether a token file exists on disk for this service session.
 
     For Google in ``readonly`` mode, a broader ``standard``-tier token also
-    counts (matches ``GoogleAuth._resolve_token``'s fallback). For O365 the
-    legacy ``o365_token.txt`` filename is also accepted.
+    counts (matches ``GoogleAuth._resolve_token``'s fallback). For O365 in
+    ``standard``/``dangerous`` mode, the pre-tier ``microsoft_token.txt`` and
+    ``o365_token.txt`` files also count — ``MicrosoftAuth`` migrates them into
+    the standard tier on first use (readonly never inherits a write token).
     """
     path = token_file_for(entry)
     if path.exists():
@@ -305,10 +308,10 @@ def is_authenticated(entry: ServiceEntry) -> bool:
         broader = path.parent / "token_standard.json"
         if broader.exists():
             return True
-    if entry.service == "o365":
-        legacy = path.parent / "o365_token.txt"
-        if legacy.exists():
-            return True
+    if entry.service == "o365" and entry.mode != "readonly":
+        for legacy in ("microsoft_token.txt", "o365_token.txt"):
+            if (path.parent / legacy).exists():
+                return True
     return False
 
 
