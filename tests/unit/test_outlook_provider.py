@@ -26,6 +26,7 @@ from iobox.providers.o365.email import OutlookBatchError, OutlookProvider  # noq
 from tests.fixtures.mock_outlook_responses import (  # noqa: E402
     ATTACHMENT_PDF_BYTES,
     ATTACHMENT_PNG_BYTES,
+    WELL_KNOWN_FOLDER_IDS,
     FakeAuth,
     FakeOutlookTenant,
     graph_message,
@@ -144,6 +145,18 @@ class TestAttachments:
         assert png["content_id"] == "logo@cid"
         tenant.graph.last("GET", r"/me/messages/outlook-msg-id-4/attachments")
 
+    def test_listing_does_not_download_content(self, provider, tenant) -> None:
+        """FU-12: listing attachments returned contentBytes for every file."""
+        provider.get_email_content("outlook-msg-id-4")
+        listing = tenant.graph.last("GET", r"/me/messages/outlook-msg-id-4/attachments")
+        selected = set(listing.params["$select"].split(","))
+        assert "contentBytes" not in selected
+        assert {"id", "name", "contentType", "size", "isInline"} <= selected
+        # The non-inline PDF is never fetched individually; the small inline
+        # image is (contentId lives only on fileAttachment).
+        singles = tenant.graph.find("GET", r"/me/messages/outlook-msg-id-4/attachments/[^/]+")
+        assert [c.path.rsplit("/", 1)[-1] for c in singles] == ["outlook-attach-id-2"]
+
     def test_no_attachment_request_without_attachments(self, provider, tenant) -> None:
         assert provider.get_email_content("outlook-msg-id-2")["attachments"] == []
         assert not tenant.graph.find("GET", r".*/attachments")
@@ -171,6 +184,9 @@ class TestSearchFilterPath:
     """Structured queries → $filter built with the real QueryBuilder."""
 
     def _filter(self, provider, tenant, **kw) -> str:
+        # include_spam_trash keeps the folder-exclusion clauses (FU-11) out
+        # of the way; TestSpamTrashExclusion covers them.
+        kw.setdefault("include_spam_trash", True)
         provider.search_emails(EmailQuery(**kw))
         call = tenant.graph.last("GET", r"/me/messages")
         assert "$search" not in call.params
@@ -223,7 +239,115 @@ class TestSearchFilterPath:
         results = provider.search_emails(EmailQuery(max_results=50))
         ids = {r["message_id"] for r in results}
         assert "outlook-thread-msg-2" in ids  # lives in Sent Items
-        assert not tenant.graph.find("GET", r"/me/mailFolders/.*")
+        assert not tenant.graph.find("GET", r"/me/mailFolders/.*/messages")
+
+
+def _spam_trash_tenant(n_trash: int = 3, n_junk: int = 3, n_inbox: int = 2) -> FakeOutlookTenant:
+    """Tenant whose newest messages sit in Deleted Items / Junk Email."""
+    tenant = FakeOutlookTenant()
+    for i in range(n_trash):
+        tenant.add(graph_message(f"trash-{i}", folder=WELL_KNOWN_FOLDER_IDS["deleteditems"]))
+    for i in range(n_junk):
+        tenant.add(graph_message(f"junk-{i}", folder=WELL_KNOWN_FOLDER_IDS["junkemail"]))
+    for i in range(n_inbox):
+        tenant.add(graph_message(f"inbox-{i}", folder="inbox"))
+    return tenant
+
+
+class TestSpamTrashExclusion:
+    """FU-11: include_spam_trash was ignored, so Deleted Items and Junk
+    Email were always searched."""
+
+    def test_filter_path_excludes_spam_and_trash(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        results = provider.search_emails(EmailQuery(max_results=50))
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"}
+        f = tenant.graph.last("GET", r"/me/messages").params["$filter"]
+        assert f == (
+            f"parentFolderId ne '{WELL_KNOWN_FOLDER_IDS['deleteditems']}'"
+            f" and parentFolderId ne '{WELL_KNOWN_FOLDER_IDS['junkemail']}'"
+        )
+
+    def test_filter_path_combines_with_other_clauses(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        provider.search_emails(EmailQuery(from_addr="a@b.com"))
+        f = tenant.graph.last("GET", r"/me/messages").params["$filter"]
+        assert f.startswith("from/emailAddress/address eq 'a@b.com' and parentFolderId ne ")
+
+    def test_search_path_filters_client_side(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        results = provider.search_emails(EmailQuery(text="hello", max_results=50))
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"}
+        call = tenant.graph.last("GET", r"/me/messages")
+        assert "$filter" not in call.params  # Graph rejects $search + $filter
+        assert "parentFolderId" in call.params["$select"].split(",")
+
+    def test_raw_query_also_excludes(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        results = provider.search_emails(EmailQuery(raw_query="from:x", max_results=50))
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"}
+
+    def test_max_results_filled_after_client_side_filtering(self) -> None:
+        """Excluded hits must not eat into max_results: over-fetch."""
+        provider = make_outlook_provider(_spam_trash_tenant(n_trash=60, n_junk=5, n_inbox=4))
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        results = provider.search_emails(EmailQuery(text="hello", max_results=3))
+        assert [r["message_id"] for r in results] == ["inbox-0", "inbox-1", "inbox-2"]
+        pages = tenant.graph.find("GET", r"/me/messages")
+        assert len(pages) >= 2  # followed @odata.nextLink past the excluded hits
+        assert all("$search" in p.params for p in pages)
+
+    def test_over_fetch_is_capped(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant(n_trash=400, n_junk=0, n_inbox=2))
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        assert provider.search_emails(EmailQuery(text="hello", max_results=3)) == []
+        fetched = sum(
+            min(int(c.params["$top"]), 400 - int(c.params.get("$skip", 0)))
+            for c in tenant.graph.find("GET", r"/me/messages")
+        )
+        assert fetched <= 250
+
+    def test_include_spam_trash_returns_everything(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        for q in (
+            EmailQuery(include_spam_trash=True, max_results=50),
+            EmailQuery(text="hello", include_spam_trash=True, max_results=50),
+        ):
+            assert len(provider.search_emails(q)) == 8
+        assert not tenant.graph.find("GET", r"/me/mailFolders/[^/]+")
+        assert "$filter" not in tenant.graph.find("GET", r"/me/messages")[0].params
+
+    def test_folder_ids_resolved_once_and_cached(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        provider.search_emails(EmailQuery())
+        provider.search_emails(EmailQuery(text="x"))
+        lookups = tenant.graph.find("GET", r"/me/mailFolders/[^/]+")
+        assert sorted(c.path for c in lookups) == [
+            "/me/mailFolders/deleteditems",
+            "/me/mailFolders/junkemail",
+        ]
+
+    def test_unresolvable_folder_is_skipped_and_retried(self) -> None:
+        tenant = _spam_trash_tenant()
+        tenant.graph.route(
+            "GET",
+            r"/me/mailFolders/junkemail",
+            {"error": {"code": "ErrorAccessDenied", "message": "denied"}},
+            status=403,
+        )
+        provider = make_outlook_provider(tenant)
+        results = provider.search_emails(EmailQuery(max_results=50))
+        # Trash still excluded; junk cannot be identified so it is kept.
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"} | {
+            f"junk-{i}" for i in range(3)
+        }
+        provider.search_emails(EmailQuery(max_results=50))
+        assert len(tenant.graph.find("GET", r"/me/mailFolders/junkemail")) == 2
 
 
 class TestSearchKqlPath:
@@ -334,6 +458,77 @@ class TestSend:
         assert draft["isDraft"] is True
         assert draft["bccRecipients"][0]["emailAddress"]["address"] == "z@x.com"
         assert not tenant.sent
+
+    def test_draft_with_large_attachment_uses_upload_session(
+        self, provider, tenant, tmp_path: Path
+    ) -> None:
+        """FU-13: the whole file went base64-inline into the create-draft
+        POST, which Graph rejects above 4 MB."""
+        big = tmp_path / "big.bin"
+        big_bytes = bytes(range(256)) * (14 * 1024)  # 3.5 MiB
+        big.write_bytes(big_bytes)
+        small = tmp_path / "small.txt"
+        small.write_bytes(b"hello")
+
+        result = provider.create_draft("a@x.com", "Big", "Body", attachments=[str(big), str(small)])
+        mid = result["message_id"]
+        create = tenant.graph.last("POST", r"/me/mailFolders/[^/]+/messages")
+        assert [a["name"] for a in create.body["attachments"]] == ["small.txt"]
+        session = tenant.graph.last("POST", rf"/me/messages/{mid}/attachments/createUploadSession")
+        assert session.body == {
+            "attachmentItem": {"attachmentType": "file", "name": "big.bin", "size": len(big_bytes)}
+        }
+        puts = tenant.graph.find("PUT", r"/api/.*")
+        assert len(puts) == 2  # chunked
+        assert all("Authorization" not in p.headers for p in puts)
+        stored = {a["name"]: a for a in tenant.attachments[mid]}
+        assert sorted(a["name"] for a in tenant.attachments[mid]) == ["big.bin", "small.txt"]
+        assert base64.b64decode(stored["big.bin"]["contentBytes"]) == big_bytes
+        assert not tenant.sent
+
+    def test_many_small_attachments_spill_to_attachment_endpoint(
+        self, provider, tenant, tmp_path: Path
+    ) -> None:
+        """Individually small files can still push the create body over 4 MB."""
+        paths = []
+        for i in range(3):
+            f = tmp_path / f"part{i}.bin"
+            f.write_bytes(bytes([i]) * (2 * 1024 * 1024))
+            paths.append(str(f))
+        mid = provider.create_draft("a@x.com", "Parts", "Body", attachments=paths)["message_id"]
+        create = tenant.graph.last("POST", r"/me/mailFolders/[^/]+/messages")
+        assert [a["name"] for a in create.body["attachments"]] == ["part0.bin"]
+        assert len(tenant.graph.find("POST", rf"/me/messages/{mid}/attachments")) == 2
+        assert sorted(a["name"] for a in tenant.attachments[mid]) == [
+            "part0.bin",
+            "part1.bin",
+            "part2.bin",
+        ]
+
+    def test_send_with_large_attachment(self, provider, tenant, tmp_path: Path) -> None:
+        big = tmp_path / "big.pdf"
+        big.write_bytes(b"%" * (5 * 1024 * 1024))
+        result = provider.send_message("a@x.com", "Big", "Body", attachments=[str(big)])
+        mid = result["message_id"]
+        assert result["status"] == "sent"
+        paths = [f"{c.method} {c.path}" for c in tenant.graph.calls]
+        upload_done = max(i for i, p in enumerate(paths) if p.startswith("PUT "))
+        assert paths.index(f"POST /me/messages/{mid}/send") > upload_done
+        assert [a["name"] for a in tenant.sent[-1]["attachments"]] == ["big.pdf"]
+
+    def test_failed_upload_removes_draft_and_raises(self, provider, tenant, tmp_path: Path) -> None:
+        tenant.graph.route(
+            "POST",
+            r"/me/messages/[^/]+/attachments/createUploadSession",
+            {"error": {"code": "ErrorQuotaExceeded", "message": "quota"}},
+            status=507,
+        )
+        big = tmp_path / "big.bin"
+        big.write_bytes(b"x" * (4 * 1024 * 1024))
+        with pytest.raises(RuntimeError, match="attachment"):
+            provider.send_message("a@x.com", "Big", "Body", attachments=[str(big)])
+        assert not tenant.sent
+        assert tenant.graph.find("DELETE", r"/me/messages/draft-[^/]+")
 
     def test_forward_prepends_comment_and_keeps_original(self, provider, tenant) -> None:
         result = provider.forward_message("outlook-msg-id-2", "z@x.com", comment="FYI\nsee below")
@@ -503,6 +698,66 @@ class TestBatch:
     def test_empty_batch_makes_no_request(self, provider, tenant) -> None:
         provider.batch_mark_read([])
         assert not tenant.graph.find("POST", r"/\$batch")
+
+
+class TestBatchThrottling:
+    """FU-14: 429 sub-responses were reported as failures, not retried."""
+
+    @pytest.fixture
+    def sleeps(self):
+        with patch("iobox.providers.o365.email._batch_sleep") as sleep:
+            yield sleep
+
+    def test_throttled_item_is_retried_alone(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["1"] = [429, 200]
+        provider.batch_trash(["m0", "m1", "m2"])  # no error
+        posts = tenant.graph.find("POST", r"/\$batch")
+        assert [[r["id"] for r in p.body["requests"]] for p in posts] == [["0", "1", "2"], ["1"]]
+        retried = posts[1].body["requests"][0]
+        assert retried["url"] == "/me/messages/m1/move"
+        assert retried["headers"]["Prefer"] == IMMUTABLE_ID_PREFER
+        sleeps.assert_called_once_with(2.0)  # honours Retry-After
+
+    def test_persistent_throttling_reported_after_bounded_retries(
+        self, provider, tenant, sleeps
+    ) -> None:
+        tenant.batch_status["0"] = 429
+        tenant.batch_status["1"] = 404
+        with pytest.raises(OutlookBatchError) as exc:
+            provider.batch_mark_read(["m0", "m1", "m2"])
+        assert len(tenant.graph.find("POST", r"/\$batch")) == 4  # 1 + 3 retries
+        assert sleeps.call_count == 3
+        assert sorted((f["message_id"], f["status"]) for f in exc.value.failures) == [
+            ("m0", 429),
+            ("m1", 404),
+        ]
+
+    def test_non_throttle_failures_are_not_retried(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["0"] = 503
+        with pytest.raises(OutlookBatchError):
+            provider.batch_trash(["m0"])
+        assert len(tenant.graph.find("POST", r"/\$batch")) == 1
+        sleeps.assert_not_called()
+
+    def test_retry_after_is_capped(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["0"] = [429, 200]
+        tenant.batch_retry_after = "3600"
+        provider.batch_trash(["m0"])
+        (delay,), _ = sleeps.call_args
+        assert 0 < delay <= 30
+
+    def test_missing_retry_after_backs_off(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["0"] = [429, 429, 200]
+        tenant.batch_retry_after = None
+        provider.batch_trash(["m0"])
+        delays = [c.args[0] for c in sleeps.call_args_list]
+        assert len(delays) == 2 and 0 < delays[0] < delays[1]
+
+    def test_retries_stay_within_their_chunk(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["21"] = [429, 200]
+        provider.batch_trash([f"m{i}" for i in range(25)])
+        sizes = [len(c.body["requests"]) for c in tenant.graph.find("POST", r"/\$batch")]
+        assert sizes == [20, 5, 1]
 
 
 def test_fixture_tenant_is_isolated() -> None:

@@ -47,12 +47,13 @@ iobox normalises results across providers, but the underlying services differ. T
 
 ## Outlook
 
-- **Searches every folder** (`/me/messages`: Inbox, Sent, Archive, custom folders — and also Deleted Items and Junk, since `include_spam_trash` isn't applied for Outlook yet).
+- **Searches every folder** (`/me/messages`: Inbox, Sent, Archive, Drafts, custom folders). Deleted Items and Junk Email are excluded unless `include_spam_trash` is set (`--include-spam-trash` on the CLI). With a text/KQL query this exclusion is applied client-side, so iobox pages through extra results (up to 250, or 5 × `max_results`) to fill `max_results`.
 - **Query syntax** is Microsoft Graph `$search` (KQL). Structured filters (from, to, dates, attachments) use `$filter`; Graph can't combine `$search` with `$filter`/`$orderby`, so when both are needed unread/category filters and ordering are applied client-side.
 - **Message IDs are ImmutableIds** (`Prefer: IdType="ImmutableId"` on every Graph request), stable across folder moves.
 - **Categories** map to iobox tags.
+- **Bulk operations** (mark read, archive, trash, tag) use Graph `$batch`. Throttled items (HTTP 429) are retried up to 3 times, honouring `Retry-After` (capped at 30 s); items that still fail are reported together after the whole batch has run.
 - **Incremental sync** (SDK `get_sync_state()` / `get_new_messages()`) uses a Graph delta link on the Inbox; an expired delta link triggers a full re-sync. `iobox save --sync` uses the provider-neutral query window instead.
-- New drafts larger than about 3 MB with attachments may fail (the library only uploads large attachments in chunks to existing drafts).
+- **Attachments** on new drafts and sent messages: small files go in the create request; once they total more than 3 MB the rest are added to the saved draft, files over 3 MB through a chunked upload session. Sending always saves a draft first and then sends it.
 
 | Mode | Scopes |
 |---|---|

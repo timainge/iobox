@@ -18,6 +18,14 @@ All-mail search
 collection (``/me/messages``), which spans every folder (Inbox, Sent,
 Archive, Drafts, Deleted Items, Junk and custom folders).
 
+Unless ``EmailQuery.include_spam_trash`` is set, ``search_emails()`` drops
+messages whose ``parentFolderId`` is the Deleted Items or Junk Email folder.
+The ids of those well-known folders are resolved once per provider. On the
+``$filter`` path the exclusion is sent to Graph as ``parentFolderId ne '...'``
+clauses (not yet verified against a live tenant, so results are also checked
+client-side); on the ``$search`` path -- where Graph forbids ``$filter`` -- it
+is applied client-side, over-fetching pages until ``max_results`` is filled.
+
 Query path selection
 --------------------
 Graph cannot combine ``$search`` with ``$filter`` or ``$orderby`` on message
@@ -35,7 +43,9 @@ from __future__ import annotations
 import html
 import logging
 import mimetypes
+import os
 import re
+import time
 from datetime import datetime
 from typing import Any
 
@@ -46,8 +56,45 @@ logger = logging.getLogger(__name__)
 
 # Graph $batch accepts at most 20 sub-requests per call.
 _BATCH_LIMIT = 20
-# When $search results are filtered client-side, fetch this many candidates.
+# Throttled (429) $batch sub-requests are retried this many times, sleeping
+# for the sub-response's Retry-After (or an exponential backoff), capped.
+_BATCH_MAX_RETRIES = 3
+_BATCH_MAX_SLEEP = 30.0
+_batch_sleep = time.sleep  # indirection so tests can patch the wait out
+# When $search results are filtered client-side, examine at least this many
+# candidates (or 5 x max_results, whichever is larger) before giving up.
 _CLIENT_FILTER_FETCH = 250
+# Attachments are sent inline in the create-draft POST while their combined
+# size stays within this budget (Graph caps request bodies at 4 MB and base64
+# adds a third); the rest are added to the saved draft afterwards, files over
+# 3 MB through an upload session (python-o365's UPLOAD_SIZE_LIMIT_SIMPLE).
+_INLINE_ATTACHMENT_BUDGET = 3 * 1024 * 1024
+# Attachment metadata (base ``attachment`` type properties; no contentBytes).
+_ATTACHMENT_SELECT = "id,name,contentType,size,isInline"
+# Well-known folders excluded from search unless include_spam_trash is set.
+_SPAM_TRASH_FOLDERS = ("deleteditems", "junkemail")
+# Message properties needed for metadata-only search results (and for
+# client-side filtering); the body is not downloaded.
+_SEARCH_SELECT = ",".join(
+    [
+        "id",
+        "conversationId",
+        "subject",
+        "from",
+        "sender",
+        "toRecipients",
+        "ccRecipients",
+        "bccRecipients",
+        "replyTo",
+        "receivedDateTime",
+        "bodyPreview",
+        "categories",
+        "isRead",
+        "isDraft",
+        "hasAttachments",
+        "parentFolderId",
+    ]
+)
 # Error codes Graph uses (besides HTTP 410) for an unusable delta token.
 _DELTA_RESYNC_CODES = {"syncstatenotfound", "syncstateinvalid", "resyncrequired"}
 
@@ -85,6 +132,17 @@ def _graph_error_code(exc: BaseException) -> str:
         return ""
 
 
+def _retry_after_seconds(sub_response: dict[str, Any], attempt: int) -> float:
+    """Delay before retrying a throttled ``$batch`` sub-request (capped)."""
+    headers = sub_response.get("headers") or {}
+    raw = next((v for k, v in headers.items() if str(k).lower() == "retry-after"), None)
+    try:
+        delay = float(raw) if raw is not None else float(2**attempt)
+    except (TypeError, ValueError):
+        delay = float(2**attempt)
+    return min(max(delay, 0.0), _BATCH_MAX_SLEEP)
+
+
 def _kql_term(prop: str, value: str) -> str:
     """Render ``prop:value``, quoting the value when it contains spaces etc."""
     if _KQL_NEEDS_QUOTES.search(value):
@@ -111,11 +169,15 @@ class _SearchQuery:
     ``get_messages`` only needs ``as_params()``.
     """
 
-    def __init__(self, kql: str) -> None:
+    def __init__(self, kql: str, select: str | None = None) -> None:
         self.kql = kql
+        self.select = select
 
     def as_params(self) -> dict[str, str]:
-        return {"$search": _search_param(self.kql)}
+        params = {"$search": _search_param(self.kql)}
+        if self.select:
+            params["$select"] = self.select
+        return params
 
     @property
     def has_selects(self) -> bool:
@@ -127,6 +189,27 @@ class _SearchQuery:
 
     def __repr__(self) -> str:
         return f"_SearchQuery({self.kql!r})"
+
+
+class _ParamsQuery:
+    """Query object wrapping pre-rendered OData params (``$filter``/``$select``)."""
+
+    def __init__(self, params: dict[str, str]) -> None:
+        self.params = params
+
+    def as_params(self) -> dict[str, str]:
+        return dict(self.params)
+
+    @property
+    def has_selects(self) -> bool:
+        return "$select" in self.params
+
+    @property
+    def has_expands(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return f"_ParamsQuery({self.params!r})"
 
 
 class OutlookProvider(EmailProvider):
@@ -143,6 +226,8 @@ class OutlookProvider(EmailProvider):
         self._mode = mode or "standard"
         self._account: Any | None = None  # O365.Account instance
         self._mailbox: Any | None = None  # O365.mailbox.MailBox instance
+        # Folder ids of Deleted Items / Junk Email (resolved lazily, cached).
+        self._spam_trash_ids: frozenset[str] | None = None
 
     # ------------------------------------------------------------------
     # Internal lazy-access properties
@@ -172,9 +257,18 @@ class OutlookProvider(EmailProvider):
         python-o365 only populates ``Message.attachments`` when asked to
         download them, and its attachment objects drop ``contentType``, so
         the attachment list is read straight from Graph.
+
+        Only metadata is requested (``$select`` of base ``attachment``
+        properties), so file content is not downloaded — that happens in
+        :meth:`download_attachment`. ``contentId`` exists only on the derived
+        ``fileAttachment`` type and cannot be selected on the collection, so
+        it is fetched per *inline* attachment (typically small images).
         """
         con = self._acct.con
-        resp = con.get(self._mb.build_url(f"/messages/{message_id}/attachments"))
+        resp = con.get(
+            self._mb.build_url(f"/messages/{message_id}/attachments"),
+            params={"$select": _ATTACHMENT_SELECT},
+        )
         infos: list[AttachmentInfo] = []
         for a in resp.json().get("value", []) if resp else []:
             name = a.get("name") or ""
@@ -182,6 +276,8 @@ class OutlookProvider(EmailProvider):
                 mimetypes.guess_type(name)[0] or "application/octet-stream"
             )
             content_id = a.get("contentId")
+            if a.get("isInline") and not content_id and a.get("id"):
+                content_id = self._attachment_content_id(message_id, a["id"])
             if content_id:
                 content_id = content_id.strip().strip("<>")
             infos.append(
@@ -195,6 +291,17 @@ class OutlookProvider(EmailProvider):
                 )
             )
         return infos
+
+    def _attachment_content_id(self, message_id: str, attachment_id: str) -> str | None:
+        """Return the ``contentId`` of one attachment (``None`` if unavailable)."""
+        try:
+            resp = self._acct.con.get(
+                self._mb.build_url(f"/messages/{message_id}/attachments/{attachment_id}")
+            )
+            return (resp.json().get("contentId") if resp else None) or None
+        except Exception as exc:
+            logger.warning("Could not read contentId of attachment %r: %s", attachment_id, exc)
+            return None
 
     def _message_to_email_data(
         self,
@@ -259,11 +366,43 @@ class OutlookProvider(EmailProvider):
 
         return data
 
-    def _build_outlook_filter(self, query: EmailQuery) -> Any | None:
+    def _spam_trash_folder_ids(self) -> frozenset[str]:
+        """Return the ids of the Deleted Items and Junk Email folders.
+
+        Resolved via ``GET /me/mailFolders/{well-known name}`` and cached for
+        the provider's lifetime. A folder that cannot be resolved (missing,
+        access denied, transient error) is logged and left out -- its messages
+        are then not excluded -- and the lookup is retried on the next search.
+        """
+        if self._spam_trash_ids is not None:
+            return self._spam_trash_ids
+        con = self._acct.con
+        ids: set[str] = set()
+        complete = True
+        for name in _SPAM_TRASH_FOLDERS:
+            folder_id = None
+            try:
+                resp = con.get(self._mb.build_url(f"/mailFolders/{name}"), params={"$select": "id"})
+                folder_id = resp.json().get("id") if resp else None
+            except Exception as exc:
+                logger.warning("Could not resolve Outlook folder %r: %s", name, exc)
+            if folder_id:
+                ids.add(str(folder_id))
+            else:
+                complete = False
+        result = frozenset(ids)
+        if complete:
+            self._spam_trash_ids = result
+        return result
+
+    def _build_outlook_filter(
+        self, query: EmailQuery, exclude_folder_ids: frozenset[str] = frozenset()
+    ) -> Any | None:
         """Build an OData ``$filter`` with python-o365's ``QueryBuilder``.
 
         Used when no free-text (``query.text``) is present. Returns a
         ``CompositeFilter`` (or ``None`` when the query has no conditions).
+        ``exclude_folder_ids`` adds ``parentFolderId ne '...'`` clauses.
         """
         from O365.utils.query import CompositeFilter, IterableFilter, LogicalFilter
 
@@ -306,6 +445,9 @@ class OutlookProvider(EmailProvider):
             parts.append(
                 CompositeFilter(filters=IterableFilter("any", "categories", inner, item_name="c"))
             )
+
+        for folder_id in sorted(exclude_folder_ids):
+            parts.append(qb.unequal("parentFolderId", _odata_str(folder_id)))
 
         if not parts:
             return None
@@ -392,24 +534,43 @@ class OutlookProvider(EmailProvider):
     # ------------------------------------------------------------------
 
     def search_emails(self, query: EmailQuery) -> list[EmailData]:
-        """Search all mail folders and return metadata-only results."""
-        limit = query.max_results
-        client_filter = False
-        q: Any
-        if query.raw_query:
-            q = _SearchQuery(query.raw_query)
-        elif query.text:
-            q = _SearchQuery(self._build_outlook_search(query))
-            client_filter = query.is_unread is not None or bool(query.label)
-            if client_filter:
-                limit = max(limit, _CLIENT_FILTER_FETCH)
-        else:
-            q = self._build_outlook_filter(query)
+        """Search mail folders and return metadata-only results.
 
-        messages = self._mb.get_messages(limit=limit, query=q)
+        All folders are searched; Deleted Items and Junk Email are excluded
+        unless ``query.include_spam_trash`` is set.
+        """
+        excluded = frozenset() if query.include_spam_trash else self._spam_trash_folder_ids()
+        limit = query.max_results
+        batch: int | None = None
+        match_fields = False  # apply is_unread / label client-side
+        q: Any
+        if query.raw_query or query.text:
+            kql = query.raw_query or self._build_outlook_search(query)
+            q = _SearchQuery(kql, select=_SEARCH_SELECT)
+            # $search cannot be combined with $filter, so unread/label (text
+            # path only) and the folder exclusion are applied here instead.
+            match_fields = not query.raw_query and (
+                query.is_unread is not None or bool(query.label)
+            )
+            if match_fields or excluded:
+                # Over-fetch: page through results until max_results matches
+                # are found or a bounded number of candidates is examined.
+                limit = max(_CLIENT_FILTER_FETCH, query.max_results * 5)
+                batch = min(max(query.max_results * 2, 50), 999)
+        else:
+            f = self._build_outlook_filter(query, excluded)
+            params = dict(f.as_params()) if f is not None else {}
+            params["$select"] = _SEARCH_SELECT
+            q = _ParamsQuery(params)
+
+        messages = self._mb.get_messages(limit=limit, query=q, batch=batch)
         results: list[EmailData] = []
         for msg in messages:
-            if client_filter and not self._client_side_match(msg, query):
+            # The $filter path excludes these folders server-side as well;
+            # re-checking is free and guards against Graph ignoring it.
+            if excluded and msg.folder_id in excluded:
+                continue
+            if match_fields and not self._client_side_match(msg, query):
                 continue
             results.append(self._message_to_email_data(msg, include_body=False))
             if len(results) >= query.max_results:
@@ -501,7 +662,12 @@ class OutlookProvider(EmailProvider):
         bcc: str | None,
         content_type: str,
         attachments: list[str] | None,
-    ) -> Any:
+    ) -> tuple[Any, list[str]]:
+        """Build an unsaved message.
+
+        Returns the message and the attachment paths that did not fit in the
+        create request; pass both to :meth:`_save_new_draft`.
+        """
         msg = self._mb.new_message()
         msg.to.add(self._split_addresses(to))
         if cc:
@@ -511,9 +677,53 @@ class OutlookProvider(EmailProvider):
         msg.subject = subject
         msg.body_type = "html" if content_type.lower() == "html" else "text"
         msg.body = body
-        if attachments:
-            msg.attachments.add(list(attachments))
-        return msg
+        inline: list[str] = []
+        deferred: list[str] = []
+        used = 0
+        for path in attachments or []:
+            size = os.path.getsize(path)
+            if used + size <= _INLINE_ATTACHMENT_BUDGET:
+                inline.append(path)
+                used += size
+            else:
+                deferred.append(path)
+        if inline:
+            msg.attachments.add(inline)
+        return msg, deferred
+
+    def _save_new_draft(self, msg: Any, deferred: list[str]) -> None:
+        """Save a composed message as a draft, then attach ``deferred`` files.
+
+        python-o365 only uses upload sessions (needed above 3 MB) for
+        messages that already exist, so large or overflowing attachments are
+        added after the draft is created: each goes to
+        ``POST /messages/{id}/attachments`` or, when over 3 MB, through
+        ``createUploadSession`` + chunked ``PUT``. If that fails the draft
+        is deleted and ``RuntimeError`` raised.
+        """
+        if not msg.save_draft():
+            raise RuntimeError("Failed to save draft")
+        if not deferred:
+            return
+        # The create POST already stored these, but python-o365 leaves them
+        # flagged as not-on-cloud, so they would be uploaded a second time.
+        for attachment in msg.attachments:
+            attachment.on_cloud = True
+        msg.attachments.add(deferred)
+        error: str = ""
+        try:
+            # save_draft() would call this too but ignores its result.
+            ok = msg.attachments._update_attachments_to_cloud()
+        except Exception as exc:
+            ok, error = False, f": {exc}"
+        if not ok:
+            draft_id = msg.object_id
+            try:
+                msg.delete()
+            except Exception as exc:
+                logger.warning("Could not delete incomplete draft %r: %s", draft_id, exc)
+            raise RuntimeError(f"Failed to upload attachments to draft {draft_id!r}{error}")
+        msg._track_changes.discard("attachments")
 
     def send_message(
         self,
@@ -529,11 +739,11 @@ class OutlookProvider(EmailProvider):
 
         The message is saved as a draft first and then sent, so the returned
         ``message_id`` is a real immutable ID (python-o365's direct
-        ``sendMail`` path only yields the placeholder ``"sent_message"``).
+        ``sendMail`` path only yields the placeholder ``"sent_message"``) and
+        attachments over 3 MB can be uploaded to the draft in chunks.
         """
-        msg = self._compose(to, subject, body, cc, bcc, content_type, attachments)
-        if not msg.save_draft():
-            raise RuntimeError("Failed to create message for sending")
+        msg, deferred = self._compose(to, subject, body, cc, bcc, content_type, attachments)
+        self._save_new_draft(msg, deferred)
         if not msg.send():
             raise RuntimeError(f"Failed to send message: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "sent"}
@@ -572,9 +782,8 @@ class OutlookProvider(EmailProvider):
         attachments: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a new draft message in the Drafts folder."""
-        msg = self._compose(to, subject, body, cc, bcc, content_type, attachments)
-        if not msg.save_draft():
-            raise RuntimeError("Failed to save draft")
+        msg, deferred = self._compose(to, subject, body, cc, bcc, content_type, attachments)
+        self._save_new_draft(msg, deferred)
         return {"message_id": msg.object_id, "status": "draft"}
 
     def list_drafts(self, max_results: int = 10) -> list[dict[str, Any]]:
@@ -628,7 +837,10 @@ class OutlookProvider(EmailProvider):
 
         Each sub-request gets the ImmutableId ``Prefer`` header (outer request
         headers are not inherited by sub-requests). Every sub-response status
-        is checked; failures are collected across all chunks and raised
+        is checked. Throttled (429) sub-requests are re-sent on their own, up
+        to ``_BATCH_MAX_RETRIES`` times, after waiting for the largest
+        ``Retry-After`` among them (capped at ``_BATCH_MAX_SLEEP`` seconds).
+        Remaining failures are collected across all chunks and raised
         together as :class:`OutlookBatchError` once every chunk has run.
 
         Args:
@@ -660,32 +872,49 @@ class OutlookProvider(EmailProvider):
                     headers["Prefer"] = f"{prefer}, {IMMUTABLE_ID_PREFER}"
                 chunk.append({**req, "headers": headers})
 
-            resp = con.post(url, data={"requests": chunk})
-            responses = resp.json().get("responses", []) if resp else []
-            seen = set()
-            for r in responses:
-                seen.add(r.get("id"))
-                status = int(r.get("status", 0))
-                if not 200 <= status < 300:
-                    body = r.get("body") or {}
-                    err = body.get("error", {}) if isinstance(body, dict) else {}
-                    failures.append(
-                        {
-                            "message_id": by_req_id.get(r.get("id"), r.get("id")),
-                            "status": status,
-                            "error": err.get("message") or err.get("code") or "",
-                        }
-                    )
-            for req in chunk:
-                if req["id"] not in seen:
-                    failures.append(
-                        {
-                            "message_id": by_req_id.get(req["id"], req["id"]),
-                            "status": 0,
-                            "error": "no response in $batch reply",
-                        }
-                    )
-            all_responses.extend(responses)
+            pending = chunk
+            for attempt in range(_BATCH_MAX_RETRIES + 1):
+                resp = con.post(url, data={"requests": pending})
+                responses = resp.json().get("responses", []) if resp else []
+                seen = set()
+                throttled: set[str] = set()
+                delay = 0.0
+                for r in responses:
+                    seen.add(r.get("id"))
+                    status = int(r.get("status", 0))
+                    if status == 429 and attempt < _BATCH_MAX_RETRIES:
+                        throttled.add(r.get("id"))
+                        delay = max(delay, _retry_after_seconds(r, attempt))
+                        continue
+                    all_responses.append(r)
+                    if not 200 <= status < 300:
+                        body = r.get("body") or {}
+                        err = body.get("error", {}) if isinstance(body, dict) else {}
+                        failures.append(
+                            {
+                                "message_id": by_req_id.get(r.get("id"), r.get("id")),
+                                "status": status,
+                                "error": err.get("message") or err.get("code") or "",
+                            }
+                        )
+                for req in pending:
+                    if req["id"] not in seen:
+                        failures.append(
+                            {
+                                "message_id": by_req_id.get(req["id"], req["id"]),
+                                "status": 0,
+                                "error": "no response in $batch reply",
+                            }
+                        )
+                if not throttled:
+                    break
+                logger.info(
+                    "Outlook $batch: %d sub-request(s) throttled; retrying in %.1fs",
+                    len(throttled),
+                    delay,
+                )
+                _batch_sleep(delay)
+                pending = [req for req in pending if req["id"] in throttled]
 
         if failures:
             raise OutlookBatchError(failures, total=len(requests))
