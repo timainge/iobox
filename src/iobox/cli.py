@@ -1226,7 +1226,7 @@ def space_add(
     account: str = typer.Argument(..., help="Account email address"),
     email: bool = typer.Option(False, "--email", help="Enable email scope"),
     calendar: bool = typer.Option(False, "--calendar", help="Enable calendar scope"),
-    drive: bool = typer.Option(False, "--drive", help="Enable drive/storage scope (Gmail only)"),
+    drive: bool = typer.Option(False, "--drive", help="Enable drive scope (Google only)"),
     read: bool = typer.Option(False, "--read", help="Use read-only mode (default: standard)"),
 ) -> None:
     """Add a service session to the active space (triggers OAuth immediately)."""
@@ -1256,7 +1256,8 @@ def space_add(
 
     if drive and service == "o365":
         typer.echo(
-            "Drive scope is not yet supported for o365. Remove --drive or use --service google.",
+            "Drive scope is not yet supported for o365. "
+            "Remove --drive, or add a google service instead.",
             err=True,
         )
         raise typer.Exit(1)

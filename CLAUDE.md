@@ -223,10 +223,10 @@ iobox events delete EVENT_ID
 iobox events rsvp EVENT_ID --response accepted
 
 # Files
-iobox files list --query "Q4 report" --provider my-drive
+iobox files list --query "Q4 report" --provider you-gmail-drive
 iobox files get FILE_ID
 iobox files save FILE_ID -o ./output
-iobox files upload ./report.pdf --folder-id FOLDER_ID
+iobox files upload ./report.pdf --parent-id FOLDER_ID
 iobox files delete FILE_ID
 iobox files mkdir "New Folder"
 
