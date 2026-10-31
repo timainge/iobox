@@ -96,7 +96,7 @@ iobox search -q "from:boss@example.com" -d 7
 iobox space create personal
 
 # Add Gmail with messages, calendar, and drive access
-iobox space add gmail you@gmail.com --messages --calendar --drive --read
+iobox space add google you@gmail.com --email --calendar --drive --read
 
 # Check status
 iobox space status
@@ -113,7 +113,7 @@ pip install 'iobox[outlook]'
 export OUTLOOK_CLIENT_ID=<your Azure app client ID>
 export OUTLOOK_TENANT_ID=<your tenant ID or "common">
 
-iobox space add outlook you@company.com --messages --calendar --read
+iobox space add o365 you@company.com --email --calendar --read
 ```
 
 ### MCP server (Claude Desktop)
@@ -220,8 +220,8 @@ iobox space use NAME
 iobox space status
 
 # Manage service sessions
-iobox space add gmail you@gmail.com --messages --calendar --drive --read
-iobox space add outlook you@company.com --messages --calendar
+iobox space add google you@gmail.com --email --calendar --drive --read
+iobox space add o365 you@company.com --email --calendar
 iobox space login 1        # re-authenticate by slot number
 iobox space logout 1       # revoke token, keep config
 iobox space remove 1       # remove slot entirely

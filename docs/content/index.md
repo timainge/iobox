@@ -6,37 +6,48 @@ hide:
 
 # iobox
 
-Your Gmail is in one place. Your Outlook calendar is in another. Your Google Drive, Files on your laptop and OneDrive files are somewhere else entirely.
+Your Gmail is in one place. Your Outlook calendar is in another. Your Google Drive and OneDrive files are somewhere else entirely.
 
 **iobox puts them in the same box.**
 
-One workspace fans out a single query across every account and service simultaneously — email, calendar events, and files — and returns clean Markdown. Use it from the CLI or connect it to Claude Desktop as an MCP server so your AI assistant can search your inbox directly.
+Define a **workspace** once — every account and service you care about — and iobox fans a single query out across all of them in parallel: email, calendar events, and files. Results come back as consistent, structured data or clean Markdown, ready for you, your scripts, or your AI assistant.
+
+[What is iobox? &rarr;](get-started/index.md) &nbsp; [Quick start &rarr;](get-started/quickstart.md)
 
 ---
 
+## Three ways to use it
+
+Everything runs on the same workspace config and the same OAuth tokens, so you can set up once and use all three.
+
 <div class="card-grid">
-<a class="card" href="getting-started/installation/">
-<p class="card-title">Installation</p>
-<p class="card-desc">Install iobox, create a workspace, and authenticate with Google or Microsoft 365.</p>
-</a>
-<a class="card" href="getting-started/quickstart/">
-<p class="card-title">Quick Start</p>
-<p class="card-desc">Up and running in 5 minutes — search email, list events, and save results as Markdown.</p>
-</a>
-<a class="card" href="workspace-guide/">
-<p class="card-title">Workspaces</p>
-<p class="card-desc">A workspace holds multiple service accounts. One query fans out to all of them at once.</p>
-</a>
-<a class="card" href="providers/gmail/">
-<p class="card-title">Providers</p>
-<p class="card-desc">OAuth setup and configuration for Gmail, Outlook, Google Calendar, Google Drive, and OneDrive.</p>
-</a>
 <a class="card" href="mcp/">
-<p class="card-title">MCP Server</p>
-<p class="card-desc">Let Claude Desktop search your inbox, read your calendar, and browse your files directly.</p>
+<p class="card-title">MCP server</p>
+<p class="card-desc">Give Claude Desktop, Cursor, or any MCP host direct access to your inbox, calendar, and files — across every account at once.</p>
 </a>
-<a class="card" href="cli/events/">
-<p class="card-title">CLI Reference</p>
-<p class="card-desc">Every command — email, events, files, space management — with options and examples.</p>
+<a class="card" href="cli/">
+<p class="card-title">CLI</p>
+<p class="card-desc">Search, save, and act on email, events, and files from the terminal. Export anything to Markdown with YAML frontmatter.</p>
+</a>
+<a class="card" href="sdk/">
+<p class="card-title">Python SDK</p>
+<p class="card-desc">Import the workspace and provider layer directly to build your own agents, pipelines, and automations.</p>
+</a>
+</div>
+
+## Start here
+
+<div class="card-grid">
+<a class="card" href="get-started/concepts/">
+<p class="card-title">Concepts</p>
+<p class="card-desc">Workspaces, service sessions, slots, resources, and access modes — the five ideas behind everything else.</p>
+</a>
+<a class="card" href="get-started/installation/">
+<p class="card-title">Installation</p>
+<p class="card-desc">Install iobox and the optional extras for Microsoft 365, MCP, AI summaries, and semantic search.</p>
+</a>
+<a class="card" href="get-started/connect-google/">
+<p class="card-title">Connect your accounts</p>
+<p class="card-desc">One-time OAuth setup for Google (Gmail, Calendar, Drive) and Microsoft 365 (Outlook, Calendar, OneDrive).</p>
 </a>
 </div>

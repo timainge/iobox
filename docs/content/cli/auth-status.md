@@ -1,75 +1,76 @@
 # auth-status
 
-Check the status of Gmail API authentication and display the Gmail profile for the authenticated account.
+Show authentication status for the single-account email provider used by the top-level email commands.
+
+!!! warning "Deprecated"
+    `auth-status` prints a deprecation notice. For workspace sessions use [`iobox space status`](space.md#status).
+
+!!! note "Single account, not the workspace"
+    `auth-status` does not look at your workspace or `iobox space` sessions. It reports on the one mailbox chosen by the global options `--provider gmail|outlook` and `--account NAME` (or `IOBOX_PROVIDER` / `IOBOX_ACCOUNT`), which go **before** the command name. Gmail tokens are read from `$CREDENTIALS_DIR/tokens/NAME/token_{readonly|standard}.json`; `CREDENTIALS_DIR` defaults to the current directory. Outlook currently ignores `--account` and always reports on the `default` token directory. See [CLI overview](index.md) for global options.
+
+**Access mode:** available in all modes (`readonly`, `standard`, `dangerous`).
 
 ## Syntax
 
 ```
-iobox auth-status
+iobox [--provider gmail|outlook] [--account NAME] [--mode MODE] auth-status
 ```
+
+No command options.
 
 ## Description
 
-This command checks whether valid credentials exist and displays:
+Always prints the provider, access mode, and account name. Then:
 
-- Whether authentication is active
-- Whether the `credentials.json` file exists and its path
-- Whether the `token.json` file exists and its path
-- Token expiry and refresh token status (if token file exists)
-- Gmail profile: email address, total messages, and total threads
+**Gmail** (default):
 
-If no credentials file is found, step-by-step setup instructions are printed.
+- Whether a valid token exists (`Authenticated`)
+- The OAuth client file (`credentials.json`, or `GOOGLE_APPLICATION_CREDENTIALS`) and whether it exists
+- The token file for the current mode's tier and whether it exists; expiry and refresh-token status if it does
+- Gmail profile (email address, message and thread counts) when a token works
+- Google Cloud setup steps if the credentials file is missing
+
+The readonly mode reads `token_readonly.json` but also accepts an existing `token_standard.json`.
+
+**Outlook** (`--provider outlook`):
+
+- Whether a valid token exists, whether `OUTLOOK_CLIENT_ID` is set, the tenant ID, and the token file path
+- Azure app setup steps if `OUTLOOK_CLIENT_ID` is not set
+- Profile email and display name when authenticated
 
 ## Example Output
 
-Authenticated:
-
 ```
+Note: `auth-status` is deprecated. Use `iobox space status` instead.
+
+
 Authentication Status
 -------------------
+Provider: gmail
+Access mode: standard
+Account: default
 Authenticated: True
 Credentials file exists: True
-Credentials path: /home/user/credentials.json
+Credentials path: /home/user/iobox/credentials.json
 Token file exists: True
-Token path: /home/user/token.json
+Token path: /home/user/iobox/tokens/default/token_standard.json
 Token expired: False
 Has refresh token: True
 
 Gmail Profile
 -------------------
 Email: you@example.com
-Messages: 12,345
+Emails: 12,345
 Threads: 9,876
-```
-
-Not authenticated (missing credentials):
-
-```
-Authentication Status
--------------------
-Authenticated: False
-Credentials file exists: False
-Credentials path: /home/user/credentials.json
-Token file exists: False
-Token path: /home/user/token.json
-
-To set up Google Cloud OAuth 2.0 credentials:
-1. Go to https://console.cloud.google.com/
-2. Create a project or select an existing one
-3. Navigate to APIs & Services > Credentials
-4. Click 'Create Credentials' > 'OAuth client ID'
-5. Choose 'Desktop app' as application type
-6. Download the JSON file and save it as 'credentials.json' in the project root
 ```
 
 ## Troubleshooting
 
-If the token has expired or access was revoked:
-
-1. Delete `token.json`
-2. Run any iobox command — a new OAuth flow will be triggered automatically
+If the token has expired or access was revoked, delete the token file shown under `Token path` and run any email command; the OAuth flow starts again.
 
 ## Related
 
-- [Authentication](../getting-started/authentication.md) — full OAuth documentation
-- [Installation](../getting-started/installation.md) — credential setup instructions
+- [`space`](space.md) — workspace sessions and their auth status
+- [Connect Google](../get-started/connect-google.md)
+- [Connect Microsoft](../get-started/connect-microsoft.md)
+- [Configuration](../reference/configuration.md) — `CREDENTIALS_DIR` and other environment variables

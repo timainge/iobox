@@ -48,31 +48,47 @@ extra_javascript:
   - js/mermaid-init.js
 
 # ── Navigation ───────────────────────────────────────────
+# Top-level sections render as topbar tabs; their children fill the sidebar.
 nav:
   - iobox: index.md
-  - Guide:
-    - Getting Started:
-      - Installation: getting-started/installation.md
-      - Authentication: getting-started/authentication.md
-      - Quick Start: getting-started/quickstart.md
-    - Workspace: workspace-guide.md
-    - Providers:
-      - Gmail: providers/gmail.md
-      - Outlook: providers/outlook.md
-      - Google Calendar: providers/google-calendar.md
-      - Google Drive: providers/google-drive.md
-    - MCP Server: mcp.md
-  - Reference:
-    - CLI Reference:
-      - events: cli/events.md
-      - files: cli/files.md
+  - Get Started:
+    - What is iobox?: get-started/index.md
+    - Concepts: get-started/concepts.md
+    - Installation: get-started/installation.md
+    - Connect Google: get-started/connect-google.md
+    - Connect Microsoft 365: get-started/connect-microsoft.md
+    - Quick Start: get-started/quickstart.md
+  - MCP Server:
+    - Overview: mcp/index.md
+    - Configuration: mcp/configuration.md
+    - Multi-account: mcp/multi-account.md
+    - Tool Reference: mcp/tools.md
+    - Troubleshooting: mcp/troubleshooting.md
+    - Local Development: mcp/local-development.md
+  - CLI:
+    - Overview: cli/index.md
+    - Workspaces:
       - space: cli/space.md
+    - Email:
       - search: cli/search.md
       - save: cli/save.md
       - send: cli/send.md
       - forward: cli/forward.md
+      - Drafts: cli/drafts.md
       - label: cli/label.md
       - trash: cli/trash.md
-      - Drafts: cli/drafts.md
       - auth-status: cli/auth-status.md
-    - Integrations: integrations.md
+    - Calendar:
+      - events: cli/events.md
+    - Files:
+      - files: cli/files.md
+  - SDK:
+    - Overview: sdk/index.md
+    - Workspace: sdk/workspace.md
+    - Providers: sdk/providers.md
+    - Types: sdk/types.md
+    - Processing: sdk/processing.md
+  - Reference:
+    - Configuration: reference/configuration.md
+    - Output Format: reference/output-format.md
+    - Provider Behaviour: reference/providers.md

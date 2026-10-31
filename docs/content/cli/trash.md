@@ -1,11 +1,16 @@
 # trash
 
-Move messages to trash or restore them from trash. Supports single message and batch modes.
+Move emails to trash or restore them from trash. Supports single message and batch modes.
+
+!!! note "Single account, not the workspace"
+    `trash` does not use your workspace or `iobox space` sessions. It acts on one mailbox chosen by the global options `--provider gmail|outlook` and `--account NAME` (or `IOBOX_PROVIDER` / `IOBOX_ACCOUNT`), which go **before** the command name. Gmail tokens are read from `$CREDENTIALS_DIR/tokens/NAME/token_standard.json`; `CREDENTIALS_DIR` defaults to the current directory. Outlook currently ignores `--account` and always uses the `default` token directory. See [CLI overview](index.md) for global options.
+
+**Access mode:** `dangerous` only. Run as `iobox --mode dangerous trash ...` or set `IOBOX_MODE=dangerous`.
 
 ## Syntax
 
 ```
-iobox trash [OPTIONS]
+iobox --mode dangerous [--provider gmail|outlook] [--account NAME] trash [OPTIONS]
 ```
 
 ## Options
@@ -14,34 +19,35 @@ iobox trash [OPTIONS]
 |---|---|---|---|---|
 | `--message-id` | | TEXT | `None` | Message ID for single message mode |
 | `--query` | `-q` | TEXT | `None` | Search query for batch mode |
-| `--untrash` | | FLAG | `False` | Restore from trash instead of trashing |
-| `--days` | `-d` | INT | `7` | Number of days back to search |
-| `--max-results` | `-m` | INT | `10` | Maximum number of messages in batch mode |
+| `--untrash` | | FLAG | `False` | Restore from trash instead of trashing (Outlook restores to the Inbox) |
+| `--days` | `-d` | INT | `7` | Number of days back to search (batch mode) |
+| `--max-results` | `-m` | INT | `10` | Maximum number of emails in batch mode |
 
-One of `--message-id` or `--query` is required.
+One of `--message-id` or `--query` is required; `--message-id` wins if both are given.
 
-!!! warning "Batch trash requires confirmation"
-    When using `--query`, iobox will show how many messages will be trashed and
-    ask for confirmation before proceeding.
+!!! warning "Batch mode asks for confirmation"
+    With `--query`, iobox shows how many emails matched and asks before trashing or restoring them. Single mode does not prompt. Outlook moves messages to Deleted Items.
+
+To restore with `--query`, the search must reach trashed mail (e.g. Gmail `in:trash`).
 
 ## Examples
 
-Trash a single message:
+Trash one message:
 
 ```bash
-iobox trash --message-id 18e4a2b3c1d5f6a7
+iobox --mode dangerous trash --message-id 18e4a2b3c1d5f6a7
 ```
 
-Restore a message from trash:
+Restore it:
 
 ```bash
-iobox trash --message-id 18e4a2b3c1d5f6a7 --untrash
+iobox --mode dangerous trash --message-id 18e4a2b3c1d5f6a7 --untrash
 ```
 
-Trash all emails from a spam sender in the last 30 days:
+Trash everything from a sender in the last 30 days:
 
 ```bash
-iobox trash -q "from:spam@example.com" -d 30
+iobox --mode dangerous trash -q "from:spam@example.com" -d 30
 ```
 
 ## Example Output
@@ -52,14 +58,14 @@ Single mode:
 Trashed message 18e4a2b3c1d5f6a7
 ```
 
-Batch mode (with confirmation prompt):
+Batch mode:
 
 ```
-Are you sure you want to trash 5 message(s)? [y/N]: y
-Trashed 5 message(s)
+Are you sure you want to trash 5 email(s)? [y/N]: y
+Trashed 5 email(s)
 ```
 
-Restore mode:
+Restore:
 
 ```
 Restored message 18e4a2b3c1d5f6a7
@@ -68,4 +74,4 @@ Restored message 18e4a2b3c1d5f6a7
 ## Related Commands
 
 - [`search`](search.md) — find message IDs
-- [`label`](label.md) — modify labels without trashing
+- [`label`](label.md) — archive or relabel without trashing
