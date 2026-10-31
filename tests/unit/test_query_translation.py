@@ -274,7 +274,10 @@ class TestOutlookPathSelection:
         assert "$filter" not in p and "$orderby" not in p
 
     def test_no_text_uses_filter_path(self, outlook):
-        p = self._params(outlook, EmailQuery(from_addr="alice@example.com", is_unread=True))
+        p = self._params(
+            outlook,
+            EmailQuery(from_addr="alice@example.com", is_unread=True, include_spam_trash=True),
+        )
         assert "$search" not in p
         assert (
             p["$filter"] == "from/emailAddress/address eq 'alice@example.com' and isRead eq false"
@@ -285,7 +288,7 @@ class TestOutlookPathSelection:
         assert p["$search"] == '"custom:kql"'
 
     def test_empty_query_has_neither(self, outlook):
-        p = self._params(outlook, EmailQuery())
+        p = self._params(outlook, EmailQuery(include_spam_trash=True))
         assert "$search" not in p and "$filter" not in p
 
 

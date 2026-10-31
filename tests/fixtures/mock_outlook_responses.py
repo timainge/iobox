@@ -37,7 +37,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
@@ -304,6 +304,14 @@ def graph_file_attachment(
 
 _ID = r"(?P<id>[^/]+)"
 
+# Real Graph reports ``parentFolderId`` as an opaque folder id, never the
+# well-known name; the fake resolves these names (case-insensitively) via
+# ``GET /me/mailFolders/{name}``. Other folders keep their name as their id.
+WELL_KNOWN_FOLDER_IDS: dict[str, str] = {
+    "deleteditems": "AAMkFolderDeletedItems",
+    "junkemail": "AAMkFolderJunkEmail",
+}
+
 
 class FakeOutlookTenant:
     """In-memory Graph mailbox for ``/me/...`` mail endpoints.
@@ -337,6 +345,7 @@ class FakeOutlookTenant:
     def _install_routes(self) -> None:
         g = self.graph
         g.route("GET", r"/me/messages", self._list_all)
+        g.route("GET", r"/me/mailFolders/(?P<folder>[^/]+)", self._get_folder)
         g.route("GET", r"/me/mailFolders/(?P<folder>[^/]+)/messages", self._list_folder)
         g.route("GET", rf"/me/messages/{_ID}", self._get)
         g.route("PATCH", rf"/me/messages/{_ID}", self._patch)
@@ -358,6 +367,15 @@ class FakeOutlookTenant:
         assert m
         return m.group(1)
 
+    @staticmethod
+    def _project(call: GraphCall, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Apply ``$select`` like Graph does (``id`` is always returned)."""
+        select = call.params.get("$select")
+        if not select:
+            return items
+        keep = {k.strip() for k in str(select).split(",")} | {"id"}
+        return [{k: v for k, v in i.items() if k in keep or k.startswith("@odata")} for i in items]
+
     def _list_all(self, call: GraphCall) -> Any:
         msgs = list(self.messages.values())
         # Honour the one $filter shape the fake needs: conversationId eq '...'.
@@ -365,14 +383,39 @@ class FakeOutlookTenant:
         if m:
             conv = m.group(1).replace("''", "'")
             msgs = [x for x in msgs if x.get("conversationId") == conv]
-        return {"value": msgs}
+        return self._page(call, self._project(call, msgs))
+
+    @staticmethod
+    def _page(call: GraphCall, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Honour ``$top`` / ``$skip`` and emit ``@odata.nextLink`` like Graph."""
+        top = call.params.get("$top")
+        if top is None:
+            return {"value": items}
+        skip = int(call.params.get("$skip", 0))
+        top = int(top)
+        page: dict[str, Any] = {"value": items[skip : skip + top]}
+        if skip + top < len(items):
+            params = {k: str(v) for k, v in call.params.items()}
+            params["$skip"] = str(skip + top)
+            page["@odata.nextLink"] = f"{call.url}?{urlencode(params)}"
+        return page
+
+    def _get_folder(self, call: GraphCall) -> Any:
+        name = call.path.split("/")[3]
+        folder_id = WELL_KNOWN_FOLDER_IDS.get(name.lower())
+        if folder_id is None:
+            return 404, {"error": {"code": "ErrorFolderNotFound", "message": "no folder"}}
+        return {"id": folder_id, "displayName": name}
 
     def _list_folder(self, call: GraphCall) -> Any:
         # Well-known folder names are case-insensitive in Graph ("Drafts").
         folder = call.path.split("/")[3].lower()
+        folder = WELL_KNOWN_FOLDER_IDS.get(folder, folder)
         return {
             "value": [
-                m for m in self.messages.values() if str(m.get("parentFolderId")).lower() == folder
+                m
+                for m in self.messages.values()
+                if str(m.get("parentFolderId")).lower() == folder.lower()
             ]
         }
 
@@ -393,12 +436,13 @@ class FakeOutlookTenant:
         mid = self._m(call)
         if mid not in self.messages:
             return 404, {"error": {"code": "ErrorItemNotFound", "message": "not found"}}
-        self.messages[mid]["parentFolderId"] = "deleteditems"
+        self.messages[mid]["parentFolderId"] = WELL_KNOWN_FOLDER_IDS["deleteditems"]
         return 204, None
 
     def _move(self, call: GraphCall) -> Any:
         mid = self._m(call)
-        self.messages[mid]["parentFolderId"] = call.body["destinationId"]
+        dest = call.body["destinationId"]
+        self.messages[mid]["parentFolderId"] = WELL_KNOWN_FOLDER_IDS.get(dest.lower(), dest)
         return 201, self.messages[mid]
 
     def _list_attachments(self, call: GraphCall) -> Any:

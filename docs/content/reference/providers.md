@@ -47,7 +47,7 @@ iobox normalises results across providers, but the underlying services differ. T
 
 ## Outlook
 
-- **Searches every folder** (`/me/messages`: Inbox, Sent, Archive, custom folders — and also Deleted Items and Junk, since `include_spam_trash` isn't applied for Outlook yet).
+- **Searches every folder** (`/me/messages`: Inbox, Sent, Archive, Drafts, custom folders). Deleted Items and Junk Email are excluded unless `include_spam_trash` is set (`--include-spam-trash` on the CLI). With a text/KQL query this exclusion is applied client-side, so iobox pages through extra results (up to 250, or 5 × `max_results`) to fill `max_results`.
 - **Query syntax** is Microsoft Graph `$search` (KQL). Structured filters (from, to, dates, attachments) use `$filter`; Graph can't combine `$search` with `$filter`/`$orderby`, so when both are needed unread/category filters and ordering are applied client-side.
 - **Message IDs are ImmutableIds** (`Prefer: IdType="ImmutableId"` on every Graph request), stable across folder moves.
 - **Categories** map to iobox tags.

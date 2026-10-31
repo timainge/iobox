@@ -26,6 +26,7 @@ from iobox.providers.o365.email import OutlookBatchError, OutlookProvider  # noq
 from tests.fixtures.mock_outlook_responses import (  # noqa: E402
     ATTACHMENT_PDF_BYTES,
     ATTACHMENT_PNG_BYTES,
+    WELL_KNOWN_FOLDER_IDS,
     FakeAuth,
     FakeOutlookTenant,
     graph_message,
@@ -171,6 +172,9 @@ class TestSearchFilterPath:
     """Structured queries → $filter built with the real QueryBuilder."""
 
     def _filter(self, provider, tenant, **kw) -> str:
+        # include_spam_trash keeps the folder-exclusion clauses (FU-11) out
+        # of the way; TestSpamTrashExclusion covers them.
+        kw.setdefault("include_spam_trash", True)
         provider.search_emails(EmailQuery(**kw))
         call = tenant.graph.last("GET", r"/me/messages")
         assert "$search" not in call.params
@@ -223,7 +227,115 @@ class TestSearchFilterPath:
         results = provider.search_emails(EmailQuery(max_results=50))
         ids = {r["message_id"] for r in results}
         assert "outlook-thread-msg-2" in ids  # lives in Sent Items
-        assert not tenant.graph.find("GET", r"/me/mailFolders/.*")
+        assert not tenant.graph.find("GET", r"/me/mailFolders/.*/messages")
+
+
+def _spam_trash_tenant(n_trash: int = 3, n_junk: int = 3, n_inbox: int = 2) -> FakeOutlookTenant:
+    """Tenant whose newest messages sit in Deleted Items / Junk Email."""
+    tenant = FakeOutlookTenant()
+    for i in range(n_trash):
+        tenant.add(graph_message(f"trash-{i}", folder=WELL_KNOWN_FOLDER_IDS["deleteditems"]))
+    for i in range(n_junk):
+        tenant.add(graph_message(f"junk-{i}", folder=WELL_KNOWN_FOLDER_IDS["junkemail"]))
+    for i in range(n_inbox):
+        tenant.add(graph_message(f"inbox-{i}", folder="inbox"))
+    return tenant
+
+
+class TestSpamTrashExclusion:
+    """FU-11: include_spam_trash was ignored, so Deleted Items and Junk
+    Email were always searched."""
+
+    def test_filter_path_excludes_spam_and_trash(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        results = provider.search_emails(EmailQuery(max_results=50))
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"}
+        f = tenant.graph.last("GET", r"/me/messages").params["$filter"]
+        assert f == (
+            f"parentFolderId ne '{WELL_KNOWN_FOLDER_IDS['deleteditems']}'"
+            f" and parentFolderId ne '{WELL_KNOWN_FOLDER_IDS['junkemail']}'"
+        )
+
+    def test_filter_path_combines_with_other_clauses(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        provider.search_emails(EmailQuery(from_addr="a@b.com"))
+        f = tenant.graph.last("GET", r"/me/messages").params["$filter"]
+        assert f.startswith("from/emailAddress/address eq 'a@b.com' and parentFolderId ne ")
+
+    def test_search_path_filters_client_side(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        results = provider.search_emails(EmailQuery(text="hello", max_results=50))
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"}
+        call = tenant.graph.last("GET", r"/me/messages")
+        assert "$filter" not in call.params  # Graph rejects $search + $filter
+        assert "parentFolderId" in call.params["$select"].split(",")
+
+    def test_raw_query_also_excludes(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        results = provider.search_emails(EmailQuery(raw_query="from:x", max_results=50))
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"}
+
+    def test_max_results_filled_after_client_side_filtering(self) -> None:
+        """Excluded hits must not eat into max_results: over-fetch."""
+        provider = make_outlook_provider(_spam_trash_tenant(n_trash=60, n_junk=5, n_inbox=4))
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        results = provider.search_emails(EmailQuery(text="hello", max_results=3))
+        assert [r["message_id"] for r in results] == ["inbox-0", "inbox-1", "inbox-2"]
+        pages = tenant.graph.find("GET", r"/me/messages")
+        assert len(pages) >= 2  # followed @odata.nextLink past the excluded hits
+        assert all("$search" in p.params for p in pages)
+
+    def test_over_fetch_is_capped(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant(n_trash=400, n_junk=0, n_inbox=2))
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        assert provider.search_emails(EmailQuery(text="hello", max_results=3)) == []
+        fetched = sum(
+            min(int(c.params["$top"]), 400 - int(c.params.get("$skip", 0)))
+            for c in tenant.graph.find("GET", r"/me/messages")
+        )
+        assert fetched <= 250
+
+    def test_include_spam_trash_returns_everything(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        for q in (
+            EmailQuery(include_spam_trash=True, max_results=50),
+            EmailQuery(text="hello", include_spam_trash=True, max_results=50),
+        ):
+            assert len(provider.search_emails(q)) == 8
+        assert not tenant.graph.find("GET", r"/me/mailFolders/[^/]+")
+        assert "$filter" not in tenant.graph.find("GET", r"/me/messages")[0].params
+
+    def test_folder_ids_resolved_once_and_cached(self) -> None:
+        provider = make_outlook_provider(_spam_trash_tenant())
+        tenant = provider.tenant  # type: ignore[attr-defined]
+        provider.search_emails(EmailQuery())
+        provider.search_emails(EmailQuery(text="x"))
+        lookups = tenant.graph.find("GET", r"/me/mailFolders/[^/]+")
+        assert sorted(c.path for c in lookups) == [
+            "/me/mailFolders/deleteditems",
+            "/me/mailFolders/junkemail",
+        ]
+
+    def test_unresolvable_folder_is_skipped_and_retried(self) -> None:
+        tenant = _spam_trash_tenant()
+        tenant.graph.route(
+            "GET",
+            r"/me/mailFolders/junkemail",
+            {"error": {"code": "ErrorAccessDenied", "message": "denied"}},
+            status=403,
+        )
+        provider = make_outlook_provider(tenant)
+        results = provider.search_emails(EmailQuery(max_results=50))
+        # Trash still excluded; junk cannot be identified so it is kept.
+        assert {r["message_id"] for r in results} == {"inbox-0", "inbox-1"} | {
+            f"junk-{i}" for i in range(3)
+        }
+        provider.search_emails(EmailQuery(max_results=50))
+        assert len(tenant.graph.find("GET", r"/me/mailFolders/junkemail")) == 2
 
 
 class TestSearchKqlPath:

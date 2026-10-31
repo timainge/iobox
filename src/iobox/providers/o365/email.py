@@ -18,6 +18,14 @@ All-mail search
 collection (``/me/messages``), which spans every folder (Inbox, Sent,
 Archive, Drafts, Deleted Items, Junk and custom folders).
 
+Unless ``EmailQuery.include_spam_trash`` is set, ``search_emails()`` drops
+messages whose ``parentFolderId`` is the Deleted Items or Junk Email folder.
+The ids of those well-known folders are resolved once per provider. On the
+``$filter`` path the exclusion is sent to Graph as ``parentFolderId ne '...'``
+clauses (not yet verified against a live tenant, so results are also checked
+client-side); on the ``$search`` path -- where Graph forbids ``$filter`` -- it
+is applied client-side, over-fetching pages until ``max_results`` is filled.
+
 Query path selection
 --------------------
 Graph cannot combine ``$search`` with ``$filter`` or ``$orderby`` on message
@@ -46,8 +54,33 @@ logger = logging.getLogger(__name__)
 
 # Graph $batch accepts at most 20 sub-requests per call.
 _BATCH_LIMIT = 20
-# When $search results are filtered client-side, fetch this many candidates.
+# When $search results are filtered client-side, examine at least this many
+# candidates (or 5 x max_results, whichever is larger) before giving up.
 _CLIENT_FILTER_FETCH = 250
+# Well-known folders excluded from search unless include_spam_trash is set.
+_SPAM_TRASH_FOLDERS = ("deleteditems", "junkemail")
+# Message properties needed for metadata-only search results (and for
+# client-side filtering); the body is not downloaded.
+_SEARCH_SELECT = ",".join(
+    [
+        "id",
+        "conversationId",
+        "subject",
+        "from",
+        "sender",
+        "toRecipients",
+        "ccRecipients",
+        "bccRecipients",
+        "replyTo",
+        "receivedDateTime",
+        "bodyPreview",
+        "categories",
+        "isRead",
+        "isDraft",
+        "hasAttachments",
+        "parentFolderId",
+    ]
+)
 # Error codes Graph uses (besides HTTP 410) for an unusable delta token.
 _DELTA_RESYNC_CODES = {"syncstatenotfound", "syncstateinvalid", "resyncrequired"}
 
@@ -111,11 +144,15 @@ class _SearchQuery:
     ``get_messages`` only needs ``as_params()``.
     """
 
-    def __init__(self, kql: str) -> None:
+    def __init__(self, kql: str, select: str | None = None) -> None:
         self.kql = kql
+        self.select = select
 
     def as_params(self) -> dict[str, str]:
-        return {"$search": _search_param(self.kql)}
+        params = {"$search": _search_param(self.kql)}
+        if self.select:
+            params["$select"] = self.select
+        return params
 
     @property
     def has_selects(self) -> bool:
@@ -127,6 +164,27 @@ class _SearchQuery:
 
     def __repr__(self) -> str:
         return f"_SearchQuery({self.kql!r})"
+
+
+class _ParamsQuery:
+    """Query object wrapping pre-rendered OData params (``$filter``/``$select``)."""
+
+    def __init__(self, params: dict[str, str]) -> None:
+        self.params = params
+
+    def as_params(self) -> dict[str, str]:
+        return dict(self.params)
+
+    @property
+    def has_selects(self) -> bool:
+        return "$select" in self.params
+
+    @property
+    def has_expands(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return f"_ParamsQuery({self.params!r})"
 
 
 class OutlookProvider(EmailProvider):
@@ -143,6 +201,8 @@ class OutlookProvider(EmailProvider):
         self._mode = mode or "standard"
         self._account: Any | None = None  # O365.Account instance
         self._mailbox: Any | None = None  # O365.mailbox.MailBox instance
+        # Folder ids of Deleted Items / Junk Email (resolved lazily, cached).
+        self._spam_trash_ids: frozenset[str] | None = None
 
     # ------------------------------------------------------------------
     # Internal lazy-access properties
@@ -259,11 +319,43 @@ class OutlookProvider(EmailProvider):
 
         return data
 
-    def _build_outlook_filter(self, query: EmailQuery) -> Any | None:
+    def _spam_trash_folder_ids(self) -> frozenset[str]:
+        """Return the ids of the Deleted Items and Junk Email folders.
+
+        Resolved via ``GET /me/mailFolders/{well-known name}`` and cached for
+        the provider's lifetime. A folder that cannot be resolved (missing,
+        access denied, transient error) is logged and left out -- its messages
+        are then not excluded -- and the lookup is retried on the next search.
+        """
+        if self._spam_trash_ids is not None:
+            return self._spam_trash_ids
+        con = self._acct.con
+        ids: set[str] = set()
+        complete = True
+        for name in _SPAM_TRASH_FOLDERS:
+            folder_id = None
+            try:
+                resp = con.get(self._mb.build_url(f"/mailFolders/{name}"), params={"$select": "id"})
+                folder_id = resp.json().get("id") if resp else None
+            except Exception as exc:
+                logger.warning("Could not resolve Outlook folder %r: %s", name, exc)
+            if folder_id:
+                ids.add(str(folder_id))
+            else:
+                complete = False
+        result = frozenset(ids)
+        if complete:
+            self._spam_trash_ids = result
+        return result
+
+    def _build_outlook_filter(
+        self, query: EmailQuery, exclude_folder_ids: frozenset[str] = frozenset()
+    ) -> Any | None:
         """Build an OData ``$filter`` with python-o365's ``QueryBuilder``.
 
         Used when no free-text (``query.text``) is present. Returns a
         ``CompositeFilter`` (or ``None`` when the query has no conditions).
+        ``exclude_folder_ids`` adds ``parentFolderId ne '...'`` clauses.
         """
         from O365.utils.query import CompositeFilter, IterableFilter, LogicalFilter
 
@@ -306,6 +398,9 @@ class OutlookProvider(EmailProvider):
             parts.append(
                 CompositeFilter(filters=IterableFilter("any", "categories", inner, item_name="c"))
             )
+
+        for folder_id in sorted(exclude_folder_ids):
+            parts.append(qb.unequal("parentFolderId", _odata_str(folder_id)))
 
         if not parts:
             return None
@@ -392,24 +487,43 @@ class OutlookProvider(EmailProvider):
     # ------------------------------------------------------------------
 
     def search_emails(self, query: EmailQuery) -> list[EmailData]:
-        """Search all mail folders and return metadata-only results."""
-        limit = query.max_results
-        client_filter = False
-        q: Any
-        if query.raw_query:
-            q = _SearchQuery(query.raw_query)
-        elif query.text:
-            q = _SearchQuery(self._build_outlook_search(query))
-            client_filter = query.is_unread is not None or bool(query.label)
-            if client_filter:
-                limit = max(limit, _CLIENT_FILTER_FETCH)
-        else:
-            q = self._build_outlook_filter(query)
+        """Search mail folders and return metadata-only results.
 
-        messages = self._mb.get_messages(limit=limit, query=q)
+        All folders are searched; Deleted Items and Junk Email are excluded
+        unless ``query.include_spam_trash`` is set.
+        """
+        excluded = frozenset() if query.include_spam_trash else self._spam_trash_folder_ids()
+        limit = query.max_results
+        batch: int | None = None
+        match_fields = False  # apply is_unread / label client-side
+        q: Any
+        if query.raw_query or query.text:
+            kql = query.raw_query or self._build_outlook_search(query)
+            q = _SearchQuery(kql, select=_SEARCH_SELECT)
+            # $search cannot be combined with $filter, so unread/label (text
+            # path only) and the folder exclusion are applied here instead.
+            match_fields = not query.raw_query and (
+                query.is_unread is not None or bool(query.label)
+            )
+            if match_fields or excluded:
+                # Over-fetch: page through results until max_results matches
+                # are found or a bounded number of candidates is examined.
+                limit = max(_CLIENT_FILTER_FETCH, query.max_results * 5)
+                batch = min(max(query.max_results * 2, 50), 999)
+        else:
+            f = self._build_outlook_filter(query, excluded)
+            params = dict(f.as_params()) if f is not None else {}
+            params["$select"] = _SEARCH_SELECT
+            q = _ParamsQuery(params)
+
+        messages = self._mb.get_messages(limit=limit, query=q, batch=batch)
         results: list[EmailData] = []
         for msg in messages:
-            if client_filter and not self._client_side_match(msg, query):
+            # The $filter path excludes these folders server-side as well;
+            # re-checking is free and guards against Graph ignoring it.
+            if excluded and msg.folder_id in excluded:
+                continue
+            if match_fields and not self._client_side_match(msg, query):
                 continue
             results.append(self._message_to_email_data(msg, include_body=False))
             if len(results) >= query.max_results:
