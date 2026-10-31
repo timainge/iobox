@@ -145,20 +145,6 @@ def sort_by_date(
     return [item for _, item in dated] + undated
 
 
-# ── Session state (deprecated) ────────────────────────────────────────────────
-
-
-@dataclass
-class WorkspaceSession:
-    """Deprecated placeholder kept so ``Workspace(..., session=...)`` still works.
-
-    Per-slot errors from the last query are in :attr:`Workspace.last_errors`.
-    Nothing reads or writes this object any more; it will be removed.
-    """
-
-    workspace_name: str = ""
-
-
 # ── Provider slot ─────────────────────────────────────────────────────────────
 
 
@@ -219,7 +205,6 @@ class Workspace:
     email_providers: list[ProviderSlot] = field(default_factory=list)
     calendar_providers: list[ProviderSlot] = field(default_factory=list)
     file_providers: list[ProviderSlot] = field(default_factory=list)
-    session: WorkspaceSession = field(default_factory=WorkspaceSession)  # deprecated
     last_errors: dict[str, str] = field(default_factory=dict)
 
     # ── Fan-out ───────────────────────────────────────────────────────────────

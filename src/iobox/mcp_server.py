@@ -338,6 +338,25 @@ def _email_data_to_dict(data: Any) -> dict[str, Any]:
     return result
 
 
+def _unknown_slot_error(provider: str | None, slots: list[Any]) -> dict | None:
+    """Error entry when ``provider`` names no slot of this type, else None."""
+    if provider is None or any(s.name == provider for s in slots):
+        return None
+    available = ", ".join(s.name for s in slots) or "none"
+    return {"error": f"Unknown provider slot '{provider}'. Available: {available}"}
+
+
+def _with_slot_errors(ws: Any, results: list[dict]) -> list[dict]:
+    """Append one ``{"slot", "error"}`` entry per slot that failed during fan-out.
+
+    Fan-out never raises on a per-slot failure, so without this a revoked
+    token on one account would look like "no results" for that account.
+    """
+    for slot, err in sorted(getattr(ws, "last_errors", {}).items()):
+        results.append({"slot": slot, "error": f"Slot '{slot}' failed: {err}"})
+    return results
+
+
 _VALID_BODY_MODES = ("none", "text", "html", "markdown")
 
 
@@ -489,10 +508,15 @@ def search_gmail(
     slot, or omit to search every email slot in parallel. With no active
     workspace, falls back to the single-account Gmail provider.
 
+    Each result carries ``slot`` (the account it came from): pass it as
+    ``provider`` to fetch, save or change that item. Slots that fail are
+    reported as trailing ``{"slot", "error"}`` entries rather than silently
+    omitted.
+
     Args:
         query: Search text (Gmail uses Gmail search syntax; Outlook accepts
             free-text and basic operators).
-        max_results: Maximum number of results per slot (default 10). Every
+        max_results: Maximum number of results in total (default 10). Every
             returned row carries full metadata (subject/from/to/cc/date/labels)
             up to this count — there are no empty placeholder rows.
         days: Days back to search (default 7). Used only when ``start_date`` is
@@ -533,12 +557,15 @@ def search_gmail(
     if ws is not None:
         if not ws.email_providers:
             return [{"error": f"Workspace '{ws.name}' has no email accounts configured."}]
+        unknown = _unknown_slot_error(provider, ws.email_providers)
+        if unknown:
+            return [unknown]
         providers_arg = [provider] if provider else None
         try:
             results = ws.search_emails(eq, providers=providers_arg)
         except Exception as exc:
             return [{"error": str(exc)}]
-        return [_email_data_to_dict(r) for r in results]
+        return _with_slot_errors(ws, [_email_data_to_dict(r) for r in results])
 
     # Legacy fallback: single-account Gmail (no workspace configured at all)
     if provider is not None:
@@ -1580,6 +1607,11 @@ def search_workspace(
     Fans out across every configured slot in parallel — covers multiple
     Gmail accounts, multiple Outlook accounts, or any mix.
 
+    Each result carries ``slot`` (the account it came from): pass it as
+    ``provider`` to fetch, save or change that item. Slots that fail are
+    reported as trailing ``{"slot", "error"}`` entries rather than silently
+    omitted.
+
     Args:
         query: Search text.
         types: List of ``"email"``, ``"event"``, ``"file"`` (default: all).
@@ -1594,7 +1626,7 @@ def search_workspace(
         return [{"error": "No active workspace configured. Run `iobox space create` first."}]
     try:
         results = ws.search(query, types=types, max_results_per_type=max_results)
-        return [dict(r) for r in results]
+        return _with_slot_errors(ws, [dict(r) for r in results])
     except Exception as exc:
         return [{"error": str(exc)}]
 
@@ -1618,6 +1650,11 @@ def list_events(
     Fans out across every calendar slot when ``provider`` is omitted —
     covers multiple Google Calendar accounts in a single call.
 
+    Each result carries ``slot`` (the account it came from): pass it as
+    ``provider`` to fetch, save or change that item. Slots that fail are
+    reported as trailing ``{"slot", "error"}`` entries rather than silently
+    omitted.
+
     Args:
         after: Start date filter (YYYY-MM-DD).
         before: End date filter (YYYY-MM-DD).
@@ -1632,10 +1669,13 @@ def list_events(
     if not ws:
         return [{"error": "No active workspace configured."}]
     try:
+        unknown = _unknown_slot_error(provider, ws.calendar_providers)
+        if unknown:
+            return [unknown]
         query = EventQuery(text=text, after=after, before=before, max_results=max_results)
         providers = [provider] if provider else None
         events = ws.list_events(query, providers=providers)
-        return [dict(e) for e in events]
+        return _with_slot_errors(ws, [dict(e) for e in events])
     except Exception as exc:
         return [{"error": str(exc)}]
 
@@ -1874,6 +1914,11 @@ def list_files(
     Fans out across every file slot when ``provider`` is omitted — covers
     multiple Drive/OneDrive accounts in a single call.
 
+    Each result carries ``slot`` (the account it came from): pass it as
+    ``provider`` to fetch, save or change that item. Slots that fail are
+    reported as trailing ``{"slot", "error"}`` entries rather than silently
+    omitted.
+
     Args:
         query: Search text (required — avoids listing all files).
         provider: File slot name (default: all file slots).
@@ -1886,10 +1931,13 @@ def list_files(
     if not ws:
         return [{"error": "No active workspace configured."}]
     try:
+        unknown = _unknown_slot_error(provider, ws.file_providers)
+        if unknown:
+            return [unknown]
         fq = FileQuery(text=query, max_results=max_results)
         providers = [provider] if provider else None
         files = ws.list_files(fq, providers=providers)
-        return [dict(f) for f in files]
+        return _with_slot_errors(ws, [dict(f) for f in files])
     except Exception as exc:
         return [{"error": str(exc)}]
 

@@ -605,11 +605,11 @@ class TestDeadSessionCodeRemoved:
     def test_no_auth_status(self) -> None:
         assert not hasattr(Workspace, "auth_status")
 
-    def test_session_kwarg_still_accepted(self) -> None:
-        from iobox.workspace import WorkspaceSession
+    def test_workspace_session_removed(self) -> None:
+        import iobox.workspace as workspace_module
 
-        ws = Workspace(name="t", session=WorkspaceSession(workspace_name="t"))
-        assert ws.last_errors == {}
+        assert not hasattr(workspace_module, "WorkspaceSession")
+        assert Workspace(name="t").last_errors == {}
 
 
 # ── TestEmailDataToResource ───────────────────────────────────────────────────

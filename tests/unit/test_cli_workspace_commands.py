@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from iobox.cli import app
 from iobox.providers.base import Event, EventQuery, File, FileQuery
-from iobox.workspace import ProviderSlot, Workspace, WorkspaceSession
+from iobox.workspace import ProviderSlot, Workspace
 
 runner = CliRunner()
 
@@ -69,7 +69,7 @@ def _make_ws(
     files: list[File] | None = None,
 ) -> Workspace:
     """Build a minimal mock Workspace."""
-    ws = Workspace(name="test", session=WorkspaceSession(workspace_name="test"))
+    ws = Workspace(name="test")
 
     if events is not None:
         cal_provider = MagicMock()
@@ -126,15 +126,27 @@ class TestEventsListCommand:
         # Only the first slot should be queried (filtered by name)
         extra.list_events.assert_not_called()
 
-    def test_events_list_unknown_provider_returns_empty(self) -> None:
+    def test_events_list_unknown_provider_is_an_error(self) -> None:
         ws = _make_ws(events=[_mock_event()])
         with patch("iobox.cli._get_workspace", return_value=ws):
             result = runner.invoke(app, ["events", "list", "--provider", "nonexistent"])
-        # _fan_out filters out non-matching slots and returns [] gracefully
-        assert "No events found" in result.output
+        assert result.exit_code == 1
+        assert "Unknown provider slot 'nonexistent'" in result.output
+
+    def test_events_list_warns_about_failed_slots(self) -> None:
+        broken = MagicMock()
+        broken.list_events.side_effect = RuntimeError("token revoked")
+        ws = Workspace(
+            name="test",
+            calendar_providers=[ProviderSlot(name="work-gmail-cal", provider=broken)],
+        )
+        with patch("iobox.cli._get_workspace", return_value=ws):
+            result = runner.invoke(app, ["events", "list"])
+        assert result.exit_code == 0
+        assert "Warning: work-gmail-cal failed: token revoked" in result.output
 
     def test_events_list_no_providers_returns_empty(self) -> None:
-        ws = Workspace(name="test", session=WorkspaceSession(workspace_name="test"))
+        ws = Workspace(name="test")
         with patch("iobox.cli._get_workspace", return_value=ws):
             result = runner.invoke(app, ["events", "list"])
         # No calendar providers — returns "No events found"

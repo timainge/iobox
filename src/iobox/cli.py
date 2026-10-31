@@ -1583,6 +1583,21 @@ def _resource_filename(title: str | None, resource_id: str, kind: str) -> str:
     return f"{slug or kind}_{_short_id(resource_id)}.md"
 
 
+def _require_known_slot(slots: list[Any], provider: str | None) -> None:
+    """Exit with an error if ``--provider`` names no slot of this type."""
+    if provider is None or any(s.name == provider for s in slots):
+        return
+    available = ", ".join(s.name for s in slots) or "none"
+    typer.echo(f"Unknown provider slot '{provider}'. Available: {available}", err=True)
+    raise typer.Exit(1)
+
+
+def _warn_slot_errors(ws: Any) -> None:
+    """Report slots that failed during fan-out, so partial results aren't mistaken for complete."""
+    for slot, err in sorted(ws.last_errors.items()):
+        typer.echo(f"Warning: {slot} failed: {err}", err=True)
+
+
 def _format_datetime(iso_str: str | None) -> str:
     """Format an ISO 8601 datetime string for display."""
     if not iso_str:
@@ -1666,21 +1681,23 @@ def events_list(
     # Default: last 30 days
     effective_after = after or str(_date.today() - timedelta(days=30))
     query = EventQuery(after=effective_after, before=before, max_results=max_results)
+    _require_known_slot(ws.calendar_providers, provider)
     providers = [provider] if provider else None
     events = ws.list_events(query, providers=providers)
+    _warn_slot_errors(ws)
 
     if not events:
         typer.echo("No events found.")
         return
 
-    typer.echo(f"{'Title':<40} {'Start':<18} {'End':<18} {'Provider'}")
+    typer.echo(f"{'Title':<40} {'Start':<18} {'End':<18} {'Slot'}")
     typer.echo("-" * 90)
     for ev in events:
         typer.echo(
             f"{ev['title'][:40]:<40} "
             f"{_format_datetime(ev.get('start')):<18} "
             f"{_format_datetime(ev.get('end')):<18} "
-            f"{ev.get('provider_id', '')}"
+            f"{ev.get('slot', '')}"
         )
 
 
@@ -1814,21 +1831,23 @@ def files_list(
 
     ws = _get_workspace(workspace_name)
     fq = FileQuery(text=query, max_results=max_results)
+    _require_known_slot(ws.file_providers, provider)
     providers = [provider] if provider else None
     files = ws.list_files(fq, providers=providers)
+    _warn_slot_errors(ws)
 
     if not files:
         typer.echo("No files found.")
         return
 
-    typer.echo(f"{'Name':<40} {'Modified':<22} {'MIME':<30} {'Provider'}")
+    typer.echo(f"{'Name':<40} {'Modified':<22} {'MIME':<30} {'Slot'}")
     typer.echo("-" * 100)
     for f in files:
         typer.echo(
             f"{f['name'][:40]:<40} "
             f"{f.get('modified_at', '')[:19]:<22} "
             f"{f.get('mime_type', '')[:30]:<30} "
-            f"{f.get('provider_id', '')}"
+            f"{f.get('slot', '')}"
         )
 
 

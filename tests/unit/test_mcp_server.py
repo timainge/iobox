@@ -2050,3 +2050,50 @@ class TestSemanticSearchWorkspace:
 
         result = semantic_search_workspace("budget", workspace="../../etc")
         assert "not found" in result[0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# Fan-out results: slot tags, slot errors, unknown slots (WS-01, WS-02)
+# ---------------------------------------------------------------------------
+
+
+class TestFanOutSlotReporting:
+    def _workspace(self):
+        from iobox.workspace import ProviderSlot, Workspace
+
+        ok = MagicMock()
+        ok.list_events.return_value = [
+            {"id": "e1", "title": "Standup", "start": "2026-11-02T09:00:00+00:00"}
+        ]
+        broken = MagicMock()
+        broken.list_events.side_effect = RuntimeError("token revoked")
+        return Workspace(
+            name="personal",
+            calendar_providers=[
+                ProviderSlot(name="me-gmail-cal", provider=ok),
+                ProviderSlot(name="work-gmail-cal", provider=broken),
+            ],
+        )
+
+    def test_results_carry_slot_and_failed_slots_are_reported(self):
+        from iobox.mcp_server import list_events
+
+        with patch(f"{MODULE}._get_workspace", return_value=self._workspace()):
+            result = list_events(after="2026-11-01")
+
+        events = [r for r in result if "id" in r]
+        errors = [r for r in result if "error" in r]
+        assert [e["slot"] for e in events] == ["me-gmail-cal"]
+        assert errors == [
+            {"slot": "work-gmail-cal", "error": "Slot 'work-gmail-cal' failed: token revoked"}
+        ]
+
+    def test_unknown_provider_slot_is_an_error_not_empty(self):
+        from iobox.mcp_server import list_events
+
+        with patch(f"{MODULE}._get_workspace", return_value=self._workspace()):
+            result = list_events(provider="wrok-gmail-cal")
+
+        assert len(result) == 1
+        assert "Unknown provider slot 'wrok-gmail-cal'" in result[0]["error"]
+        assert "me-gmail-cal" in result[0]["error"]
