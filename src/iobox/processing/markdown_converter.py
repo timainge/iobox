@@ -57,12 +57,14 @@ def generate_yaml_frontmatter(email_data: dict[str, Any]) -> str:
 
     frontmatter = {
         "message_id": message_id,
-        "thread_id": email_data.get("thread_id", ""),
-        "subject": email_data.get("subject", "No Subject"),
-        "from": email_data.get("from", "Unknown"),
-        "to": email_data.get("to", ""),
-        "date": email_data.get("date", datetime.now().isoformat()),
-        "labels": email_data.get("labels", []),
+        "thread_id": email_data.get("thread_id") or "",
+        "subject": (
+            email_data["subject"] if email_data.get("subject") is not None else "No Subject"
+        ),
+        "from": email_data.get("from") or "Unknown",
+        "to": email_data.get("to") or "",
+        "date": email_data.get("date") or datetime.now().isoformat(),
+        "labels": email_data.get("labels") or [],
         "saved_date": datetime.now().isoformat(),
     }
 

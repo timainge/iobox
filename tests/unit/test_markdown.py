@@ -496,3 +496,16 @@ class TestFrontmatterYamlSafety:
             {"message_id": "m", "subject": "line one\n# line two", "body": "b"}
         )
         assert "# line one # line two\n" in md
+
+
+class TestFrontmatterNoneValues:
+    def test_none_values_become_strings(self):
+        data = _parse_frontmatter(
+            generate_yaml_frontmatter(
+                {"message_id": "m", "subject": None, "from": None, "to": None, "labels": None}
+            )
+        )
+        assert data["subject"] == "No Subject"
+        assert data["from"] == "Unknown"
+        assert data["to"] == ""
+        assert data["labels"] == []
