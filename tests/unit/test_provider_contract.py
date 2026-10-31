@@ -764,24 +764,10 @@ class TestOutlookCalendarReturnTypes:
 
 
 def _make_onedrive_provider():
-    from iobox.providers.o365.files import OneDriveProvider
+    """Real python-o365 Drive over a fake Graph session (needs O365)."""
+    from tests.fixtures.mock_outlook_responses import make_onedrive_provider
 
-    p = OneDriveProvider.__new__(OneDriveProvider)
-    p.account_email = "user@company.com"
-    p.credentials_dir = None
-    p.mode = "readonly"
-
-    account = MagicMock()
-    drive = MagicMock()
-    drive.search.return_value = []
-    root = MagicMock()
-    root.get_items.return_value = []
-    drive.get_root_folder.return_value = root
-    storage = MagicMock()
-    storage.get_default_drive.return_value = drive
-    account.storage.return_value = storage
-    p._account = account
-    return p
+    return make_onedrive_provider([], mode="readonly")
 
 
 class TestOneDriveABCCompleteness:
@@ -824,7 +810,5 @@ class TestOneDriveReturnTypes:
     def test_get_file_content_returns_str(self) -> None:
 
         p = _make_onedrive_provider()
-        # inject a None-returning get_item so we get "" back
-        p._account.storage().get_default_drive().get_item.return_value = None
-        result = p.get_file_content("missing")
+        result = p.get_file_content("missing")  # 404 from Graph → ""
         assert isinstance(result, str)

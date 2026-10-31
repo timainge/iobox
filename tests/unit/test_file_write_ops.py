@@ -188,102 +188,96 @@ class TestGoogleDriveCreateFolder:
 
 
 class TestOneDriveWriteOps:
-    """Smoke tests for OneDriveProvider write methods using HAS_O365 patch."""
+    """OneDriveProvider writes on real python-o365 Drive/Folder objects over a
+    fake Graph session (skipped without the outlook extra)."""
 
-    def _make_provider(self, mode: str = "standard") -> Any:  # type: ignore[name-defined]
-        from iobox.providers.o365.files import OneDriveProvider
+    @staticmethod
+    def _provider(mode: str = "standard") -> Any:
+        from tests.fixtures.mock_outlook_responses import graph_drive_item, make_onedrive_provider
 
-        auth = MagicMock()
-        account = MagicMock()
-        auth.get_account.return_value = account
-        with patch(f"{_OneDrive_MODULE}.HAS_O365", True):
-            provider = OneDriveProvider.__new__(OneDriveProvider)
-            provider.account_email = "user@example.com"
-            provider.credentials_dir = None
-            provider.mode = mode
-            provider._microsoft_auth = auth
-            provider._account = None
-        return provider
+        return make_onedrive_provider(
+            [
+                graph_drive_item("item-1", name="file.txt"),
+                graph_drive_item("folder-a", name="Reports", folder=True),
+            ],
+            mode=mode,
+        )
 
-    def _make_item(self, name: str = "file.txt", is_folder: bool = False) -> MagicMock:
-        item = MagicMock()
-        item.object_id = "item-1"
-        item.name = name
-        item.is_folder = is_folder
-        item.mime_type = "inode/directory" if is_folder else "text/plain"
-        item.size = 1024
-        item.created_datetime = None
-        item.modified_datetime = None
-        item.parent = None
-        item.web_url = None
-        return item
-
-    def test_check_write_mode_raises_in_readonly(self) -> None:
-        from iobox.providers.o365.files import OneDriveProvider
-
-        with patch(f"{_OneDrive_MODULE}.HAS_O365", True):
-            provider = OneDriveProvider.__new__(OneDriveProvider)
-            provider.mode = "readonly"
-        with pytest.raises(PermissionError):
-            provider._check_write_mode()
-
-    def test_upload_file(self, tmp_path: Path) -> None:
+    def test_upload_to_root(self, tmp_path: Path) -> None:
         local = tmp_path / "test.txt"
         local.write_text("hello")
-        provider = self._make_provider()
-        item = self._make_item("test.txt")
-        drive = provider._microsoft_auth.get_account().storage().get_default_drive()
-        drive.get_root_folder().upload_file.return_value = item
-        file = provider.upload_file(str(local))
+        p = self._provider()
+        file = p.upload_file(str(local))
         assert file["name"] == "test.txt"
+        assert file["parent_id"] == "root-id"
+        call = p.graph.last("PUT", r"/me/drive/items/.+:/content")
+        assert call.path == "/me/drive/items/root-id:/test.txt:/content"
 
-    def test_upload_to_folder(self, tmp_path: Path) -> None:
+    def test_upload_to_folder_with_name(self, tmp_path: Path) -> None:
         local = tmp_path / "doc.txt"
         local.write_text("content")
-        provider = self._make_provider()
-        item = self._make_item("doc.txt")
-        drive = provider._microsoft_auth.get_account().storage().get_default_drive()
-        drive.get_item().upload_file.return_value = item
-        provider.upload_file(str(local), parent_id="folder-id")
-        drive.get_item.assert_called_with("folder-id")
+        p = self._provider()
+        p.upload_file(str(local), parent_id="folder-a", name="renamed.txt")
+        call = p.graph.last("PUT", r"/me/drive/items/.+:/content")
+        assert call.path == "/me/drive/items/folder-a:/renamed.txt:/content"
 
-    def test_upload_blocked_in_readonly(self, tmp_path: Path) -> None:
+    def test_upload_into_a_file_is_rejected(self, tmp_path: Path) -> None:
         local = tmp_path / "doc.txt"
         local.write_text("content")
-        provider = self._make_provider(mode="readonly")
+        with pytest.raises(ValueError, match="not a folder"):
+            self._provider().upload_file(str(local), parent_id="item-1")
+
+    def test_update_file_reuploads_into_parent(self, tmp_path: Path) -> None:
+        """O365-09: DriveItem has no .parent; the item's parent_id is used."""
+        local = tmp_path / "new.txt"
+        local.write_text("v2")
+        p = self._provider()
+        file = p.update_file("item-1", str(local))
+        call = p.graph.last("PUT", r"/me/drive/items/.+:/content")
+        assert call.path == "/me/drive/items/root-id:/file.txt:/content"
+        assert file["id"] == "item-1"  # same item replaced
+
+    def test_delete_goes_to_recycle_bin(self) -> None:
+        p = self._provider()
+        p.delete_file("item-1")
+        p.graph.last("DELETE", r"/me/drive/items/item-1")
+        assert not p.graph.find("POST", r".*/permanentDelete")
+
+    def test_delete_permanent(self) -> None:
+        """O365-14: permanent=True was silently ignored."""
+        p = self._provider()
+        p.delete_file("item-1", permanent=True)
+        p.graph.last("POST", r"/me/drive/items/item-1/permanentDelete")
+        assert not p.graph.find("DELETE", r".*")
+
+    def test_delete_missing_is_noop(self) -> None:
+        p = self._provider()
+        p.delete_file("nope")
+        assert not p.graph.find("DELETE", r".*")
+
+    def test_create_folder_uses_create_child_folder(self) -> None:
+        """O365-09: Folder.mkdir does not exist in python-o365."""
+        p = self._provider()
+        folder = p.create_folder("New Folder")
+        call = p.graph.last("POST", r"/me/drive/items/root-id/children")
+        assert call.body == {"name": "New Folder", "folder": {}}
+        assert folder["is_folder"] is True
+        assert folder["name"] == "New Folder"
+        assert folder["mime_type"] == "inode/directory"
+
+    def test_create_subfolder(self) -> None:
+        p = self._provider()
+        p.create_folder("Q1", parent_id="folder-a")
+        p.graph.last("POST", r"/me/drive/items/folder-a/children")
+
+    def test_writes_blocked_in_readonly(self, tmp_path: Path) -> None:
+        local = tmp_path / "doc.txt"
+        local.write_text("content")
+        p = self._provider(mode="readonly")
         with pytest.raises(PermissionError):
-            provider.upload_file(str(local))
-
-    def test_delete_file(self) -> None:
-        provider = self._make_provider()
-        item = self._make_item()
-        drive = provider._microsoft_auth.get_account().storage().get_default_drive()
-        drive.get_item.return_value = item
-        provider.delete_file("item-1")
-        item.delete.assert_called_once()
-
-    def test_delete_blocked_in_readonly(self) -> None:
-        provider = self._make_provider(mode="readonly")
+            p.upload_file(str(local))
         with pytest.raises(PermissionError):
-            provider.delete_file("item-1")
-
-    def test_create_folder(self) -> None:
-        provider = self._make_provider()
-        folder_item = self._make_item("Reports", is_folder=True)
-        drive = provider._microsoft_auth.get_account().storage().get_default_drive()
-        drive.get_root_folder().mkdir.return_value = folder_item
-        folder = provider.create_folder("Reports")
-        assert folder["name"] == "Reports"
-
-    def test_create_folder_with_parent(self) -> None:
-        provider = self._make_provider()
-        folder_item = self._make_item("Sub", is_folder=True)
-        drive = provider._microsoft_auth.get_account().storage().get_default_drive()
-        drive.get_item().mkdir.return_value = folder_item
-        provider.create_folder("Sub", parent_id="parent-id")
-        drive.get_item.assert_called_with("parent-id")
-
-    def test_create_folder_blocked_in_readonly(self) -> None:
-        provider = self._make_provider(mode="readonly")
+            p.delete_file("item-1")
         with pytest.raises(PermissionError):
-            provider.create_folder("My Folder")
+            p.create_folder("x")
+        assert not p.graph.calls
