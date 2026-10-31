@@ -1867,3 +1867,65 @@ class TestNoInteractiveAuth:
         state = SyncState(str(out))
         state.load()
         assert state.last_history_id == "200"
+
+
+# ---------------------------------------------------------------------------
+# get_emails alignment (MCP-03)
+# ---------------------------------------------------------------------------
+
+
+class TestGetEmailsAlignment:
+    def test_dropped_id_reported_in_place(self):
+        """Outlook-style: provider silently omits a missing ID."""
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m1", "from_": "a", "subject": "A"},
+            {"message_id": "m3", "from_": "c", "subject": "C"},
+        ]
+        provider.get_email_content.side_effect = KeyError("m2 not found")
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2", "m3"])
+        assert [r["message_id"] for r in result] == ["m1", "m2", "m3"]
+        assert "error" in result[1]
+        assert "error" not in result[0] and "error" not in result[2]
+
+    def test_reordered_response_returned_in_input_order(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m2", "from_": "b"},
+            {"message_id": "m1", "from_": "a"},
+        ]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2"])
+        assert [r["from"] for r in result] == ["a", "b"]
+
+    def test_dropped_id_recovered_by_single_fetch(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [{"message_id": "m1", "from_": "a"}]
+        provider.get_email_content.return_value = {"message_id": "m2", "from_": "b"}
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2"])
+        assert result[1] == {"message_id": "m2", "from": "b"}
+
+    def test_batch_exception_falls_back_per_message(self):
+        provider = _make_provider()
+        provider.batch_get_emails.side_effect = RuntimeError("batch endpoint down")
+
+        def _one(mid, _ct):
+            if mid == "bad":
+                raise RuntimeError("nope")
+            return {"message_id": mid, "from_": "x"}
+
+        provider.get_email_content.side_effect = _one
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "bad", "m2"])
+        assert [r["message_id"] for r in result] == ["m1", "bad", "m2"]
+        assert result[1] == {"message_id": "bad", "error": "nope"}
+        assert "error" not in result[0] and "error" not in result[2]
+
+    def test_duplicate_ids_each_get_an_entry(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [{"message_id": "m1", "from_": "a"}]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m1"])
+        assert len(result) == 2

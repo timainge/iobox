@@ -623,8 +623,10 @@ def get_emails(
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        List of email dicts in the same order as ``message_ids``. Failed
-        fetches appear as ``{"message_id": ..., "error": ...}``.
+        Exactly one entry per requested ID, in the same order as
+        ``message_ids``. Missing or failed messages appear in place as
+        ``{"message_id": ..., "error": ...}``; one failure never drops or
+        shifts the others.
     """
     mode = body.lower()
     if mode not in _VALID_BODY_MODES:
@@ -632,14 +634,35 @@ def get_emails(
 
     content_type = "text/html" if mode in ("html", "markdown") else "text/plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    raw_batch = p.batch_get_emails(message_ids, preferred_content_type=content_type)
+
+    # Index whatever the provider returns by ID: providers may reorder, drop
+    # missing IDs (Outlook), or return per-item error rows (Gmail).
+    by_id: dict[str, dict[str, Any]] = {}
+    try:
+        for raw in p.batch_get_emails(list(message_ids), preferred_content_type=content_type):
+            mid = raw.get("message_id")
+            if mid is not None and mid not in by_id:
+                by_id[mid] = dict(raw)
+    except Exception:
+        by_id = {}  # whole-batch failure: fall back to per-message fetches below.
 
     out: list[dict] = []
-    for raw in raw_batch:
-        if "error" in raw:
-            out.append({"message_id": raw.get("message_id", ""), "error": raw["error"]})
+    for mid in message_ids:
+        raw = by_id.get(mid)
+        if raw is not None and "error" in raw:
+            out.append({"message_id": mid, "error": raw["error"]})
             continue
-        out.append(_apply_body_mode(_email_data_to_dict(raw), mode, max_body_chars))
+        if raw is None:
+            # Not in the batch response: fetch it alone to get a real answer.
+            try:
+                raw = dict(p.get_email_content(mid, content_type))
+            except Exception as exc:
+                out.append({"message_id": mid, "error": str(exc)})
+                continue
+        try:
+            out.append(_apply_body_mode(_email_data_to_dict(raw), mode, max_body_chars))
+        except Exception as exc:
+            out.append({"message_id": mid, "error": str(exc)})
     return out
 
 
