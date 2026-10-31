@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.7.0
+
+The hardening release. A full code review (six parallel reviewers, ~75 findings plus follow-ups) and fixes across every layer — security, data correctness, sync, workspaces, and a rewrite of the Microsoft 365 providers against the real python-o365 API. The docs site was reorganised into Get Started / MCP / CLI / SDK / Reference. The issue register is in `.dev/issues.md`.
+
+**Breaking / behaviour changes**
+- **Sending mail always needs `dangerous` mode.** `draft-send` (CLI) and `send_gmail_draft` (MCP) moved from `standard` to `dangerous`.
+- **MCP file access is confined** to `IOBOX_MCP_ROOT` (default `~/iobox`). Every `output_dir`, `output_path`, `attachments` and `local_path` must resolve inside it; `~/.iobox` is always refused; downloads never overwrite.
+- **CLI `--mode` gates `events`/`files` subcommands** like the MCP server (`events delete` → `dangerous`; create/rsvp/upload/mkdir/delete → `standard`).
+- **Gmail write methods return `{"message_id", "status", ...}`** (draft id for drafts) instead of raw API dicts.
+- **Microsoft 365 tokens are per tier**: `~/.iobox/tokens/<account>/microsoft_token_{readonly|standard}.txt`. Legacy files migrate to `standard`; readonly sessions re-consent with read-only scopes.
+- **`save --sync` / `save_emails_by_query(sync=True)`** re-run the query from the day before the last complete run and skip saved IDs (previously: every new mailbox message, ignoring the query). Changing the query starts a full sync.
+- **Email `--end-date` is inclusive**; calendar date-only `before` is inclusive and interpreted in local time.
+- **Fan-out results carry `slot`**; failed slots are reported (`Workspace.last_errors`, MCP `{"slot", "error"}` entries, CLI warnings); unknown `--provider`/`provider` slots are errors; `max_results` caps the merged total.
+- **MCP batch tools** require a non-empty query and `days >= 1`, cap `max_results` at 100, and report per-item `succeeded`/`failed`.
+- **A misspelled or broken workspace is an error** in MCP instead of silently using legacy single-account Gmail.
+- **Removed:** `Workspace.auth_status()`, `_check_write_mode()`, `WorkspaceSession`; MCP `save_email(include_spam_trash)` and `save_thread(prefer_html, include_spam_trash)`; `check_auth` no longer returns live mailbox counts.
+- **Email frontmatter** is emitted with `yaml.safe_dump` (values may now be quoted).
+
+**Security**
+- Token files written 0600 (dirs 0700), atomically; workspace names and account strings validated before use in paths.
+- The MCP server never starts an interactive OAuth flow (`iobox.auth_policy`).
+- Drive query values fully escaped; attachment paths and filenames sanitised and contained.
+
+**Correctness**
+- Email frontmatter is valid YAML for any subject (`Re: …` previously broke parsers).
+- Results sorted by parsed dates (were sorted as text); cross-type search sorts events by start, files by modified time.
+- Gmail: per-account label cache with refresh; bodies decoded by charset; multipart bodies joined; non-ASCII headers/filenames encoded correctly; HTML mail gets a real text/plain alternative; scope coverage checked on cached tokens; revoked refresh tokens recovered.
+- Google Calendar: local-time bounds, no hard-coded UTC on create, `update_event` field mapping, paged sync tokens.
+- Microsoft 365: rewritten against python-o365 2.1.9 — ImmutableId on every request, real query builder and KQL `$search`, correct calendar/RSVP/OneDrive APIs, requested scopes actually honoured, attachments downloaded, delta 410 handling, `$batch` per-item errors and 429 retries, large-attachment upload sessions, Deleted Items/Junk excluded unless asked.
+- Filenames use the message date; unique, id-suffixed event/file exports; duplicate detection reads frontmatter `message_id`.
+- Slugs are unique per space; config file name is authoritative; malformed configs give clean errors; atomic config writes.
+- Embedding index records backend/model/dimensions and refuses mismatches; local backend fixed; consistent cosine scores. (Building an index from the CLI/MCP is not yet available — see `.dev/specs/indexed-search.md`.)
+- No more `logging.basicConfig` at import.
+
+**Developer**
+- O365 tests drive the real python-o365 classes with a fake Graph HTTP layer; O365 and MCP are dev dependencies and installed in CI.
+- pytest live logging disabled (it closed click's CliRunner output in CLI tests).
+
+---
+
 ## 0.6.0
 
 The pluggable-storage release. iobox's OAuth tokens are no longer hard-coded

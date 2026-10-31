@@ -25,7 +25,7 @@ All provider types and the workspace compositor are implemented and tested (Goog
 
 ## Version Policy
 
-**Current version: `0.5.0`** — will remain below `1.0.0` until O365 providers (Outlook email, calendar, OneDrive) are tested end-to-end against a real Microsoft 365 tenant. Do not bump to `1.0.0` or above until live O365 testing passes.
+**Current version: `0.7.0`** — will remain below `1.0.0` until O365 providers (Outlook email, calendar, OneDrive) are tested end-to-end against a real Microsoft 365 tenant. Do not bump to `1.0.0` or above until live O365 testing passes.
 
 Set up an M365 dev sandbox for O365 testing: see `.dev/testing-o365.md` for instructions.
 

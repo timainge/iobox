@@ -23,9 +23,8 @@ iobox follows [SemVer](https://semver.org/), but is **pre-1.0**, so:
    ruff check src tests && ruff format --check src tests
    pytest --cov=src --cov-fail-under=80
    ```
-   Tests that simulate "extra not installed" (e.g. `O365` missing) will fail
-   locally if the corresponding extra is installed in your venv. CI installs
-   only `[dev]`, so those pass there.
+   CI installs `.[dev,outlook,mcp]` (and `uv sync` installs O365 and MCP as
+   dev dependencies), so the O365 and MCP tests run rather than skip.
 3. **Land everything on `main`** — version bump, CHANGELOG, code. The release
    workflow runs `ci.yml` first via `needs: test`; if anything is broken on
    `main`, the publish step is skipped and the tag becomes a phantom.

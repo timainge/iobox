@@ -35,6 +35,7 @@ from iobox.utils import parse_date_range, resource_filename
 
 logger = logging.getLogger(__name__)
 
+
 # Create a Typer app
 class _HelpFirstGroup(TyperGroup):
     """Show a subcommand's ``--help`` even when the access mode would block it.
@@ -1690,9 +1691,7 @@ def events_list(
     after: str | None = typer.Option(
         None, "--after", help="Start date (YYYY-MM-DD); defaults to 30 days ago"
     ),
-    before: str | None = typer.Option(
-        None, "--before", help="End date (YYYY-MM-DD, inclusive)"
-    ),
+    before: str | None = typer.Option(None, "--before", help="End date (YYYY-MM-DD, inclusive)"),
     provider: str | None = typer.Option(None, "--provider", help="Provider slot name"),
     max_results: int = typer.Option(25, "--max", "-m", help="Maximum results"),
     workspace_name: str | None = typer.Option(None, "--workspace", "-w"),

@@ -10,7 +10,7 @@ Your email is in one place. Your calendar is in another. Your files are somewher
 
 **Iobox puts them in the same box.** One workspace fans out a single query across every account and service simultaneously — email, calendar events, and files — and returns clean Markdown. Use it from the CLI or wire it into Claude Desktop via MCP so your AI assistant can search your inbox directly.
 
-> **Status (v0.5.0):** Google providers (Gmail, Calendar, Drive) are live-tested. Microsoft 365 providers (Outlook, OneDrive) are fully implemented but not yet tested against a real tenant — expect rough edges and please open issues.
+> **Status (v0.7.0):** Google providers (Gmail, Calendar, Drive) are live-tested. Microsoft 365 providers (Outlook, Calendar, OneDrive) are implemented and verified against the real python-o365 library, but not yet tested against a real tenant — expect rough edges and please open issues.
 
 ## Why
 

@@ -118,9 +118,7 @@ def get_new_messages(service: Any, history_id: str) -> list[str] | None:
         return message_ids
     except Exception as e:
         if "404" in str(e) or "notFound" in str(e):
-            logger.warning(
-                f"History expired for historyId {history_id}, falling back to full sync"
-            )
+            logger.warning(f"History expired for historyId {history_id}, falling back to full sync")
             return None
         raise
 

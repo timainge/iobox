@@ -72,12 +72,7 @@ def validate_account(account: str) -> str:
     """
     if not isinstance(account, str) or not account.strip():
         raise ValueError("Invalid account: must be a non-empty string.")
-    if (
-        "/" in account
-        or "\\" in account
-        or "\x00" in account
-        or account.startswith(".")
-    ):
+    if "/" in account or "\\" in account or "\x00" in account or account.startswith("."):
         raise ValueError(
             f"Invalid account {account!r}: must not contain '/', '\\' or NUL, or start with '.'."
         )
