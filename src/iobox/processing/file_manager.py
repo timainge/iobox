@@ -11,6 +11,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+import yaml
+
 from iobox.utils import create_markdown_filename
 
 # Set up logging
@@ -99,19 +101,41 @@ def save_email_to_markdown(
 
 
 def _read_frontmatter_message_id(filepath: str) -> str | None:
-    """Return the ``message_id`` from a saved email's YAML frontmatter, if any."""
+    """Return the ``message_id`` from a saved email's YAML frontmatter, if any.
+
+    The frontmatter block is parsed with ``yaml.safe_load``. Files written by
+    older iobox versions used hand-built (unquoted) YAML that may not parse —
+    e.g. ``subject: Re: hi`` — so a line scan is used as a fallback.
+    """
     try:
         with open(filepath, encoding="utf-8") as f:
-            if f.readline().strip() != "---":
+            if f.readline().rstrip("\r\n") != "---":
                 return None
+            lines: list[str] = []
             for line in f:
-                if line.strip() == "---":
+                # Exact match: an indented ``---`` inside a quoted multi-line
+                # value is content, not the closing delimiter.
+                if line.rstrip("\r\n") == "---":
                     break
-                if line.startswith("message_id:"):
-                    value = line.split(":", 1)[1].strip().strip("'\"")
-                    return value or None
-    except OSError:
+                lines.append(line)
+    except (OSError, UnicodeDecodeError):
         return None
+
+    try:
+        data = yaml.safe_load("".join(lines))
+    except yaml.YAMLError:
+        data = None
+    if isinstance(data, dict):
+        value = data.get("message_id")
+        if isinstance(value, str):
+            return value or None
+
+    # Legacy fallback: unquoted values (or a message_id YAML coerced to a
+    # non-string such as an int) — read the raw text of the line.
+    for line in lines:
+        if line.startswith("message_id:"):
+            raw = line.split(":", 1)[1].strip().strip("'\"")
+            return raw or None
     return None
 
 

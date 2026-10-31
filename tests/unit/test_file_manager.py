@@ -8,8 +8,11 @@ for saving email content to markdown files and handling duplicates.
 import os
 from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
+
 from iobox.processing.file_manager import (
     SyncState,
+    _read_frontmatter_message_id,
     check_file_exists,
     check_for_duplicates,
     create_attachments_directory,
@@ -355,6 +358,56 @@ class TestCheckForDuplicates:
 
     def test_missing_directory_returns_empty(self, tmp_path):
         assert check_for_duplicates(["abc"], str(tmp_path / "nope")) == []
+
+
+class TestReadFrontmatterMessageId:
+    """DATA-01: message_id read via yaml.safe_load, tolerant of legacy files."""
+
+    def _save(self, tmp_path, subject, message_id="real-id"):
+        from iobox.processing.markdown_converter import convert_email_to_markdown
+
+        email = {
+            "message_id": message_id,
+            "subject": subject,
+            "from": "a@example.com",
+            "date": "Mon, 05 Jan 2026 09:00:00 +0000",
+            "body": "Hello",
+        }
+        path = tmp_path / "x.md"
+        path.write_text(convert_email_to_markdown(email), encoding="utf-8")
+        return str(path)
+
+    @pytest.mark.parametrize(
+        "subject",
+        ["Re: hi", "yes", "12345", "# x", "a\nmessage_id: evil", "---", "Ünïcödé ✓"],
+    )
+    def test_nasty_subjects(self, tmp_path, subject):
+        path = self._save(tmp_path, subject)
+        assert _read_frontmatter_message_id(path) == "real-id"
+
+    def test_numeric_message_id_stays_string(self, tmp_path):
+        path = self._save(tmp_path, "x", message_id="012345")
+        assert _read_frontmatter_message_id(path) == "012345"
+
+    def test_legacy_unquoted_frontmatter(self, tmp_path):
+        path = tmp_path / "legacy.md"
+        path.write_text(
+            "---\ndate: Mon, 05 Jan\nmessage_id: abc123\nsubject: Re: hi: there\n---\n\nBody\n"
+        )
+        assert _read_frontmatter_message_id(str(path)) == "abc123"
+
+    def test_legacy_numeric_id_uses_raw_text(self, tmp_path):
+        path = tmp_path / "legacy.md"
+        path.write_text("---\nmessage_id: 0777\nsubject: x\n---\n")
+        assert _read_frontmatter_message_id(str(path)) == "0777"
+
+    def test_no_frontmatter(self, tmp_path):
+        path = tmp_path / "plain.md"
+        path.write_text("message_id: abc\n")
+        assert _read_frontmatter_message_id(str(path)) is None
+
+    def test_missing_file(self, tmp_path):
+        assert _read_frontmatter_message_id(str(tmp_path / "nope.md")) is None
 
 
 class TestSyncState:
