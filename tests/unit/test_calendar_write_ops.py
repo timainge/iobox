@@ -8,7 +8,7 @@ using the _service_fn= injection pattern (no real API calls).
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -233,112 +233,115 @@ class TestGoogleCalendarRsvp:
 
 
 class TestOutlookCalendarWriteOps:
-    """Smoke tests for OutlookCalendarProvider write methods using HAS_O365 patch."""
+    """OutlookCalendarProvider writes on real python-o365 Event objects over a
+    fake Graph session (skipped without the outlook extra)."""
 
-    _MODULE = "iobox.providers.o365.calendar"
+    @staticmethod
+    def _provider(events: list[dict] | None = None, mode: str = "standard") -> Any:
+        from tests.fixtures.mock_outlook_responses import graph_event, make_calendar_provider
 
-    def _make_provider(self, mode: str = "standard") -> Any:  # type: ignore[name-defined]
-        from iobox.providers.o365.calendar import OutlookCalendarProvider
-
-        auth = MagicMock()
-        account = MagicMock()
-        auth.get_account.return_value = account
-        with patch(f"{self._MODULE}.HAS_O365", True):
-            provider = OutlookCalendarProvider.__new__(OutlookCalendarProvider)
-            provider.account_email = "user@example.com"
-            provider.credentials_dir = None
-            provider.mode = mode
-            provider._microsoft_auth = auth
-            provider._account = None
-        return provider
-
-    def _make_o365_event(self) -> MagicMock:
-        ev = MagicMock()
-        ev.subject = "Test Event"
-        ev.object_id = "evt-o365-1"
-        ev.is_all_day = False
-        ev.start = MagicMock()
-        ev.start.isoformat.return_value = "2026-04-01T10:00:00"
-        ev.end = MagicMock()
-        ev.end.isoformat.return_value = "2026-04-01T11:00:00"
-        ev.attendees = []
-        ev.organizer = None
-        ev.online_meeting_url = None
-        ev.body = MagicMock()
-        ev.body.content = ""
-        ev.location = None
-        ev.created = None
-        ev.modified = None
-        ev.web_link = None
-        return ev
-
-    def test_check_write_mode_raises_in_readonly(self) -> None:
-        from iobox.providers.o365.calendar import OutlookCalendarProvider
-
-        with patch(f"{self._MODULE}.HAS_O365", True):
-            provider = OutlookCalendarProvider.__new__(OutlookCalendarProvider)
-            provider.mode = "readonly"
-        with pytest.raises(PermissionError):
-            provider._check_write_mode()
+        return make_calendar_provider(
+            events if events is not None else [graph_event("evt-o365-1", subject="Test Event")],
+            mode=mode,
+        )
 
     def test_create_event(self) -> None:
-        provider = self._make_provider()
-        o365_ev = self._make_o365_event()
-        account = provider._microsoft_auth.get_account.return_value
-        account.schedule().get_default_calendar().new_event.return_value = o365_ev
-        event = provider.create_event("Test Event", "2026-04-01T10:00:00", "2026-04-01T11:00:00")
-        assert event["title"] == "Test Event"
-        o365_ev.save.assert_called_once()
+        p = self._provider([])
+        event = p.create_event(
+            "Planning",
+            "2026-04-01T10:00:00+11:00",  # fixed offset: python-o365 only accepts ZoneInfo
+            "2026-04-01T11:00:00+11:00",
+            description="Agenda",
+            location="Room 1",
+            attendees=["a@x.com", "b@x.com"],
+        )
+        body = p.graph.last("POST", r"/me/calendars/cal-default/events").body
+        assert body["subject"] == "Planning"
+        assert body["start"] == {"dateTime": "2026-03-31T23:00:00", "timeZone": "UTC"}
+        assert body["end"] == {"dateTime": "2026-04-01T00:00:00", "timeZone": "UTC"}
+        assert body["body"] == {"contentType": "text", "content": "Agenda"}
+        assert body["location"] == {"displayName": "Room 1"}
+        assert [a["emailAddress"]["address"] for a in body["attendees"]] == ["a@x.com", "b@x.com"]
+        assert event["title"] == "Planning"
+        assert event["id"] == "new-evt-1"
+
+    def test_create_all_day_event(self) -> None:
+        p = self._provider([])
+        p.create_event("Holiday", "2026-04-01", "2026-04-02", all_day=True)
+        body = p.graph.last("POST", r"/me/calendars/cal-default/events").body
+        assert body["isAllDay"] is True
+        assert body["start"]["dateTime"] == "2026-04-01T00:00:00"
+        assert body["end"]["dateTime"] == "2026-04-02T00:00:00"
+
+    def test_update_event_maps_iobox_fields(self) -> None:
+        """O365-14: the old code setattr'd raw keys ("title" is not an Event attribute)."""
+        p = self._provider()
+        result = p.update_event(
+            "evt-o365-1",
+            {"title": "Renamed", "description": "New notes", "location": "Room 9"},
+        )
+        body = p.graph.last("PATCH", r"/me/events/evt-o365-1").body
+        assert body["subject"] == "Renamed"
+        assert body["body"] == {"contentType": "text", "content": "New notes"}
+        assert body["location"] == {"displayName": "Room 9"}
+        assert "start" not in body  # only changed fields are patched
+        assert result["title"] == "Renamed"
+
+    def test_update_event_times(self) -> None:
+        p = self._provider()
+        p.update_event("evt-o365-1", {"start": "2026-05-01T09:00:00", "end": "2026-05-01T10:00:00"})
+        body = p.graph.last("PATCH", r"/me/events/evt-o365-1").body
+        assert body["start"]["dateTime"] == "2026-05-01T09:00:00"
+        assert body["end"]["dateTime"] == "2026-05-01T10:00:00"
+
+    def test_update_event_rejects_unknown_fields(self) -> None:
+        p = self._provider()
+        with pytest.raises(ValueError, match="colorId"):
+            p.update_event("evt-o365-1", {"colorId": "5"})
+        assert not p.graph.find("PATCH", r"/me/events/.*")
 
     def test_delete_event(self) -> None:
-        provider = self._make_provider()
-        o365_ev = self._make_o365_event()
-        account = provider._microsoft_auth.get_account.return_value
-        account.schedule().get_event.return_value = o365_ev
-        provider.delete_event("evt-o365-1")
-        o365_ev.delete.assert_called_once()
+        p = self._provider()
+        p.delete_event("evt-o365-1")
+        p.graph.last("DELETE", r"/me/events/evt-o365-1")
 
-    def test_rsvp_accepted(self) -> None:
-        provider = self._make_provider()
-        o365_ev = self._make_o365_event()
-        account = provider._microsoft_auth.get_account.return_value
-        account.schedule().get_event.return_value = o365_ev
-        event = provider.rsvp("evt-o365-1", "accepted")
-        o365_ev.accept.assert_called_once()
+    def test_delete_missing_event_is_noop(self) -> None:
+        p = self._provider([])
+        p.delete_event("missing")
+        assert not p.graph.find("DELETE", r".*")
+
+    @pytest.mark.parametrize(
+        ("response", "endpoint", "status"),
+        [
+            ("accepted", "accept", "accepted"),
+            ("declined", "decline", "declined"),
+            ("tentative", "tentativelyAccept", "tentativelyAccepted"),
+        ],
+    )
+    def test_rsvp(self, response: str, endpoint: str, status: str) -> None:
+        """O365-03: Event.accept/decline/tentatively_accept do not exist."""
+        p = self._provider()
+        event = p.rsvp("evt-o365-1", response)
+        p.graph.last("POST", rf"/me/events/evt-o365-1/{endpoint}")
+        assert p.events["evt-o365-1"]["responseStatus"]["response"] == status
         assert event["id"] == "evt-o365-1"
 
-    def test_rsvp_declined(self) -> None:
-        provider = self._make_provider()
-        o365_ev = self._make_o365_event()
-        account = provider._microsoft_auth.get_account.return_value
-        account.schedule().get_event.return_value = o365_ev
-        provider.rsvp("evt-o365-1", "declined")
-        o365_ev.decline.assert_called_once()
-
-    def test_rsvp_tentative(self) -> None:
-        provider = self._make_provider()
-        o365_ev = self._make_o365_event()
-        account = provider._microsoft_auth.get_account.return_value
-        account.schedule().get_event.return_value = o365_ev
-        provider.rsvp("evt-o365-1", "tentative")
-        o365_ev.tentatively_accept.assert_called_once()
-
     def test_rsvp_invalid_response_raises(self) -> None:
-        provider = self._make_provider()
-        o365_ev = self._make_o365_event()
-        account = provider._microsoft_auth.get_account.return_value
-        account.schedule().get_event.return_value = o365_ev
+        p = self._provider()
         with pytest.raises(ValueError, match="Unknown RSVP"):
-            provider.rsvp("evt-o365-1", "maybe")
+            p.rsvp("evt-o365-1", "maybe")
 
     def test_rsvp_not_found_raises(self) -> None:
-        provider = self._make_provider()
-        account = provider._microsoft_auth.get_account.return_value
-        account.schedule().get_event.return_value = None
+        p = self._provider([])
         with pytest.raises(KeyError, match="not found"):
-            provider.rsvp("missing-id", "accepted")
+            p.rsvp("missing-id", "accepted")
 
-    def test_create_blocked_in_readonly(self) -> None:
-        provider = self._make_provider(mode="readonly")
+    def test_writes_blocked_in_readonly(self) -> None:
+        p = self._provider(mode="readonly")
         with pytest.raises(PermissionError):
-            provider.create_event("X", "2026-04-01T10:00:00", "2026-04-01T11:00:00")
+            p.create_event("X", "2026-04-01T10:00:00", "2026-04-01T11:00:00")
+        with pytest.raises(PermissionError):
+            p.update_event("evt-o365-1", {"title": "x"})
+        with pytest.raises(PermissionError):
+            p.rsvp("evt-o365-1", "accepted")
+        assert not p.graph.calls

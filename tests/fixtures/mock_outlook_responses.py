@@ -644,3 +644,233 @@ def make_outlook_provider(tenant: FakeOutlookTenant | None = None, **kwargs: Any
     provider = OutlookProvider(auth=FakeAuth(tenant.account()), **kwargs)
     provider.tenant = tenant  # type: ignore[attr-defined]
     return provider
+
+
+# ---------------------------------------------------------------------------
+# Calendar (Graph event resources)
+# ---------------------------------------------------------------------------
+
+DEFAULT_CALENDAR: dict[str, Any] = {"id": "cal-default", "name": "Calendar", "canEdit": True}
+
+
+def graph_event(
+    id: str = "evt-1",
+    *,
+    subject: str = "Team standup",
+    start: str = "2026-03-15T09:00:00.0000000",
+    end: str = "2026-03-15T09:30:00.0000000",
+    time_zone: str = "UTC",
+    is_all_day: bool = False,
+    body: str = "",
+    content_type: str = "html",
+    location: str | None = None,
+    organizer: tuple[str, str] | None = ("Org Anizer", "org@example.com"),
+    attendees: list[tuple[str, str, str]] | None = None,
+    online_meeting_url: str | None = None,
+    is_cancelled: bool = False,
+) -> dict[str, Any]:
+    """Return a Graph ``event`` resource (``attendees``: (name, email, response))."""
+    return {
+        "id": id,
+        "subject": subject,
+        "body": {"contentType": content_type, "content": body},
+        "start": {"dateTime": start, "timeZone": time_zone},
+        "end": {"dateTime": end, "timeZone": time_zone},
+        "isAllDay": is_all_day,
+        "location": {"displayName": location or "", "locationType": "default"},
+        "organizer": {"emailAddress": {"name": organizer[0], "address": organizer[1]}}
+        if organizer
+        else None,
+        "attendees": [
+            {
+                "type": "required",
+                "status": {"response": resp, "time": "0001-01-01T00:00:00Z"},
+                "emailAddress": {"name": n, "address": a},
+            }
+            for n, a, resp in (attendees or [])
+        ],
+        "onlineMeetingUrl": online_meeting_url,
+        "isOnlineMeeting": False,
+        "isCancelled": is_cancelled,
+        "createdDateTime": "2026-01-01T00:00:00Z",
+        "lastModifiedDateTime": "2026-03-01T00:00:00Z",
+        "webLink": f"https://outlook.office365.com/owa/?itemid={id}",
+        "responseStatus": {"response": "none", "time": "0001-01-01T00:00:00Z"},
+        "type": "singleInstance",
+    }
+
+
+def make_calendar_provider(
+    events: list[dict[str, Any]] | None = None, *, mode: str = "standard"
+) -> Any:
+    """Return an ``OutlookCalendarProvider`` over a fake Graph calendar.
+
+    ``provider.graph`` is the :class:`FakeGraph`; ``provider.events`` the
+    id → event store used by GET/PATCH/DELETE ``/me/events/{id}``.
+    """
+    pytest.importorskip("O365")
+    from iobox.providers.o365.calendar import OutlookCalendarProvider
+
+    graph = FakeGraph()
+    store: dict[str, dict[str, Any]] = {e["id"]: copy.deepcopy(e) for e in events or []}
+    counter = itertools.count(1)
+
+    def _event_id(call: GraphCall) -> str:
+        return call.path.split("/")[3]
+
+    def _get(call: GraphCall) -> Any:
+        ev = store.get(_event_id(call))
+        return ev if ev else (404, {"error": {"code": "ErrorItemNotFound", "message": "nf"}})
+
+    def _patch(call: GraphCall) -> Any:
+        store[_event_id(call)].update(call.body or {})
+        return store[_event_id(call)]
+
+    def _create(call: GraphCall) -> Any:
+        ev = {**call.body, "id": f"new-evt-{next(counter)}"}
+        ev.setdefault("createdDateTime", "2026-04-01T00:00:00Z")
+        store[ev["id"]] = ev
+        return 201, ev
+
+    def _respond(call: GraphCall) -> Any:
+        action = call.path.rsplit("/", 1)[-1]
+        response = {
+            "accept": "accepted",
+            "decline": "declined",
+            "tentativelyAccept": "tentativelyAccepted",
+        }[action]
+        store[call.path.split("/")[3]]["responseStatus"] = {"response": response}
+        return 202, None
+
+    graph.route("GET", r"/me/calendar", DEFAULT_CALENDAR)
+    graph.route(
+        "GET", r"/me/calendars/cal-default/calendarView", lambda c: {"value": list(store.values())}
+    )
+    graph.route("POST", r"/me/calendars/cal-default/events", _create)
+    graph.route("GET", r"/me/events/[^/]+", _get)
+    graph.route("PATCH", r"/me/events/[^/]+", _patch)
+    graph.route("DELETE", r"/me/events/[^/]+", lambda c: (204, None))
+    graph.route("POST", r"/me/events/[^/]+/(accept|decline|tentativelyAccept)", _respond)
+
+    provider = OutlookCalendarProvider(
+        account_email="user@example.com", mode=mode, auth=FakeAuth(make_real_account(graph))
+    )
+    provider.graph = graph  # type: ignore[attr-defined]
+    provider.events = store  # type: ignore[attr-defined]
+    return provider
+
+
+# ---------------------------------------------------------------------------
+# OneDrive (Graph driveItem resources)
+# ---------------------------------------------------------------------------
+
+
+def graph_drive_item(
+    id: str = "item-1",
+    *,
+    name: str = "report.txt",
+    folder: bool = False,
+    mime_type: str = "text/plain",
+    size: int = 42,
+    parent_id: str = "root-id",
+    parent_path: str = "/drive/root:",
+) -> dict[str, Any]:
+    """Return a Graph ``driveItem`` resource (file or folder)."""
+    item: dict[str, Any] = {
+        "id": id,
+        "name": name,
+        "size": size,
+        "webUrl": f"https://onedrive.live.com/?id={id}",
+        "createdDateTime": "2026-01-01T00:00:00Z",
+        "lastModifiedDateTime": "2026-03-01T12:00:00Z",
+        "parentReference": {"driveId": "drive-1", "id": parent_id, "path": parent_path},
+    }
+    if folder:
+        item["folder"] = {"childCount": 0}
+    else:
+        item["file"] = {"mimeType": mime_type, "hashes": {}}
+    return item
+
+
+ROOT_FOLDER: dict[str, Any] = {
+    "id": "root-id",
+    "name": "root",
+    "folder": {"childCount": 2},
+    "root": {},
+    "parentReference": {"driveId": "drive-1"},
+}
+
+
+def make_onedrive_provider(
+    items: list[dict[str, Any]] | None = None,
+    *,
+    mode: str = "standard",
+    contents: dict[str, bytes] | None = None,
+) -> Any:
+    """Return a ``OneDriveProvider`` over a fake Graph drive (``provider.graph``)."""
+    pytest.importorskip("O365")
+    from iobox.providers.o365.files import OneDriveProvider
+
+    graph = FakeGraph()
+    store: dict[str, dict[str, Any]] = {i["id"]: copy.deepcopy(i) for i in items or []}
+    blobs = dict(contents or {})
+    counter = itertools.count(1)
+
+    def _get(call: GraphCall) -> Any:
+        item_id = call.path.rsplit("/", 1)[-1]
+        if item_id == "root-id":
+            return ROOT_FOLDER
+        it = store.get(item_id)
+        return it if it else (404, {"error": {"code": "itemNotFound", "message": "nf"}})
+
+    def _children(call: GraphCall) -> Any:
+        parent = "root-id" if call.path.endswith("/root/children") else call.path.split("/")[-2]
+        return {"value": [i for i in store.values() if i["parentReference"].get("id") == parent]}
+
+    def _content(call: GraphCall) -> Any:
+        return blobs.get(call.path.split("/")[-2], b"")
+
+    def _mkdir(call: GraphCall) -> Any:
+        parent = call.path.split("/")[-2]
+        new = graph_drive_item(
+            f"folder-{next(counter)}", name=call.body["name"], folder=True, parent_id=parent
+        )
+        store[new["id"]] = new
+        return 201, new
+
+    def _upload(call: GraphCall) -> Any:
+        # PUT /items/{parent}:/{name}:/content (simple upload, < 4 MB)
+        m = re.fullmatch(r".*/items/([^/:]+):/(.+):/content", call.path)
+        assert m, call.path
+        parent, name = m.groups()
+        existing = next(
+            (
+                i
+                for i in store.values()
+                if i["name"] == name and i["parentReference"].get("id") == parent
+            ),
+            None,
+        )
+        item = existing or graph_drive_item(f"up-{next(counter)}", name=name, parent_id=parent)
+        store[item["id"]] = item
+        return 201, item
+
+    graph.route("GET", r"/me/drive", {"id": "drive-1", "name": "OneDrive", "driveType": "business"})
+    graph.route("GET", r"/me/drive/root", ROOT_FOLDER)
+    graph.route("GET", r"/me/drive/items/[^/]+", _get)
+    graph.route("GET", r"/me/drive/items/[^/]+/children", _children)
+    graph.route("GET", r"/me/drive/root/children", _children)
+    graph.route("GET", r"/me/drive/items/[^/]+/content", _content)
+    graph.route("POST", r"/me/drive/items/[^/]+/children", _mkdir)
+    graph.route("PUT", r"/me/drive/items/.+:/content", _upload)
+    graph.route("DELETE", r"/me/drive/items/[^/]+", lambda c: (204, None))
+    graph.route("POST", r"/me/drive/items/[^/]+/permanentDelete", lambda c: (204, None))
+    graph.route("GET", r"/me/drive/search\(q='.*'\)", lambda c: {"value": list(store.values())})
+    graph.route("GET", r"/me/drive/sharedWithMe", lambda c: {"value": list(store.values())})
+
+    provider = OneDriveProvider(
+        account_email="user@example.com", mode=mode, auth=FakeAuth(make_real_account(graph))
+    )
+    provider.graph = graph  # type: ignore[attr-defined]
+    provider.items = store  # type: ignore[attr-defined]
+    return provider

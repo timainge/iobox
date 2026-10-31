@@ -700,23 +700,10 @@ class TestGoogleDriveReturnTypes:
 
 
 def _make_outlook_calendar_provider():
-    from iobox.providers.o365.calendar import OutlookCalendarProvider
+    """Real python-o365 Schedule/Calendar over a fake Graph session (needs O365)."""
+    from tests.fixtures.mock_outlook_responses import make_calendar_provider
 
-    p = OutlookCalendarProvider.__new__(OutlookCalendarProvider)
-    p.account_email = "user@company.com"
-    p.credentials_dir = None
-    p.mode = "readonly"
-
-    from unittest.mock import MagicMock
-
-    account = MagicMock()
-    calendar = MagicMock()
-    calendar.get_events.return_value = iter([])
-    schedule = MagicMock()
-    schedule.get_default_calendar.return_value = calendar
-    account.schedule.return_value = schedule
-    p._account = account
-    return p
+    return make_calendar_provider([], mode="readonly")
 
 
 class TestOutlookCalendarABCCompleteness:
