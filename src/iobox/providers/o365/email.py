@@ -45,6 +45,7 @@ import logging
 import mimetypes
 import os
 import re
+import time
 from datetime import datetime
 from typing import Any
 
@@ -55,6 +56,11 @@ logger = logging.getLogger(__name__)
 
 # Graph $batch accepts at most 20 sub-requests per call.
 _BATCH_LIMIT = 20
+# Throttled (429) $batch sub-requests are retried this many times, sleeping
+# for the sub-response's Retry-After (or an exponential backoff), capped.
+_BATCH_MAX_RETRIES = 3
+_BATCH_MAX_SLEEP = 30.0
+_batch_sleep = time.sleep  # indirection so tests can patch the wait out
 # When $search results are filtered client-side, examine at least this many
 # candidates (or 5 x max_results, whichever is larger) before giving up.
 _CLIENT_FILTER_FETCH = 250
@@ -124,6 +130,17 @@ def _graph_error_code(exc: BaseException) -> str:
         return str(response.json().get("error", {}).get("code", ""))
     except Exception:
         return ""
+
+
+def _retry_after_seconds(sub_response: dict[str, Any], attempt: int) -> float:
+    """Delay before retrying a throttled ``$batch`` sub-request (capped)."""
+    headers = sub_response.get("headers") or {}
+    raw = next((v for k, v in headers.items() if str(k).lower() == "retry-after"), None)
+    try:
+        delay = float(raw) if raw is not None else float(2**attempt)
+    except (TypeError, ValueError):
+        delay = float(2**attempt)
+    return min(max(delay, 0.0), _BATCH_MAX_SLEEP)
 
 
 def _kql_term(prop: str, value: str) -> str:
@@ -820,7 +837,10 @@ class OutlookProvider(EmailProvider):
 
         Each sub-request gets the ImmutableId ``Prefer`` header (outer request
         headers are not inherited by sub-requests). Every sub-response status
-        is checked; failures are collected across all chunks and raised
+        is checked. Throttled (429) sub-requests are re-sent on their own, up
+        to ``_BATCH_MAX_RETRIES`` times, after waiting for the largest
+        ``Retry-After`` among them (capped at ``_BATCH_MAX_SLEEP`` seconds).
+        Remaining failures are collected across all chunks and raised
         together as :class:`OutlookBatchError` once every chunk has run.
 
         Args:
@@ -852,32 +872,49 @@ class OutlookProvider(EmailProvider):
                     headers["Prefer"] = f"{prefer}, {IMMUTABLE_ID_PREFER}"
                 chunk.append({**req, "headers": headers})
 
-            resp = con.post(url, data={"requests": chunk})
-            responses = resp.json().get("responses", []) if resp else []
-            seen = set()
-            for r in responses:
-                seen.add(r.get("id"))
-                status = int(r.get("status", 0))
-                if not 200 <= status < 300:
-                    body = r.get("body") or {}
-                    err = body.get("error", {}) if isinstance(body, dict) else {}
-                    failures.append(
-                        {
-                            "message_id": by_req_id.get(r.get("id"), r.get("id")),
-                            "status": status,
-                            "error": err.get("message") or err.get("code") or "",
-                        }
-                    )
-            for req in chunk:
-                if req["id"] not in seen:
-                    failures.append(
-                        {
-                            "message_id": by_req_id.get(req["id"], req["id"]),
-                            "status": 0,
-                            "error": "no response in $batch reply",
-                        }
-                    )
-            all_responses.extend(responses)
+            pending = chunk
+            for attempt in range(_BATCH_MAX_RETRIES + 1):
+                resp = con.post(url, data={"requests": pending})
+                responses = resp.json().get("responses", []) if resp else []
+                seen = set()
+                throttled: set[str] = set()
+                delay = 0.0
+                for r in responses:
+                    seen.add(r.get("id"))
+                    status = int(r.get("status", 0))
+                    if status == 429 and attempt < _BATCH_MAX_RETRIES:
+                        throttled.add(r.get("id"))
+                        delay = max(delay, _retry_after_seconds(r, attempt))
+                        continue
+                    all_responses.append(r)
+                    if not 200 <= status < 300:
+                        body = r.get("body") or {}
+                        err = body.get("error", {}) if isinstance(body, dict) else {}
+                        failures.append(
+                            {
+                                "message_id": by_req_id.get(r.get("id"), r.get("id")),
+                                "status": status,
+                                "error": err.get("message") or err.get("code") or "",
+                            }
+                        )
+                for req in pending:
+                    if req["id"] not in seen:
+                        failures.append(
+                            {
+                                "message_id": by_req_id.get(req["id"], req["id"]),
+                                "status": 0,
+                                "error": "no response in $batch reply",
+                            }
+                        )
+                if not throttled:
+                    break
+                logger.info(
+                    "Outlook $batch: %d sub-request(s) throttled; retrying in %.1fs",
+                    len(throttled),
+                    delay,
+                )
+                _batch_sleep(delay)
+                pending = [req for req in pending if req["id"] in throttled]
 
         if failures:
             raise OutlookBatchError(failures, total=len(requests))

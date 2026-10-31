@@ -51,6 +51,7 @@ iobox normalises results across providers, but the underlying services differ. T
 - **Query syntax** is Microsoft Graph `$search` (KQL). Structured filters (from, to, dates, attachments) use `$filter`; Graph can't combine `$search` with `$filter`/`$orderby`, so when both are needed unread/category filters and ordering are applied client-side.
 - **Message IDs are ImmutableIds** (`Prefer: IdType="ImmutableId"` on every Graph request), stable across folder moves.
 - **Categories** map to iobox tags.
+- **Bulk operations** (mark read, archive, trash, tag) use Graph `$batch`. Throttled items (HTTP 429) are retried up to 3 times, honouring `Retry-After` (capped at 30 s); items that still fail are reported together after the whole batch has run.
 - **Incremental sync** (SDK `get_sync_state()` / `get_new_messages()`) uses a Graph delta link on the Inbox; an expired delta link triggers a full re-sync. `iobox save --sync` uses the provider-neutral query window instead.
 - **Attachments** on new drafts and sent messages: small files go in the create request; once they total more than 3 MB the rest are added to the saved draft, files over 3 MB through a chunked upload session. Sending always saves a draft first and then sends it.
 

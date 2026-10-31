@@ -332,7 +332,11 @@ class FakeOutlookTenant:
         self.attachments: dict[str, list[dict[str, Any]]] = {}
         self.categories: list[dict[str, Any]] = []
         self.sent: list[dict[str, Any]] = []
-        self.batch_status: dict[str, int] = {}  # sub-request id → forced status
+        # Sub-request id → forced status, or a list consumed one per $batch
+        # attempt (the last value repeats), e.g. [429, 200] = throttled once.
+        self.batch_status: dict[str, int | list[int]] = {}
+        # Retry-After header value on throttled (429) sub-responses.
+        self.batch_retry_after: str | None = "2"
         self._ids = itertools.count(1)
         # upload-session id → {"message_id", "item", "data", "next"}
         self.upload_sessions: dict[str, dict[str, Any]] = {}
@@ -617,11 +621,21 @@ class FakeOutlookTenant:
     def _batch(self, call: GraphCall) -> Any:
         responses = []
         for req in call.body["requests"]:
-            status = self.batch_status.get(req["id"], 200)
+            forced = self.batch_status.get(req["id"], 200)
+            if isinstance(forced, list):
+                status = forced.pop(0) if len(forced) > 1 else forced[0]
+            else:
+                status = forced
             body: Any = {}
-            if status >= 400:
+            response: dict[str, Any] = {"id": req["id"], "status": status}
+            if status == 429:
+                body = {"error": {"code": "TooManyRequests", "message": "throttled"}}
+                if self.batch_retry_after is not None:
+                    response["headers"] = {"Retry-After": self.batch_retry_after}
+            elif status >= 400:
                 body = {"error": {"code": "ErrorItemNotFound", "message": "batch item failed"}}
-            responses.append({"id": req["id"], "status": status, "body": body})
+            response["body"] = body
+            responses.append(response)
         return {"responses": responses}
 
     # ── wiring ────────────────────────────────────────────────────────────

@@ -700,6 +700,66 @@ class TestBatch:
         assert not tenant.graph.find("POST", r"/\$batch")
 
 
+class TestBatchThrottling:
+    """FU-14: 429 sub-responses were reported as failures, not retried."""
+
+    @pytest.fixture
+    def sleeps(self):
+        with patch("iobox.providers.o365.email._batch_sleep") as sleep:
+            yield sleep
+
+    def test_throttled_item_is_retried_alone(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["1"] = [429, 200]
+        provider.batch_trash(["m0", "m1", "m2"])  # no error
+        posts = tenant.graph.find("POST", r"/\$batch")
+        assert [[r["id"] for r in p.body["requests"]] for p in posts] == [["0", "1", "2"], ["1"]]
+        retried = posts[1].body["requests"][0]
+        assert retried["url"] == "/me/messages/m1/move"
+        assert retried["headers"]["Prefer"] == IMMUTABLE_ID_PREFER
+        sleeps.assert_called_once_with(2.0)  # honours Retry-After
+
+    def test_persistent_throttling_reported_after_bounded_retries(
+        self, provider, tenant, sleeps
+    ) -> None:
+        tenant.batch_status["0"] = 429
+        tenant.batch_status["1"] = 404
+        with pytest.raises(OutlookBatchError) as exc:
+            provider.batch_mark_read(["m0", "m1", "m2"])
+        assert len(tenant.graph.find("POST", r"/\$batch")) == 4  # 1 + 3 retries
+        assert sleeps.call_count == 3
+        assert sorted((f["message_id"], f["status"]) for f in exc.value.failures) == [
+            ("m0", 429),
+            ("m1", 404),
+        ]
+
+    def test_non_throttle_failures_are_not_retried(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["0"] = 503
+        with pytest.raises(OutlookBatchError):
+            provider.batch_trash(["m0"])
+        assert len(tenant.graph.find("POST", r"/\$batch")) == 1
+        sleeps.assert_not_called()
+
+    def test_retry_after_is_capped(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["0"] = [429, 200]
+        tenant.batch_retry_after = "3600"
+        provider.batch_trash(["m0"])
+        (delay,), _ = sleeps.call_args
+        assert 0 < delay <= 30
+
+    def test_missing_retry_after_backs_off(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["0"] = [429, 429, 200]
+        tenant.batch_retry_after = None
+        provider.batch_trash(["m0"])
+        delays = [c.args[0] for c in sleeps.call_args_list]
+        assert len(delays) == 2 and 0 < delays[0] < delays[1]
+
+    def test_retries_stay_within_their_chunk(self, provider, tenant, sleeps) -> None:
+        tenant.batch_status["21"] = [429, 200]
+        provider.batch_trash([f"m{i}" for i in range(25)])
+        sizes = [len(c.body["requests"]) for c in tenant.graph.find("POST", r"/\$batch")]
+        assert sizes == [20, 5, 1]
+
+
 def test_fixture_tenant_is_isolated() -> None:
     a = make_full_tenant()
     a.add(graph_message("extra"))
