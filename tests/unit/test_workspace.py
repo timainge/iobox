@@ -491,6 +491,26 @@ class TestFromConfig:
             ws = Workspace.from_config(config)
         assert len(ws.file_providers) == 1
 
+    def test_google_calendar_and_drive_inherit_entry_mode(self) -> None:
+        from iobox.space_config import ServiceEntry, SpaceConfig
+
+        config = SpaceConfig(
+            name="test",
+            services=[
+                ServiceEntry(
+                    number=1,
+                    service="google",
+                    account="tim@gmail.com",
+                    scopes=["calendar", "drive"],
+                    mode="standard",
+                )
+            ],
+        )
+        with patch("iobox.providers.google.auth.GoogleAuth.__init__", return_value=None):
+            ws = Workspace.from_config(config)
+        assert ws.calendar_providers[0].provider.mode == "standard"
+        assert ws.file_providers[0].provider.mode == "standard"
+
     def test_workspace_name_from_config(self) -> None:
         from iobox.space_config import SpaceConfig
 

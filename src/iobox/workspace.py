@@ -318,13 +318,13 @@ class Workspace:
                 if "calendar" in entry.scopes:
                     from iobox.providers.google.calendar import GoogleCalendarProvider
 
-                    g_cal: Any = GoogleCalendarProvider(auth=auth)
+                    g_cal: Any = GoogleCalendarProvider(auth=auth, mode=entry.mode)
                     calendar_slots.append(ProviderSlot(name=f"{entry.slug}-cal", provider=g_cal))
 
                 if "drive" in entry.scopes:
                     from iobox.providers.google.files import GoogleDriveProvider
 
-                    g_drv: Any = GoogleDriveProvider(auth=auth)
+                    g_drv: Any = GoogleDriveProvider(auth=auth, mode=entry.mode)
                     file_slots.append(ProviderSlot(name=f"{entry.slug}-drive", provider=g_drv))
 
             elif entry.service == "o365":

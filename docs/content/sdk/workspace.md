@@ -102,9 +102,6 @@ cal.create_event(title="Review", start="2026-11-03T10:00:00", end="2026-11-03T10
 
 Writes fail if the slot's account was added with `--read`.
 
-!!! warning "Known issue"
-    In the current release, `Workspace.from_config` builds Google Calendar and Google Drive providers without passing the session's mode, so their write methods raise `PermissionError` even for read-write sessions. Until that's fixed, construct those providers directly with `mode="standard"` for writes (see [Providers](providers.md#google)).
-
 See [Providers](providers.md) for the full write surface.
 
 ## Working with configs
