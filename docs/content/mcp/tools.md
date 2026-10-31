@@ -7,7 +7,7 @@ Every tool below is registered only in the [access mode](configuration.md#access
 - `provider` — a [slot name](multi-account.md#targeting-one-account). Search and list tools fan out across all slots when omitted; fetch and write tools use the first slot of their type.
 - `workspace` — a workspace name. Defaults to the active workspace.
 
-`search_workspace` takes `workspace` but not `provider`; `semantic_search_workspace` takes neither.
+`search_workspace`, `semantic_search_workspace`, and `check_auth` take `workspace` but not `provider`.
 
 **File paths.** `output_dir`, `output_path`, `attachments`, and `local_path` are confined to the [file access root](configuration.md#file-access-root) (`IOBOX_MCP_ROOT`, default `~/iobox`). Relative paths resolve under it, and `output_dir="."` means the root itself. Downloads never overwrite an existing file.
 
@@ -16,7 +16,7 @@ Every tool below is registered only in the [access mode](configuration.md#access
 | Tool | Mode | Description | Key arguments |
 |---|---|---|---|
 | `search_workspace` | readonly | Search email, events, and files in parallel; results merged by date | `query`, `types=["email","event","file"]`, `max_results=10` |
-| `semantic_search_workspace` | readonly | Vector search over the local embedding index (needs `iobox[semantic]` and a built index) | `query`, `types`, `top_k=10`, `backend="openai"` |
+| `semantic_search_workspace` | readonly | Vector search over the local embedding index (needs `iobox[semantic]` and a built index). Nothing in iobox builds the index yet, so on an unindexed workspace it returns `{"error": "No semantic index for workspace …"}` — use `search_workspace` instead | `query`, `types`, `top_k=10`, `backend="openai"` |
 
 ## Email
 

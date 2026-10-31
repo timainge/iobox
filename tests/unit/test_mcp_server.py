@@ -1961,3 +1961,82 @@ class TestToolParameters:
         params = inspect.signature(save_thread).parameters
         assert "include_spam_trash" not in params
         assert "prefer_html" not in params
+
+
+# ---------------------------------------------------------------------------
+# semantic_search_workspace with no index (MCP-06)
+# ---------------------------------------------------------------------------
+
+
+class TestSemanticSearchWorkspace:
+    def test_missing_index_returns_clear_error_without_side_effects(self):
+        import iobox.space_config as sc
+        from iobox.mcp_server import semantic_search_workspace
+
+        _save_space("personal", [_entry("me@gmail.com")], active=True)
+        with (
+            patch("iobox.processing.embed.get_backend") as get_backend,
+            patch("iobox.processing.embed.semantic_search") as search,
+        ):
+            result = semantic_search_workspace("budget")
+        assert len(result) == 1
+        assert "No semantic index for workspace personal" in result[0]["error"]
+        get_backend.assert_not_called()
+        search.assert_not_called()
+        assert not (sc.INDEXES_DIR / "personal").exists()
+
+    def test_empty_index_returns_error(self):
+        import sqlite3
+
+        import iobox.space_config as sc
+        from iobox.mcp_server import semantic_search_workspace
+
+        _save_space("personal", [_entry("me@gmail.com")])
+        db = sc.INDEXES_DIR / "personal" / "index.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE resource_embeddings (resource_id TEXT, workspace TEXT, "
+            "resource_type TEXT, provider_id TEXT, content_hash TEXT, embedding_json TEXT)"
+        )
+        conn.commit()
+        conn.close()
+        with patch("iobox.processing.embed.semantic_search") as search:
+            result = semantic_search_workspace("budget", workspace="personal")
+        assert "No semantic index" in result[0]["error"]
+        search.assert_not_called()
+
+    def test_populated_index_searches(self):
+        import sqlite3
+
+        import iobox.space_config as sc
+        from iobox.mcp_server import semantic_search_workspace
+
+        _save_space("personal", [_entry("me@gmail.com")])
+        db = sc.INDEXES_DIR / "personal" / "index.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE resource_embeddings (resource_id TEXT, workspace TEXT, "
+            "resource_type TEXT, provider_id TEXT, content_hash TEXT, embedding_json TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO resource_embeddings VALUES ('r1', 'personal', 'email', 'p', 'h', '[]')"
+        )
+        conn.commit()
+        conn.close()
+        hits = [{"id": "r1", "resource_type": "email", "provider_id": "p", "score": 0.9}]
+        with (
+            patch("iobox.processing.embed.get_backend", return_value="backend"),
+            patch("iobox.processing.embed.semantic_search", return_value=hits) as search,
+        ):
+            result = semantic_search_workspace("budget", workspace="personal")
+        assert result == hits
+        _, kwargs = search.call_args
+        assert kwargs["credentials_dir"] == str(sc.IOBOX_HOME)
+
+    def test_unknown_workspace_returns_error(self):
+        from iobox.mcp_server import semantic_search_workspace
+
+        result = semantic_search_workspace("budget", workspace="../../etc")
+        assert "not found" in result[0]["error"]

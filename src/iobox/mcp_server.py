@@ -2340,9 +2340,11 @@ def semantic_search_workspace(
     Requires the ``semantic`` optional dependency group:
     ``pip install 'iobox[semantic]'``.
 
-    Resources must be indexed first via ``embed_resources()`` before this
-    tool returns meaningful results.  Falls back gracefully if no index
-    exists yet.
+    Resources must be indexed first. Nothing in iobox builds the index yet,
+    so on a workspace that has never been indexed this returns a single
+    ``{"error": "No semantic index for workspace ..."}`` entry rather than an
+    empty list (which would wrongly read as "no matches"). Use
+    ``search_workspace`` for keyword search instead.
 
     Args:
         query: Natural-language search query.
@@ -2355,7 +2357,8 @@ def semantic_search_workspace(
 
     Returns:
         List of dicts with ``id``, ``resource_type``, ``provider_id``, and
-        ``score`` fields, ranked by similarity (highest first).
+        ``score`` fields, ranked by similarity (highest first), or a single
+        ``{"error": ...}`` entry.
     """
     try:
         from iobox.processing.embed import get_backend as _get_backend
@@ -2369,24 +2372,64 @@ def semantic_search_workspace(
             }
         ]
 
+    from iobox import space_config
+
     # Resolve workspace name
     ws_name = workspace
     if not ws_name:
         try:
-            from iobox.space_config import get_active_space
-
-            ws_name = get_active_space()
+            ws_name = space_config.get_active_space()
         except Exception:
             pass
     if not ws_name:
         return [{"error": "No active workspace. Set one with `iobox space use NAME`."}]
+    if ws_name not in space_config.list_spaces():
+        return [{"error": f"Workspace '{ws_name}' not found."}]
+
+    # Check the index read-only first: avoids an embedding API call and
+    # creating an empty index directory/database as a side effect.
+    iobox_home = space_config.INDEXES_DIR.parent
+    if _indexed_count(space_config.INDEXES_DIR / ws_name / "index.db", ws_name) == 0:
+        return [
+            {
+                "error": (
+                    f"No semantic index for workspace {ws_name}; nothing has been indexed yet. "
+                    "Use search_workspace for keyword search."
+                )
+            }
+        ]
 
     try:
         emb_backend = _get_backend(backend)
-        results = _semantic_search(query, ws_name, types=types, top_k=top_k, backend=emb_backend)
-        return results
+        return _semantic_search(
+            query,
+            ws_name,
+            types=types,
+            top_k=top_k,
+            backend=emb_backend,
+            credentials_dir=str(iobox_home),
+        )
     except Exception as exc:
         return [{"error": str(exc)}]
+
+
+def _indexed_count(db_path: Path, ws_name: str) -> int:
+    """Count indexed resources for *ws_name* without creating anything on disk."""
+    import sqlite3
+
+    if not db_path.is_file():
+        return 0
+    try:
+        conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM resource_embeddings WHERE workspace = ?", (ws_name,)
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return 0
+    return int(row[0]) if row else 0
 
 
 def main() -> None:
