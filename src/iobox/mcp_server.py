@@ -2456,7 +2456,11 @@ def _indexed_count(db_path: Path, ws_name: str) -> int:
 
 def main() -> None:
     from iobox.accounts import get_account_from_env, set_active_account
+    from iobox.auth_policy import set_interactive_auth
 
+    # Never open a browser from inside the server; accounts without a usable
+    # token report "run `iobox space login`" instead (MCP-02).
+    set_interactive_auth(False)
     mode = get_mode_from_env()
     set_active_mode(mode)
     set_active_account(get_account_from_env())

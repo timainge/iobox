@@ -37,6 +37,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from iobox.accounts import get_active_account
+from iobox.auth_policy import require_interactive_auth
 from iobox.modes import SCOPE_IMPLIES, SCOPES_BY_MODE, AccessMode, get_mode_from_env
 from iobox.providers.token_store import (
     FilesystemTokenStore,
@@ -231,6 +232,7 @@ class GoogleAuth:
                     "and could not be refreshed. Run `iobox space login` to re-authorise. " + msg
                 )
             raise FileNotFoundError(msg)
+        require_interactive_auth(self.account)
         logger.info(f"Initiating OAuth flow with credentials from {creds_file}")
         flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), self.scopes)
         creds: Credentials = flow.run_local_server(port=0)
@@ -430,6 +432,7 @@ def _refresh_or_reauthorise(
                 "refreshed. Run `iobox space login` to re-authorise. " + msg
             )
         raise FileNotFoundError(msg)
+    require_interactive_auth(get_active_account())
     flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, scopes)
     new_creds: Credentials = flow.run_local_server(port=0)
     return new_creds
