@@ -25,11 +25,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
+import threading
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -37,7 +38,12 @@ from googleapiclient.discovery import build
 
 from iobox.accounts import get_active_account
 from iobox.modes import SCOPE_IMPLIES, SCOPES_BY_MODE, AccessMode, get_mode_from_env
-from iobox.providers.token_store import FilesystemTokenStore, TokenStore
+from iobox.providers.token_store import (
+    FilesystemTokenStore,
+    TokenStore,
+    ensure_private_dir,
+    write_private_file,
+)
 
 load_dotenv()
 
@@ -84,14 +90,18 @@ class GoogleAuth:
         # a Postgres-backed store scoped to the request's authenticated user.
         self.token_store: TokenStore = token_store or FilesystemTokenStore(self.credentials_dir)
         self._credentials: Credentials | None = None
+        # Workspace fan-out runs providers on worker threads that share one
+        # GoogleAuth per (account, mode); serialise load/refresh/consent so it
+        # happens once and the token file is not written concurrently.
+        self._lock = threading.RLock()
 
     # ── Path properties ───────────────────────────────────────────────────────
 
     @property
     def token_path(self) -> Path:
         """Full path to the token file for this (account, tier) pair."""
-        token_dir = self.credentials_dir / "tokens" / self.account
-        token_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.credentials_dir / "tokens")
+        token_dir = ensure_private_dir(self.credentials_dir / "tokens" / self.account)
         return token_dir / f"token_{self.tier}.json"
 
     @property
@@ -109,7 +119,24 @@ class GoogleAuth:
     # ── Core auth methods ─────────────────────────────────────────────────────
 
     def get_credentials(self) -> Credentials:
-        """Return valid OAuth credentials, refreshing or re-authenticating as needed."""
+        """Return valid OAuth credentials, refreshing or re-authenticating as needed.
+
+        * The cached token is loaded with the scopes it was actually granted
+          (not the requested ones) and is used only if those cover
+          :attr:`scopes` — implied scopes count, e.g. ``gmail.modify`` covers
+          ``gmail.readonly``. Otherwise the consent flow runs for the full set.
+        * In the ``readonly`` tier a broader ``standard`` token is accepted
+          when no usable readonly token exists.
+        * A refresh token the server rejects (revoked/expired) is discarded and
+          the consent flow runs again.
+
+        Thread-safe: concurrent callers sharing this instance wait for a single
+        load/refresh/consent rather than each doing their own.
+        """
+        with self._lock:
+            return self._get_credentials_locked()
+
+    def _get_credentials_locked(self) -> Credentials:
         if self._credentials and self._credentials.valid:
             return self._credentials
 
@@ -134,36 +161,77 @@ class GoogleAuth:
                     return creds
 
         creds = None
-        token_info = self.token_store.load(self.account, self.tier)
-        if token_info is not None:
-            logger.info(
-                "Loading existing credentials for account=%s tier=%s",
-                self.account,
-                self.tier,
-            )
+        refresh_failed = False
+        loaded_tier = self.tier
+        candidate_tiers = [self.tier] + (["standard"] if self.tier == "readonly" else [])
+        for tier in candidate_tiers:
+            token_info = self.token_store.load(self.account, tier)
+            if token_info is None:
+                continue
+            logger.info("Loading existing credentials for account=%s tier=%s", self.account, tier)
+            granted = _token_scopes(token_info)
+            if granted is not None and not _scopes_cover(granted, self.scopes):
+                logger.warning(
+                    "Stored token for account=%s tier=%s lacks scopes %s; re-authorising",
+                    self.account,
+                    tier,
+                    sorted(set(self.scopes) - _expand_scopes(granted)),
+                )
+                continue
+            # Keep the token's own granted scopes when it records them; fall
+            # back to the requested set only for tokens that don't.
             creds = Credentials.from_authorized_user_info(  # type: ignore[no-untyped-call]
-                token_info, self.scopes
+                token_info, None if granted is not None else self.scopes
             )
+            loaded_tier = tier
+            break
 
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
+        if creds is not None and not creds.valid:
+            if creds.expired and creds.refresh_token:
                 logger.info("Refreshing expired credentials")
-                creds.refresh(Request())
-            else:
-                creds_file = self.credentials_file
-                if not creds_file.exists():
-                    raise FileNotFoundError(
-                        f"Credentials file not found at {creds_file}. "
-                        "Please download OAuth 2.0 Client ID JSON from Google Cloud Console."
+                try:
+                    creds.refresh(Request())
+                except RefreshError as exc:
+                    logger.warning(
+                        "Refresh token for account=%s was rejected (%s); discarding it",
+                        self.account,
+                        exc,
                     )
-                logger.info(f"Initiating OAuth flow with credentials from {creds_file}")
-                flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), self.scopes)
-                creds = flow.run_local_server(port=0)
+                    self.token_store.delete(self.account, loaded_tier)
+                    creds = None
+                    refresh_failed = True
+                else:
+                    self._save(loaded_tier, creds)
+            else:
+                creds = None
 
-            logger.info("Saving credentials for account=%s tier=%s", self.account, self.tier)
-            self.token_store.save(self.account, self.tier, json.loads(creds.to_json()))
+        if creds is None:
+            creds = self._run_consent_flow(refresh_failed)
+            self._save(self.tier, creds)
 
         self._credentials = creds
+        return creds
+
+    def _save(self, tier: str, creds: Credentials) -> None:
+        logger.info("Saving credentials for account=%s tier=%s", self.account, tier)
+        self.token_store.save(self.account, tier, json.loads(creds.to_json()))  # type: ignore[no-untyped-call]
+
+    def _run_consent_flow(self, refresh_failed: bool = False) -> Credentials:
+        creds_file = self.credentials_file
+        if not creds_file.exists():
+            msg = (
+                f"Credentials file not found at {creds_file}. "
+                "Please download OAuth 2.0 Client ID JSON from Google Cloud Console."
+            )
+            if refresh_failed:
+                msg = (
+                    f"The saved Google token for {self.account} was revoked or has expired "
+                    "and could not be refreshed. Run `iobox space login` to re-authorise. " + msg
+                )
+            raise FileNotFoundError(msg)
+        logger.info(f"Initiating OAuth flow with credentials from {creds_file}")
+        flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), self.scopes)
+        creds: Credentials = flow.run_local_server(port=0)
         return creds
 
     def get_service(self, api: str, version: str) -> Any:
@@ -195,12 +263,42 @@ def get_active_scopes() -> list[str]:
     return SCOPES_BY_MODE[mode]
 
 
+# Gmail implications come from ``modes.SCOPE_IMPLIES``; Calendar and Drive
+# full-access scopes likewise cover their ``.readonly`` counterparts.
+_GOOGLE_SCOPE_IMPLIES: dict[str, set[str]] = {
+    **SCOPE_IMPLIES,
+    "https://www.googleapis.com/auth/calendar": {
+        "https://www.googleapis.com/auth/calendar.readonly",
+    },
+    "https://www.googleapis.com/auth/drive": {
+        "https://www.googleapis.com/auth/drive.readonly",
+    },
+}
+
+
 def _expand_scopes(scopes: set[str]) -> set[str]:
     """Expand a set of scopes with any implied scopes."""
     expanded = set(scopes)
     for scope in scopes:
-        expanded |= SCOPE_IMPLIES.get(scope, set())
+        expanded |= _GOOGLE_SCOPE_IMPLIES.get(scope, set())
     return expanded
+
+
+def _scopes_cover(granted: set[str], required: list[str] | set[str]) -> bool:
+    """Return True when ``granted`` (plus implied scopes) includes all of ``required``."""
+    return set(required).issubset(_expand_scopes(set(granted)))
+
+
+def _token_scopes(token_info: dict[str, Any]) -> set[str] | None:
+    """Return the granted scopes recorded in a token dict, or None if absent."""
+    raw = token_info.get("scopes")
+    if raw is None:
+        raw = token_info.get("scope")
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        return set(raw.split())
+    return set(raw)
 
 
 # Keep SCOPES as a module-level alias for backward compatibility in tests.
@@ -271,9 +369,11 @@ def _maybe_migrate_legacy_token(account: str) -> None:
         if not has_modify and not has_compose:
             tier = "readonly"
 
-    os.makedirs(token_dir, exist_ok=True)
+    ensure_private_dir(os.path.dirname(token_dir))
+    ensure_private_dir(token_dir)
     dest = _get_token_path(account, tier)
-    shutil.copy2(legacy_path, dest)
+    with open(legacy_path) as fh:
+        write_private_file(dest, fh.read())
     logger.info(f"Migrated legacy token.json → {dest}")
 
 
@@ -292,6 +392,43 @@ def _resolve_token(account: str, mode: AccessMode) -> tuple[str | None, str]:
             return broader, save_path
 
     return None, save_path
+
+
+def _refresh_or_reauthorise(
+    creds: Credentials | None, scopes: list[str], token_path: str | None
+) -> Credentials:
+    """Refresh ``creds`` if possible, else run the consent flow.
+
+    A refresh token rejected by Google (``RefreshError``) is removed from
+    ``token_path`` before falling back to the consent flow.
+    """
+    refresh_failed = False
+    if creds and creds.expired and creds.refresh_token:
+        logger.info("Refreshing expired credentials")
+        try:
+            creds.refresh(Request())
+            return creds
+        except RefreshError as exc:
+            logger.warning("Refresh token was rejected (%s); discarding it", exc)
+            refresh_failed = True
+            if token_path and os.path.exists(token_path):
+                os.remove(token_path)
+
+    logger.info(f"Initiating OAuth flow with credentials from {CREDENTIALS_PATH}")
+    if not os.path.exists(CREDENTIALS_PATH):
+        msg = (
+            f"Credentials file not found at {CREDENTIALS_PATH}. "
+            "Please download OAuth 2.0 Client ID JSON from Google Cloud Console."
+        )
+        if refresh_failed:
+            msg = (
+                "The saved Google token was revoked or has expired and could not be "
+                "refreshed. Run `iobox space login` to re-authorise. " + msg
+            )
+        raise FileNotFoundError(msg)
+    flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, scopes)
+    new_creds: Credentials = flow.run_local_server(port=0)
+    return new_creds
 
 
 def get_gmail_service() -> Any:
@@ -319,23 +456,9 @@ def get_gmail_service() -> Any:
                 creds = None
 
     if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            logger.info("Refreshing expired credentials")
-            creds.refresh(Request())
-        else:
-            logger.info(f"Initiating OAuth flow with credentials from {CREDENTIALS_PATH}")
-            if not os.path.exists(CREDENTIALS_PATH):
-                raise FileNotFoundError(
-                    f"Credentials file not found at {CREDENTIALS_PATH}. "
-                    "Please download OAuth 2.0 Client ID JSON from Google Cloud Console."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, scopes)
-            creds = flow.run_local_server(port=0)
-
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        creds = _refresh_or_reauthorise(creds, scopes, load_path)
         logger.info(f"Saving credentials to {save_path}")
-        with open(save_path, "w") as token:
-            token.write(creds.to_json())
+        write_private_file(save_path, creds.to_json())  # type: ignore[no-untyped-call]
 
     logger.info("Successfully authenticated with Gmail API")
     return build("gmail", "v1", credentials=creds)
@@ -357,22 +480,9 @@ def _get_service_legacy(scopes: list[str]) -> Any:
                 creds = None
 
     if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            logger.info("Refreshing expired credentials")
-            creds.refresh(Request())
-        else:
-            logger.info(f"Initiating OAuth flow with credentials from {CREDENTIALS_PATH}")
-            if not os.path.exists(CREDENTIALS_PATH):
-                raise FileNotFoundError(
-                    f"Credentials file not found at {CREDENTIALS_PATH}. "
-                    "Please download OAuth 2.0 Client ID JSON from Google Cloud Console."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, scopes)
-            creds = flow.run_local_server(port=0)
-
+        creds = _refresh_or_reauthorise(creds, scopes, TOKEN_PATH)
         logger.info(f"Saving credentials to {TOKEN_PATH}")
-        with open(TOKEN_PATH, "w") as token:
-            token.write(creds.to_json())
+        write_private_file(TOKEN_PATH, creds.to_json())  # type: ignore[no-untyped-call]
 
     logger.info("Successfully authenticated with Gmail API")
     return build("gmail", "v1", credentials=creds)

@@ -7,16 +7,41 @@ from the Gmail API.
 
 import base64
 import logging
+import re
+import threading
 import time
+import weakref
 from typing import Any
 
 from googleapiclient.errors import HttpError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Module-level cache for label ID → display name mapping.
-# Populated lazily by get_label_map() and shared across calls within one session.
-_label_cache: dict[str, str] = {}
+# Label ID → display name caches, one per Gmail service object (i.e. per
+# authenticated account). A module-global dict would leak one account's labels
+# into another's lookups when a workspace holds several Gmail slots.
+_label_caches: weakref.WeakKeyDictionary[Any, dict[str, str]] = weakref.WeakKeyDictionary()
+_label_caches_lock = threading.Lock()
+
+
+def _label_cache_for(service: Any) -> dict[str, str]:
+    """Return (creating if needed) the label cache bound to ``service``."""
+    with _label_caches_lock:
+        cache = _label_caches.get(service)
+        if cache is None:
+            cache = {}
+            _label_caches[service] = cache
+        return cache
+
+
+def clear_label_cache(service: Any | None = None) -> None:
+    """Drop the cached label map for ``service`` (or for every service)."""
+    with _label_caches_lock:
+        if service is None:
+            _label_caches.clear()
+        else:
+            _label_caches.pop(service, None)
+
 
 # Gmail rejects bursts of concurrent requests per user with 429
 # "Too many concurrent requests for user", even inside a single batch.
@@ -90,31 +115,36 @@ def batch_get_messages(
     return results, errors
 
 
-def get_label_map(service: Any) -> dict[str, str]:
+def get_label_map(service: Any, refresh: bool = False) -> dict[str, str]:
     """
     Fetch the Gmail label ID-to-name mapping for the authenticated user.
 
-    Results are cached at module level so the API is called at most once per
-    process invocation. If the API call fails, an empty dict is returned so
-    callers can gracefully fall back to raw label IDs.
+    Results are cached per ``service`` (one per authenticated account), so the
+    API is called once per service unless ``refresh=True``. If the API call
+    fails, an empty dict is returned so callers can gracefully fall back to raw
+    label IDs.
 
     Args:
         service: Authenticated Gmail API service
+        refresh: Re-fetch from the API even when a cached map exists
 
     Returns:
         dict: Mapping of label ID → display name (e.g. {"Label_12345": "Newsletter"})
     """
-    if _label_cache:
-        return _label_cache
+    cache = _label_cache_for(service)
+    if cache and not refresh:
+        return dict(cache)
     try:
         response = service.users().labels().list(userId="me").execute()
         labels = response.get("labels", [])
-        _label_cache.update({label["id"]: label["name"] for label in labels})
-        logging.info(f"Fetched label map with {len(_label_cache)} entries")
-        return _label_cache
+        fresh = {label["id"]: label["name"] for label in labels}
+        cache.clear()
+        cache.update(fresh)
+        logging.info(f"Fetched label map with {len(cache)} entries")
+        return dict(cache)
     except Exception as e:
         logging.warning(f"Failed to fetch label map, returning empty dict: {e}")
-        return {}
+        return dict(cache)
 
 
 def _process_message_response(
@@ -256,7 +286,11 @@ def batch_get_emails(
             email_list.append({"message_id": msg_id, "error": errors[msg_id]})
         elif msg_id in results:
             message = results[msg_id]
-            email_data = _process_message_response(message, preferred_content_type, label_map)
+            try:
+                email_data = _process_message_response(message, preferred_content_type, label_map)
+            except Exception as e:  # one malformed message must not sink the batch
+                logging.warning(f"Failed to process message {msg_id}: {e}")
+                email_data = {"message_id": msg_id, "error": f"Failed to process message: {e}"}
             email_list.append(email_data)
         else:
             email_list.append({"message_id": msg_id, "error": "Not found in batch response"})
@@ -379,10 +413,12 @@ def resolve_label_name(service: Any, label_name: str) -> str:
         return label_name.upper()
     if label_name.upper().startswith("CATEGORY_"):
         return label_name.upper()
-    label_map = get_label_map(service)
-    name_to_id = {v: k for k, v in label_map.items()}
-    if label_name in name_to_id:
-        return name_to_id[label_name]
+    for refresh in (False, True):
+        # On a miss, refetch once — the label may have been created since the
+        # map was cached (in the Gmail UI or by another process).
+        name_to_id = {v: k for k, v in get_label_map(service, refresh=refresh).items()}
+        if label_name in name_to_id:
+            return name_to_id[label_name]
     raise ValueError(f"Label '{label_name}' not found")
 
 
@@ -410,14 +446,14 @@ def create_label(service: Any, name: str) -> dict[str, str]:
     except HttpError as error:
         # 409 → label already exists; resolve and return it.
         if getattr(error, "resp", None) is not None and error.resp.status == 409:
-            existing = get_label_map(service)
+            existing = get_label_map(service, refresh=True)
             name_to_id = {v: k for k, v in existing.items()}
             if name in name_to_id:
                 return {"id": name_to_id[name], "name": name}
         logging.error(f"Error creating label {name!r}: {error}")
         raise
-    # Refresh the module cache so subsequent resolves see the new label.
-    _label_cache[created["id"]] = created["name"]
+    # Update this service's cache so subsequent resolves see the new label.
+    _label_cache_for(service)[created["id"]] = created["name"]
     return {"id": created["id"], "name": created["name"]}
 
 
@@ -577,7 +613,7 @@ def _extract_content_from_payload(
         tuple: (content, content_type)
     """
     if "body" in payload and "data" in payload["body"] and "parts" not in payload:
-        content = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8")
+        content = _decode_part_body(payload)
         return content, payload.get("mimeType", "text/plain")
 
     if "parts" not in payload:
@@ -586,11 +622,66 @@ def _extract_content_from_payload(
     return _extract_content_from_parts(payload["parts"], preferred_type)
 
 
+_CHARSET_RE = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.IGNORECASE)
+
+
+def _part_headers(part: dict[str, Any]) -> dict[str, str]:
+    return {h["name"].lower(): h["value"] for h in part.get("headers", []) or []}
+
+
+def _part_charset(part: dict[str, Any]) -> str:
+    """Return the charset declared in the part's Content-Type header (default utf-8)."""
+    match = _CHARSET_RE.search(_part_headers(part).get("content-type", ""))
+    return match.group(1) if match else "utf-8"
+
+
+def _decode_part_body(part: dict[str, Any]) -> str:
+    """Base64url-decode a part's body and decode it with its declared charset.
+
+    Undecodable bytes are replaced rather than raising, and an unknown charset
+    falls back to UTF-8, so one oddly-encoded message can't abort a batch.
+    """
+    raw = base64.urlsafe_b64decode(part["body"]["data"])
+    charset = _part_charset(part)
+    try:
+        return raw.decode(charset, errors="replace")
+    except LookupError:
+        return raw.decode("utf-8", errors="replace")
+
+
+def _is_attachment_part(part: dict[str, Any]) -> bool:
+    """True for parts that are attachments rather than message body text."""
+    disposition = _part_headers(part).get("content-disposition", "").strip().lower()
+    return disposition.startswith("attachment") or bool(part.get("filename"))
+
+
+def _collect_text_parts(parts: list[dict[str, Any]], plain: list[str], html: list[str]) -> None:
+    for part in parts:
+        if _is_attachment_part(part):
+            continue
+        if "parts" in part:
+            _collect_text_parts(part["parts"], plain, html)
+            continue
+        if "data" not in part.get("body", {}):
+            continue
+        mime = part.get("mimeType", "")
+        if mime == "text/plain":
+            plain.append(_decode_part_body(part))
+        elif mime == "text/html":
+            html.append(_decode_part_body(part))
+
+
 def _extract_content_from_parts(
     parts: list[dict[str, Any]], preferred_type: str = "text/plain"
 ) -> tuple[str, str]:
     """
     Extract content from multipart message parts.
+
+    Every non-attachment ``text/plain`` / ``text/html`` leaf is collected (in
+    order) and same-type parts are joined, so bodies split around inline
+    images aren't truncated to their last fragment. Parts with an
+    ``attachment`` disposition (or a filename) are skipped — an attached
+    ``.txt`` or ``.html`` file is not the message body.
 
     Args:
         parts: List of message parts
@@ -599,22 +690,11 @@ def _extract_content_from_parts(
     Returns:
         tuple: (content, content_type)
     """
-    plain_content = ""
-    html_content = ""
-
-    for part in parts:
-        if part["mimeType"] == "text/plain" and "data" in part.get("body", {}):
-            plain_content = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
-
-        if part["mimeType"] == "text/html" and "data" in part.get("body", {}):
-            html_content = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
-
-        if "parts" in part and not (plain_content or html_content):
-            nested_content, nested_type = _extract_content_from_parts(part["parts"], preferred_type)
-            if nested_type == "text/plain" and not plain_content:
-                plain_content = nested_content
-            elif nested_type == "text/html" and not html_content:
-                html_content = nested_content
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+    _collect_text_parts(parts, plain_parts, html_parts)
+    plain_content = "\n".join(plain_parts)
+    html_content = "\n".join(html_parts)
 
     if preferred_type == "text/html" and html_content:
         return html_content, "text/html"

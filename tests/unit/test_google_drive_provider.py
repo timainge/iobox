@@ -213,6 +213,71 @@ class TestBuildDriveQuery:
         parts = q.split(" and ")
         assert len(parts) == 3  # trashed + text + mime
 
+    # SEC-10: backslash escaping and escaping of every interpolated value.
+
+    def test_text_trailing_backslash_cannot_break_out(self) -> None:
+        q = self._build(text="x\\' or name contains '")
+        # \ → \\ first, then ' → \' : the literal can't be closed early.
+        assert q == "trashed = false and (fullText contains 'x\\\\\\' or name contains \\'')"
+
+    def test_text_clause_parenthesised(self) -> None:
+        q = self._build(text="a", shared_with_me=True)
+        assert "(fullText contains 'a')" in q
+
+    def test_mime_type_escaped(self) -> None:
+        q = self._build(mime_type="text/plain' or trashed = true or mimeType = '")
+        assert "mimeType = 'text/plain\\' or trashed = true or mimeType = \\''" in q
+
+    def test_folder_id_escaped(self) -> None:
+        q = self._build(folder_id="f1' in parents or '1' = '1")
+        assert q.endswith("'f1\\' in parents or \\'1\\' = \\'1' in parents")
+
+
+def _http_error(status: int) -> Exception:
+    from googleapiclient.errors import HttpError
+
+    resp = MagicMock()
+    resp.status = status
+    resp.reason = "err"
+    return HttpError(resp, b"{}")
+
+
+class TestNotFound:
+    """TIME-05 (Drive side): HTTP 404 → KeyError as the FileProvider ABC documents."""
+
+    def test_get_file_404_raises_key_error(self) -> None:
+        p = GoogleDriveProvider(auth=MagicMock())
+        svc = MagicMock()
+        svc.files().get().execute.side_effect = _http_error(404)
+        with pytest.raises(KeyError):
+            p.get_file("missing", _service_fn=svc)
+
+    def test_download_404_raises_key_error(self) -> None:
+        p = GoogleDriveProvider(auth=MagicMock())
+        svc = MagicMock()
+        svc.files().get_media().execute.side_effect = _http_error(404)
+        with pytest.raises(KeyError):
+            p.download_file("missing", _service_fn=svc)
+
+    def test_delete_404_raises_key_error(self) -> None:
+        p = GoogleDriveProvider(auth=MagicMock(), mode="standard")
+        svc = MagicMock()
+        svc.files().update().execute.side_effect = _http_error(404)
+        svc.files().delete().execute.side_effect = _http_error(404)
+        with pytest.raises(KeyError):
+            p.delete_file("missing", _service_fn=svc)
+        with pytest.raises(KeyError):
+            p.delete_file("missing", permanent=True, _service_fn=svc)
+
+    def test_other_errors_propagate(self) -> None:
+        from googleapiclient.errors import HttpError
+
+        p = GoogleDriveProvider(auth=MagicMock())
+        svc = MagicMock()
+        svc.files().get().execute.side_effect = _http_error(403)
+        with pytest.raises(HttpError):
+            p.get_file("x", _service_fn=svc)
+
 
 # ── TestFileNormalization ─────────────────────────────────────────────────────
 

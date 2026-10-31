@@ -37,6 +37,27 @@ def _make_google_event_raw(
     }
 
 
+@pytest.fixture
+def sydney_tz(monkeypatch: pytest.MonkeyPatch):
+    """Pin the process local timezone (AEDT +11 / AEST +10) for offset tests."""
+    import time
+
+    monkeypatch.setenv("TZ", "Australia/Sydney")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def _http_error(status: int) -> Exception:
+    from googleapiclient.errors import HttpError
+
+    resp = MagicMock()
+    resp.status = status
+    resp.reason = "err"
+    return HttpError(resp, b"{}")
+
+
 def _make_google_provider(mode: str = "standard") -> GoogleCalendarProvider:
     auth = MagicMock()
     auth.get_credentials.return_value = MagicMock()
@@ -76,7 +97,7 @@ class TestGoogleCalendarWriteMode:
 
 
 class TestGoogleCalendarCreateEvent:
-    def test_create_timed_event(self) -> None:
+    def test_create_timed_event(self, sydney_tz: None) -> None:
         provider = _make_google_provider()
         svc = _make_service()
         event = provider.create_event(
@@ -89,8 +110,35 @@ class TestGoogleCalendarCreateEvent:
         svc.events.return_value.insert.assert_called_once()
         call_kwargs = svc.events.return_value.insert.call_args[1]
         body = call_kwargs["body"]
-        assert body["start"]["dateTime"] == "2026-04-01T10:00:00"
-        assert body["end"]["dateTime"] == "2026-04-01T11:00:00"
+        # TIME-02: offset-less times are local (AEDT on 1 April 2026), not UTC.
+        assert body["start"] == {"dateTime": "2026-04-01T10:00:00+11:00"}
+        assert body["end"] == {"dateTime": "2026-04-01T11:00:00+11:00"}
+
+    def test_create_timed_event_uses_local_dst_offset(self, sydney_tz: None) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        provider.create_event("Winter", "2026-07-01T09:00", "2026-07-01T10:00", _service_fn=svc)
+        body = svc.events.return_value.insert.call_args[1]["body"]
+        assert body["start"]["dateTime"] == "2026-07-01T09:00:00+10:00"
+        assert "timeZone" not in body["start"]
+
+    def test_create_timed_event_keeps_explicit_offset(self, sydney_tz: None) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        provider.create_event(
+            "UTC", "2026-04-01T10:00:00Z", "2026-04-01T11:00:00-05:00", _service_fn=svc
+        )
+        body = svc.events.return_value.insert.call_args[1]["body"]
+        assert body["start"]["dateTime"] == "2026-04-01T10:00:00+00:00"
+        assert body["end"]["dateTime"] == "2026-04-01T11:00:00-05:00"
+
+    def test_create_on_named_calendar(self) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        provider.create_event(
+            "X", "2026-04-01", "2026-04-02", all_day=True, calendar_id="team@x", _service_fn=svc
+        )
+        assert svc.events.return_value.insert.call_args[1]["calendarId"] == "team@x"
 
     def test_create_all_day_event(self) -> None:
         provider = _make_google_provider()
@@ -149,14 +197,68 @@ class TestGoogleCalendarUpdateEvent:
     def test_update_event(self) -> None:
         provider = _make_google_provider()
         svc = _make_service()
-        event = provider.update_event("evt1", {"summary": "Updated Title"}, _service_fn=svc)
+        event = provider.update_event("evt1", {"title": "Updated Title"}, _service_fn=svc)
         svc.events.return_value.patch.assert_called_once()
+        assert svc.events.return_value.patch.call_args[1]["body"] == {"summary": "Updated Title"}
         assert event["id"] == "evt1"
+
+    def test_update_maps_normalised_keys(self, sydney_tz: None) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        provider.update_event(
+            "evt1",
+            {
+                "title": "T",
+                "start": "2026-04-01T09:00",
+                "end": "2026-04-01T10:00:00Z",
+                "description": "D",
+                "location": "L",
+                "attendees": ["a@x.com", "b@x.com"],
+            },
+            _service_fn=svc,
+        )
+        body = svc.events.return_value.patch.call_args[1]["body"]
+        assert body == {
+            "summary": "T",
+            "start": {"dateTime": "2026-04-01T09:00:00+11:00", "date": None},
+            "end": {"dateTime": "2026-04-01T10:00:00+00:00", "date": None},
+            "description": "D",
+            "location": "L",
+            "attendees": [{"email": "a@x.com"}, {"email": "b@x.com"}],
+        }
+
+    def test_update_date_only_becomes_all_day(self) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        provider.update_event("evt1", {"start": "2026-04-01", "end": "2026-04-02"}, _service_fn=svc)
+        body = svc.events.return_value.patch.call_args[1]["body"]
+        assert body["start"] == {"date": "2026-04-01", "dateTime": None}
+        assert body["end"] == {"date": "2026-04-02", "dateTime": None}
+
+    def test_update_unknown_key_raises(self) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        with pytest.raises(ValueError, match="summary"):
+            provider.update_event("evt1", {"summary": "raw google key"}, _service_fn=svc)
+        svc.events.return_value.patch.assert_not_called()
+
+    def test_update_named_calendar(self) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        provider.update_event("evt1", {"title": "x"}, calendar_id="team@x", _service_fn=svc)
+        assert svc.events.return_value.patch.call_args[1]["calendarId"] == "team@x"
+
+    def test_update_missing_event_raises_key_error(self) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        svc.events.return_value.patch.return_value.execute.side_effect = _http_error(404)
+        with pytest.raises(KeyError):
+            provider.update_event("nope", {"title": "x"}, _service_fn=svc)
 
     def test_update_blocked_in_readonly(self) -> None:
         provider = _make_google_provider(mode="readonly")
         with pytest.raises(PermissionError):
-            provider.update_event("evt1", {"summary": "X"})
+            provider.update_event("evt1", {"title": "X"})
 
 
 # ── GoogleCalendarProvider: delete_event ─────────────────────────────────────
@@ -168,6 +270,28 @@ class TestGoogleCalendarDeleteEvent:
         svc = _make_service()
         provider.delete_event("evt1", _service_fn=svc)
         svc.events.return_value.delete.assert_called_once()
+
+    def test_delete_named_calendar(self) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        provider.delete_event("evt1", calendar_id="team@x", _service_fn=svc)
+        svc.events.return_value.delete.assert_called_once_with(calendarId="team@x", eventId="evt1")
+
+    def test_delete_missing_event_raises_key_error(self) -> None:
+        provider = _make_google_provider()
+        svc = _make_service()
+        svc.events.return_value.delete.return_value.execute.side_effect = _http_error(404)
+        with pytest.raises(KeyError):
+            provider.delete_event("nope", _service_fn=svc)
+
+    def test_delete_other_http_error_propagates(self) -> None:
+        from googleapiclient.errors import HttpError
+
+        provider = _make_google_provider()
+        svc = _make_service()
+        svc.events.return_value.delete.return_value.execute.side_effect = _http_error(403)
+        with pytest.raises(HttpError):
+            provider.delete_event("evt1", _service_fn=svc)
 
     def test_delete_blocked_in_readonly(self) -> None:
         provider = _make_google_provider(mode="readonly")
@@ -222,6 +346,15 @@ class TestGoogleCalendarRsvp:
         }
         with pytest.raises(ValueError, match="not an attendee"):
             provider.rsvp("evt1", "accepted", _service_fn=svc)
+
+    def test_rsvp_named_calendar_and_missing_event(self) -> None:
+        provider, svc = self._provider_and_service()
+        provider.rsvp("evt1", "accepted", calendar_id="team@x", _service_fn=svc)
+        assert svc.events.return_value.get.call_args[1]["calendarId"] == "team@x"
+        assert svc.events.return_value.patch.call_args[1]["calendarId"] == "team@x"
+        svc.events.return_value.get.return_value.execute.side_effect = _http_error(404)
+        with pytest.raises(KeyError):
+            provider.rsvp("gone", "accepted", _service_fn=svc)
 
     def test_rsvp_blocked_in_readonly(self) -> None:
         provider = _make_google_provider(mode="readonly")

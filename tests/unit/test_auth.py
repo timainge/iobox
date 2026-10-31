@@ -173,6 +173,41 @@ class TestAuthentication:
             mock_creds.refresh.assert_not_called()
             assert service == mock_service
 
+    def test_get_gmail_service_refresh_error_reauthorises(
+        self, monkeypatch, mock_credentials_file, tmp_path
+    ):
+        """DATA-08: a revoked refresh token triggers consent and a private token file."""
+        from google.auth.exceptions import RefreshError
+
+        monkeypatch.setattr(_GA + ".CREDENTIALS_PATH", str(mock_credentials_file))
+        monkeypatch.setattr(_GA + ".CREDENTIALS_DIR", str(tmp_path))
+        monkeypatch.delenv("GMAIL_TOKEN_FILE", raising=False)
+        set_active_mode(AccessMode.standard)
+        set_active_account("default")
+
+        token_file = tmp_path / "tokens" / "default" / "token_standard.json"
+        token_file.parent.mkdir(parents=True)
+        token_file.write_text('{"token": "revoked"}')
+
+        stale = MagicMock(valid=False, expired=True, refresh_token="dead")
+        stale.refresh.side_effect = RefreshError("invalid_grant")
+        fresh = MagicMock(valid=True)
+        fresh.to_json.return_value = '{"token": "fresh"}'
+        flow = MagicMock()
+        flow.run_local_server.return_value = fresh
+
+        with (
+            patch(_GA + ".Credentials.from_authorized_user_file", return_value=stale),
+            patch(_GA + ".InstalledAppFlow.from_client_secrets_file", return_value=flow),
+            patch(_GA + ".build", return_value=MagicMock()),
+            patch(_GA + ".Request"),
+        ):
+            get_gmail_service()
+
+        flow.run_local_server.assert_called_once()
+        assert json.loads(token_file.read_text()) == {"token": "fresh"}
+        assert (token_file.stat().st_mode & 0o777) == 0o600
+
 
 class TestGetGmailProfile:
     """Tests for get_gmail_profile()."""

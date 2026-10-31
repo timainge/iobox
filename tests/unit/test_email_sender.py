@@ -466,3 +466,139 @@ class TestDraftFunctions:
 
         mock_service.users().drafts().delete.assert_called_once_with(userId="me", id="draft-1")
         assert result == {"status": "deleted", "draft_id": "draft-1"}
+
+
+def _parse(result: dict) -> object:
+    from email import policy
+
+    return message_from_bytes(base64.urlsafe_b64decode(result["raw"]), policy=policy.default)
+
+
+class TestNonAsciiEncoding:
+    """DATA-10: non-ASCII filenames, display names and subjects round-trip."""
+
+    def test_non_ascii_attachment_filename(self):
+        result = compose_message(
+            to="bob@example.com",
+            subject="s",
+            body="b",
+            attachment_blobs=[
+                {"filename": "Résumé — 2026.pdf", "mime_type": "application/pdf", "data": b"x"}
+            ],
+        )
+        msg = _parse(result)
+        names = [p.get_filename() for p in msg.iter_attachments()]
+        assert names == ["Résumé — 2026.pdf"]
+
+    def test_filename_with_quote_is_escaped(self):
+        result = compose_message(
+            to="bob@example.com",
+            subject="s",
+            body="b",
+            attachment_blobs=[{"filename": 'a"b.txt', "mime_type": "text/plain", "data": b"x"}],
+        )
+        msg = _parse(result)
+        assert [p.get_filename() for p in msg.iter_attachments()] == ['a"b.txt']
+
+    def test_non_ascii_display_names(self):
+        result = compose_message(
+            to="José Núñez <jose@example.com>, Zoë <zoe@example.com>",
+            subject="Grüße",
+            body="b",
+            cc='"Smith, John" <john@example.com>',
+        )
+        raw = base64.urlsafe_b64decode(result["raw"])
+        assert b"unknown-8bit" not in raw
+        msg = _parse(result)
+        to = msg["to"].addresses
+        assert [(a.display_name, a.addr_spec) for a in to] == [
+            ("José Núñez", "jose@example.com"),
+            ("Zoë", "zoe@example.com"),
+        ]
+        assert msg["subject"] == "Grüße"
+        assert [(a.display_name, a.addr_spec) for a in msg["cc"].addresses] == [
+            ("Smith, John", "john@example.com")
+        ]
+
+
+class TestForwardEscapingAndInline:
+    """DATA-11: forwarded headers/plain bodies escaped in HTML; inline parts keep CID."""
+
+    def test_html_forward_escapes_header_values(self):
+        original = {
+            "from": "Alice <alice@example.com>",
+            "date": "Mon, 1 Jan 2026",
+            "subject": "<script>x</script>",
+            "body": "<p>hi</p>",
+            "content_type": "text/html",
+        }
+        msg = _parse(compose_forward_message(original, to="bob@example.com"))
+        body = msg.get_body(("html",)).get_content()
+        assert "From: Alice &lt;alice@example.com&gt;" in body
+        assert "<script>" not in body
+        assert "<p>hi</p>" in body  # original HTML body untouched
+
+    def test_plain_original_escaped_inside_pre_when_comment_is_html(self):
+        original = {
+            "from": "a@example.com",
+            "subject": "s",
+            "body": "x < y & <b>not bold</b>",
+            "content_type": "text/plain",
+        }
+        msg = _parse(
+            compose_forward_message(original, to="bob@example.com", additional_text="<b>FYI</b>")
+        )
+        body = msg.get_body(("html",)).get_content()
+        assert "<pre>x &lt; y &amp; &lt;b&gt;not bold&lt;/b&gt;</pre>" in body
+        assert body.startswith("<b>FYI</b>")
+
+    def test_inline_image_keeps_content_id_in_related(self):
+        original = {
+            "from": "a@example.com",
+            "subject": "s",
+            "body": '<img src="cid:logo123">',
+            "content_type": "text/html",
+        }
+        blobs = [
+            {
+                "filename": "logo.png",
+                "mime_type": "image/png",
+                "data": b"\x89PNG",
+                "inline": True,
+                "content_id": "logo123",
+            },
+            {"filename": "doc.pdf", "mime_type": "application/pdf", "data": b"%PDF"},
+        ]
+        msg = _parse(compose_forward_message(original, "bob@example.com", attachment_blobs=blobs))
+        parts = {p.get_filename(): p for p in msg.walk() if p.get_filename()}
+        logo = parts["logo.png"]
+        assert logo["Content-ID"] == "<logo123>"
+        assert logo.get_content_disposition() == "inline"
+        assert parts["doc.pdf"].get_content_disposition() == "attachment"
+        related = [p for p in msg.walk() if p.get_content_type() == "multipart/related"]
+        assert len(related) == 1
+        assert logo in related[0].get_payload()
+
+    @patch("iobox.providers.google._sender.send_message")
+    @patch("iobox.providers.google._sender.download_attachment", return_value=b"\x89PNG")
+    @patch("iobox.providers.google._sender.get_email_content")
+    def test_forward_email_passes_inline_metadata(self, mock_get, mock_dl, mock_send):
+        mock_get.return_value = {
+            "from": "a@example.com",
+            "subject": "s",
+            "body": '<img src="cid:c1">',
+            "content_type": "text/html",
+            "attachments": [
+                {
+                    "id": "att-1",
+                    "filename": "logo.png",
+                    "mime_type": "image/png",
+                    "inline": True,
+                    "content_id": "c1",
+                }
+            ],
+        }
+        forward_email(MagicMock(), "orig-1", "bob@example.com")
+        msg = _parse(mock_send.call_args.args[1])
+        logo = next(p for p in msg.walk() if p.get_filename() == "logo.png")
+        assert logo["Content-ID"] == "<c1>"

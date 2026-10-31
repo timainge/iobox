@@ -23,6 +23,18 @@ from iobox.providers.google.auth import GoogleAuth
 logger = logging.getLogger(__name__)
 
 
+def _write_result(raw: dict[str, Any], status: str) -> dict[str, Any]:
+    """Normalise a Gmail ``Message`` resource into the provider write-result shape.
+
+    All ``EmailProvider`` write methods return ``{"message_id", "status"}``
+    (plus ``thread_id`` when known) — see CLAUDE.md "Key Invariants".
+    """
+    result: dict[str, Any] = {"message_id": raw.get("id", ""), "status": status}
+    if raw.get("threadId"):
+        result["thread_id"] = raw["threadId"]
+    return result
+
+
 class GmailProvider(EmailProvider):
     """EmailProvider implementation backed by the existing Gmail modules.
 
@@ -265,18 +277,19 @@ class GmailProvider(EmailProvider):
             content_type=content_type,
             attachments=attachments,
         )
-        return _sender.send_message(self._svc, message)
+        return _write_result(_sender.send_message(self._svc, message), "sent")
 
     def forward_message(
         self, message_id: str, to: str, comment: str | None = None
     ) -> dict[str, Any]:
         """Retrieve an existing email and forward it to ``to``."""
-        return _sender.forward_email(
+        raw = _sender.forward_email(
             self._svc,
             message_id=message_id,
             to=to,
             additional_text=comment,
         )
+        return _write_result(raw, "forwarded")
 
     def create_draft(
         self,
@@ -298,19 +311,28 @@ class GmailProvider(EmailProvider):
             content_type=content_type,
             attachments=attachments,
         )
-        return _sender.create_draft(self._svc, message)
+        draft = _sender.create_draft(self._svc, message)
+        # ``message_id`` is the *draft* id — what send_draft/delete_draft take.
+        result: dict[str, Any] = {"message_id": draft.get("id", ""), "status": "draft"}
+        draft_msg = draft.get("message") or {}
+        if draft_msg.get("threadId"):
+            result["thread_id"] = draft_msg["threadId"]
+        return result
 
     def list_drafts(self, max_results: int = 10) -> list[dict[str, Any]]:
         """Return a list of draft summaries (id, subject, snippet)."""
         return _sender.list_drafts(self._svc, max_results=max_results)
 
     def send_draft(self, draft_id: str) -> dict[str, Any]:
-        """Send an existing draft."""
-        return _sender.send_draft(self._svc, draft_id)
+        """Send an existing draft; ``message_id`` is the id of the sent message."""
+        result = _write_result(_sender.send_draft(self._svc, draft_id), "sent")
+        result["draft_id"] = draft_id
+        return result
 
     def delete_draft(self, draft_id: str) -> dict[str, Any]:
         """Permanently delete a draft."""
-        return _sender.delete_draft(self._svc, draft_id)
+        _sender.delete_draft(self._svc, draft_id)
+        return {"message_id": draft_id, "status": "deleted"}
 
     # ------------------------------------------------------------------
     # 4. System operations

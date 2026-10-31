@@ -90,3 +90,48 @@ def test_tier_segregates_storage(tmp_path: Path, tier: str) -> None:
     store.save("alice", tier, {"tier": tier})
     assert store.load("alice", other) is None
     assert store.load("alice", tier) == {"tier": tier}
+
+
+class TestFilePermissions:
+    """SEC-07: token files hold refresh tokens + client secret → 0600 / 0700."""
+
+    def test_saved_token_file_is_0600(self, tmp_path: Path) -> None:
+        store = FilesystemTokenStore(tmp_path)
+        store.save("alice", "readonly", {"refresh_token": "r"})
+        path = tmp_path / "tokens" / "alice" / "token_readonly.json"
+        assert (path.stat().st_mode & 0o777) == 0o600
+
+    def test_token_dirs_are_0700(self, tmp_path: Path) -> None:
+        store = FilesystemTokenStore(tmp_path)
+        store.save("alice", "readonly", {"refresh_token": "r"})
+        assert ((tmp_path / "tokens").stat().st_mode & 0o777) == 0o700
+        assert ((tmp_path / "tokens" / "alice").stat().st_mode & 0o777) == 0o700
+
+    def test_existing_loose_file_is_tightened(self, tmp_path: Path) -> None:
+        path = tmp_path / "tokens" / "alice" / "token_readonly.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("{}")
+        path.chmod(0o644)
+        path.parent.chmod(0o755)
+        FilesystemTokenStore(tmp_path).save("alice", "readonly", {"v": 1})
+        assert (path.stat().st_mode & 0o777) == 0o600
+        assert (path.parent.stat().st_mode & 0o777) == 0o700
+
+    def test_write_is_atomic_on_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed write leaves the previous token intact and no temp files."""
+        import iobox.providers.token_store as ts
+
+        store = FilesystemTokenStore(tmp_path)
+        store.save("alice", "readonly", {"v": 1})
+
+        def boom(src: str, dst: str) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(ts.os, "replace", boom)
+        with pytest.raises(OSError):
+            store.save("alice", "readonly", {"v": 2})
+        assert store.load("alice", "readonly") == {"v": 1}
+        leftovers = [p.name for p in (tmp_path / "tokens" / "alice").iterdir()]
+        assert leftovers == ["token_readonly.json"]

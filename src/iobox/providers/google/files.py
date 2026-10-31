@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from googleapiclient.errors import HttpError
+
 from iobox.providers.base import File, FileProvider, FileQuery
 from iobox.providers.google.auth import GoogleAuth
 
@@ -25,6 +27,27 @@ GOOGLE_WORKSPACE_EXPORT_TYPES: dict[str, str] = {
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
 FILE_FIELDS = "id,name,mimeType,size,parents,webViewLink,createdTime,modifiedTime,trashed"
+
+
+def _escape_q(value: str) -> str:
+    """Escape a value for a single-quoted Drive ``q`` string literal.
+
+    Backslashes must be escaped first, then single quotes — otherwise a
+    trailing ``\\`` escapes the closing quote and the rest of the query is
+    attacker-controlled.
+    """
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _execute_for_file(request: Any, file_id: str) -> Any:
+    """Execute a single-file request, mapping HTTP 404 to ``KeyError``."""
+    try:
+        return request.execute()
+    except HttpError as exc:
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        if str(status) == "404":
+            raise KeyError(f"File not found: {file_id}") from exc
+        raise
 
 
 class GoogleDriveProvider(FileProvider):
@@ -107,9 +130,9 @@ class GoogleDriveProvider(FileProvider):
         return files[: query.max_results]
 
     def get_file(self, file_id: str, *, _service_fn: Any | None = None) -> File:
-        """Return file metadata by ID."""
+        """Return file metadata by ID. Raises ``KeyError`` if not found."""
         svc = _service_fn or self._get_service()
-        raw = svc.files().get(fileId=file_id, fields=FILE_FIELDS).execute()
+        raw = _execute_for_file(svc.files().get(fileId=file_id, fields=FILE_FIELDS), file_id)
         return self._drive_file_to_file(raw)
 
     def get_file_content(self, file_id: str, *, _service_fn: Any | None = None) -> str:
@@ -139,9 +162,9 @@ class GoogleDriveProvider(FileProvider):
             return ""
 
     def download_file(self, file_id: str, *, _service_fn: Any | None = None) -> bytes:
-        """Return raw bytes of file."""
+        """Return raw bytes of file. Raises ``KeyError`` if not found."""
         svc = _service_fn or self._get_service()
-        return bytes(svc.files().get_media(fileId=file_id).execute())
+        return bytes(_execute_for_file(svc.files().get_media(fileId=file_id), file_id))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -149,12 +172,11 @@ class GoogleDriveProvider(FileProvider):
         """Build a Drive API q= expression from a FileQuery."""
         parts = ["trashed = false"]
         if query.text:
-            safe = query.text.replace("'", "\\'")
-            parts.append(f"fullText contains '{safe}'")
+            parts.append(f"(fullText contains '{_escape_q(query.text)}')")
         if query.mime_type:
-            parts.append(f"mimeType = '{query.mime_type}'")
+            parts.append(f"mimeType = '{_escape_q(query.mime_type)}'")
         if query.folder_id:
-            parts.append(f"'{query.folder_id}' in parents")
+            parts.append(f"'{_escape_q(query.folder_id)}' in parents")
         if query.shared_with_me:
             parts.append("sharedWithMe = true")
         return " and ".join(parts)
@@ -209,7 +231,9 @@ class GoogleDriveProvider(FileProvider):
         mime = mime or "application/octet-stream"
         media = MediaFileUpload(local_path, mimetype=mime, resumable=False)
         svc = _service_fn or self._get_service()
-        result = svc.files().update(fileId=file_id, media_body=media, fields=FILE_FIELDS).execute()
+        result = _execute_for_file(
+            svc.files().update(fileId=file_id, media_body=media, fields=FILE_FIELDS), file_id
+        )
         return self._drive_file_to_file(result)
 
     def delete_file(
@@ -219,13 +243,16 @@ class GoogleDriveProvider(FileProvider):
         permanent: bool = False,
         _service_fn: Any | None = None,
     ) -> None:
-        """Move a file to trash (default) or permanently delete it."""
+        """Move a file to trash (default) or permanently delete it.
+
+        Raises ``KeyError`` if the file does not exist.
+        """
         self._check_write_mode()
         svc = _service_fn or self._get_service()
         if permanent:
-            svc.files().delete(fileId=file_id).execute()
+            _execute_for_file(svc.files().delete(fileId=file_id), file_id)
         else:
-            svc.files().update(fileId=file_id, body={"trashed": True}).execute()
+            _execute_for_file(svc.files().update(fileId=file_id, body={"trashed": True}), file_id)
 
     def create_folder(
         self,

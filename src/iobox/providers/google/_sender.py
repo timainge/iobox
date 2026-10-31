@@ -6,12 +6,16 @@ via the Gmail API.
 """
 
 import base64
+import html
 import logging
 import mimetypes
+import os
 from email import encoders
+from email.header import Header
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr, getaddresses
 from typing import Any
 
 from googleapiclient.errors import HttpError
@@ -21,15 +25,58 @@ from iobox.providers.google._retrieval import download_attachment, get_email_con
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def _build_attachment_part(filename: str, mime_type: str, data: bytes) -> MIMEBase:
-    """Build a base64-encoded MIME attachment part from in-memory bytes."""
+def _encode_address_header(value: str) -> str:
+    """Format a comma-separated address list with RFC 2047-encoded display names.
+
+    ``"José Núñez <jose@example.com>, Smith, J <j@x.com>"``-style input is
+    parsed into ``(name, addr)`` pairs and re-serialised so non-ASCII names are
+    encoded-words and names with specials are quoted, rather than the raw
+    non-ASCII header compat32 would otherwise emit as ``unknown-8bit``.
+    """
+    pairs = [(n, a) for n, a in getaddresses([value]) if a]
+    if not pairs:
+        return value
+    out: list[str] = []
+    for name, addr in pairs:
+        try:
+            out.append(formataddr((name, addr), charset="utf-8"))
+        except UnicodeEncodeError:
+            # Non-ASCII local part (SMTPUTF8) — nothing better to do than pass through.
+            out.append(f"{name} <{addr}>" if name else addr)
+    return ", ".join(out)
+
+
+def _encode_text_header(value: str) -> str:
+    """Return ``value`` as-is when ASCII, else RFC 2047 UTF-8 encoded-words."""
+    try:
+        value.encode("ascii")
+        return value
+    except UnicodeEncodeError:
+        return Header(value, "utf-8").encode()
+
+
+def _build_attachment_part(
+    filename: str,
+    mime_type: str,
+    data: bytes,
+    inline: bool = False,
+    content_id: str | None = None,
+) -> MIMEBase:
+    """Build a base64-encoded MIME attachment part from in-memory bytes.
+
+    The filename goes through ``add_header``'s parameter encoding, so
+    non-ASCII names are RFC 2231-encoded and quotes are escaped. Inline parts
+    keep their ``Content-ID`` so ``cid:`` references in HTML still resolve.
+    """
     if not mime_type or "/" not in mime_type:
         mime_type = "application/octet-stream"
     main_type, sub_type = mime_type.split("/", 1)
     part = MIMEBase(main_type, sub_type)
     part.set_payload(data)
     encoders.encode_base64(part)
-    part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+    part.add_header("Content-Disposition", "inline" if inline else "attachment", filename=filename)
+    if content_id:
+        part.add_header("Content-ID", f"<{content_id.strip().strip('<>')}>")
     return part
 
 
@@ -57,28 +104,53 @@ def compose_message(
         content_type: 'plain' for plain text (default) or 'html' for HTML
         attachments: Optional list of file paths to attach
         attachment_blobs: Optional list of in-memory attachments, each a dict with
-            ``filename``, ``mime_type``, and ``data`` (bytes). Used by forwarding to
-            re-attach the original message's files without writing them to disk.
+            ``filename``, ``mime_type``, and ``data`` (bytes), plus optional
+            ``inline`` (bool) and ``content_id``. Used by forwarding to re-attach
+            the original message's files without writing them to disk. For an
+            HTML body, inline blobs with a ``content_id`` are placed in a
+            ``multipart/related`` with the HTML so ``cid:`` images resolve.
 
     Returns:
         dict: Message body with 'raw' base64url-encoded RFC 2822 payload
     """
-    text_part = MIMEText(body, content_type)
+
+    def _blob_part(blob: dict[str, Any]) -> MIMEBase:
+        return _build_attachment_part(
+            blob.get("filename", "attachment"),
+            blob.get("mime_type", "application/octet-stream"),
+            blob.get("data", b""),
+            inline=bool(blob.get("inline")),
+            content_id=blob.get("content_id"),
+        )
+
+    blobs = attachment_blobs or []
+    related = [
+        b for b in blobs if content_type == "html" and b.get("inline") and b.get("content_id")
+    ]
+    regular = [b for b in blobs if b not in related]
+
+    # The HTML (or plain) body part, wrapped in multipart/related when it
+    # references inline images.
+    body_part: MIMEMultipart | MIMEText = MIMEText(body, content_type)
+    if related:
+        rel = MIMEMultipart("related")
+        rel.attach(body_part)
+        for blob in related:
+            rel.attach(_blob_part(blob))
+        body_part = rel
+
     message: MIMEMultipart | MIMEText
 
-    if attachments or attachment_blobs:
+    if attachments or regular:
+        outer = MIMEMultipart("mixed")
         if content_type == "html":
             # nested multipart: mixed outer, alternative inner
-            outer = MIMEMultipart("mixed")
             inner = MIMEMultipart("alternative")
             inner.attach(MIMEText(body, "plain"))
-            inner.attach(MIMEText(body, "html"))
+            inner.attach(body_part)
             outer.attach(inner)
         else:
-            outer = MIMEMultipart("mixed")
-            outer.attach(text_part)
-
-        import os
+            outer.attach(body_part)
 
         for file_path in attachments or []:
             mime_type, _ = mimetypes.guess_type(file_path)
@@ -90,28 +162,22 @@ def compose_message(
 
             outer.attach(_build_attachment_part(os.path.basename(file_path), mime_type, file_data))
 
-        for blob in attachment_blobs or []:
-            outer.attach(
-                _build_attachment_part(
-                    blob.get("filename", "attachment"),
-                    blob.get("mime_type", "application/octet-stream"),
-                    blob.get("data", b""),
-                )
-            )
+        for blob in regular:
+            outer.attach(_blob_part(blob))
 
         message = outer
     else:
-        message = text_part
+        message = body_part
 
-    message["to"] = to
-    message["subject"] = subject
+    message["to"] = _encode_address_header(to)
+    message["subject"] = _encode_text_header(subject)
 
     if from_addr:
-        message["from"] = from_addr
+        message["from"] = _encode_address_header(from_addr)
     if cc:
-        message["cc"] = cc
+        message["cc"] = _encode_address_header(cc)
     if bcc:
-        message["bcc"] = bcc
+        message["bcc"] = _encode_address_header(bcc)
 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     return {"raw": raw}
@@ -150,19 +216,23 @@ def compose_forward_message(
     comment_is_html = bool(additional_text and additional_text.lstrip().startswith("<"))
 
     if is_html or comment_is_html:
+        # Header values and plain text are untrusted text going into HTML:
+        # escape them so "Name <addr>" shows up and markup can't be injected.
         header_lines = [
             "---------- Forwarded message ----------",
-            f"From: {orig_from}",
-            f"Date: {orig_date}",
-            f"Subject: {orig_subject}",
+            f"From: {html.escape(orig_from)}",
+            f"Date: {html.escape(orig_date)}",
+            f"Subject: {html.escape(orig_subject)}",
         ]
         if additional_text:
-            prefix = additional_text if comment_is_html else f"<p>{additional_text}</p>"
+            prefix = (
+                additional_text if comment_is_html else f"<p>{html.escape(additional_text)}</p>"
+            )
         else:
             prefix = ""
         header_block = "<br>".join(header_lines)
         # An HTML comment forces an HTML forward even for a plain-text original.
-        forwarded_body = orig_body if is_html else f"<pre>{orig_body}</pre>"
+        forwarded_body = orig_body if is_html else f"<pre>{html.escape(orig_body)}</pre>"
         body = f"{prefix}<div>{header_block}</div><hr>{forwarded_body}"
         content_type = "html"
     else:
@@ -255,6 +325,8 @@ def forward_email(
                 "filename": att.get("filename", "attachment"),
                 "mime_type": att.get("mime_type", "application/octet-stream"),
                 "data": data,
+                "inline": bool(att.get("inline")),
+                "content_id": att.get("content_id"),
             }
         )
 
