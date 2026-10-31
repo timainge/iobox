@@ -156,14 +156,14 @@ If `GMAIL_TOKEN_FILE` is set to a non-default value, the legacy single-file beha
 
 ### Microsoft 365 / Outlook
 
-Set `OUTLOOK_CLIENT_ID` and optionally `OUTLOOK_TENANT_ID` (defaults to `"common"`). Token stored at `$CREDENTIALS_DIR/tokens/{account}/microsoft_token.txt` (namespaced by account email). Legacy `o365_token.txt` files are auto-migrated on first use.
+Set `OUTLOOK_CLIENT_ID` and optionally `OUTLOOK_TENANT_ID` (defaults to `"common"`). Token stored at `~/.iobox/tokens/{account}/microsoft_token_{readonly|standard}.txt` (one per tier; a readonly session never reuses a write token) (namespaced by account email). Legacy `o365_token.txt` files are auto-migrated on first use.
 
 ## Key Invariants
 
 Knowing these prevents subtle bugs when working across providers or converters:
 
 - **`EmailData["from_"]` vs `"from"`** — Providers store the sender under `from_` (underscore) to avoid the Python keyword `from`. However `markdown_converter.py` and `file_manager.py` expect `from` (no underscore). The `_email_data_to_dict()` helper in `cli.py` (≈ line 48–58) bridges this — do not change the key in `EmailData` or provider return values.
-- **Outlook searches inbox only; Gmail searches all mail** — `OutlookProvider` queries `inbox_folder()` by default. Emails in Sent, Archive, or custom folders may not be returned.
+- **Outlook and Gmail both search all mail** — `OutlookProvider` queries `/me/messages` (every folder). Outlook doesn't yet honour `include_spam_trash`, so Deleted Items and Junk are included.
 - **Outlook message IDs use ImmutableId** — Stable across folder moves. Set via `Prefer: IdType="ImmutableId"` header on all Graph requests.
 - **Write ops return `{"message_id": ..., "status": ...}` — not `"id"`** — All provider write methods return a dict with `message_id` as the ID key. CLI code must read `result.get("message_id", ...)`.
 - **Access modes gate subcommands, not just top-level commands** — `modes.py` lists qualified CLI names (`"events delete"`) and MCP tool names per mode; anything that sends mail (`send`, `forward`, `draft-send`, `send_gmail_draft`) is `dangerous`. Add new write commands/tools to the right set.

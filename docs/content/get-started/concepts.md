@@ -99,5 +99,5 @@ Modes are additive: `standard` includes everything in `readonly`, and `dangerous
       token_readonly.json
       token_standard.json
     corp@company.com/
-      microsoft_token.txt
+      microsoft_token_readonly.txt
 ```

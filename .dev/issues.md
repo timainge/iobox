@@ -16,7 +16,7 @@ Findings from the full code review on 2026-10-31 (six parallel reviewers, findin
 | SEC-04 | high | `mcp_server.py` `upload_file` | Any readable local file can be uploaded to a model-chosen folder | WP-MCP | fixed (546e044) |
 | SEC-05 | high | `mcp_server.py` `_default_workspace_fn`, `_resolve_email_provider` | Misspelled/unloadable `workspace=` silently falls back to legacy Gmail, including for writes | WP-MCP | fixed (473a3a5) |
 | SEC-06 | high | `mcp_server.py` batch tools | `batch_trash/forward/modify` unbounded `max_results`, empty query, `days=0` → whole mailbox | WP-MCP | fixed (cf69e02) |
-| SEC-07 | high | `providers/token_store.py`, `google/auth.py`, `o365/auth.py` | Token files (refresh tokens, client secret) written 0644; dirs not 0700 | WP-GOOG (+WP-O365 for O365 backend) | in-progress — Google/token store fixed (d153727, 3741001); O365 token file pending WP-O365 |
+| SEC-07 | high | `providers/token_store.py`, `google/auth.py`, `o365/auth.py` | Token files (refresh tokens, client secret) written 0644; dirs not 0700 | WP-GOOG (+WP-O365 for O365 backend) | fixed (d153727, 3741001, df7a151) |
 | SEC-08 | high | `cli.py` mode gate, `modes.py` `_READONLY_CLI` | `--mode readonly` doesn't gate `events`/`files` write subcommands (`events delete` works in readonly) | WP-CLI | fixed (1bed297) |
 | SEC-09 | med | `space_config.py`, `google/auth.py`, `embed.py` | Workspace names / account strings used in paths unvalidated (`space create ../../x`, MCP `workspace=`) | WP-WS | fixed (d148ef4, f3e2b2c) |
 | SEC-10 | med | `google/files.py` `list_files` | Drive `q` escapes `'` but not `\`; `mime_type`/`folder_id` unescaped → query breakout | WP-GOOG | fixed (5fb14e7) |
@@ -83,7 +83,7 @@ Findings from the full code review on 2026-10-31 (six parallel reviewers, findin
 | ID | Sev | Location | Issue | Owner | Status |
 |---|---|---|---|---|---|
 | MCP-01 | med | batch tools | One failure aborts batch; caller can't tell what already happened | WP-MCP | fixed (cf69e02) |
-| MCP-02 | low | `check_auth`, sync paths | Legacy `get_gmail_service()` can start interactive OAuth inside the server | WP-MCP | fixed (6e73244, 02bea56) |
+| MCP-02 | low | `check_auth`, sync paths | Legacy `get_gmail_service()` can start interactive OAuth inside the server | WP-MCP | fixed (6e73244, 02bea56, f61c8a4) |
 | MCP-03 | low | `get_emails` | Outlook drops missing IDs; results misalign; one exception aborts batch | WP-MCP | fixed (f64333e) |
 | MCP-04 | low | `save_email`, `save_thread` | `include_spam_trash` / `prefer_html` accepted but unused | WP-MCP | fixed (2b1cf13) |
 | MCP-05 | low | `_get_workspace` | `TypeError` retry silently swaps named workspace for active | WP-MCP | fixed (473a3a5) |
@@ -115,20 +115,20 @@ Findings from the full code review on 2026-10-31 (six parallel reviewers, findin
 
 | ID | Sev | Location | Issue | Owner | Status |
 |---|---|---|---|---|---|
-| O365-01 | crit | `o365/email.py` `_set_immutable_id_header` | `con.session` is None before first request → every Outlook call fails; calendar/files never set header | WP-O365 | open |
-| O365-02 | crit | `o365/calendar.py` `list_events` | `get_events` takes `start_recurring/end_recurring`; `Schedule.search_events` doesn't exist | WP-O365 | open |
-| O365-03 | crit | `o365/calendar.py` | `Schedule.get_event`, `Event.accept/decline/tentatively_accept` don't exist | WP-O365 | open |
-| O365-04 | crit | `o365/email.py` query building | O365 2.1 `QueryBuilder` has no `on_attribute`/`as_params`; invalid OData for to/categories | WP-O365 | open |
-| O365-05 | high | `o365/email.py` `$search` | `QueryBuilder.search` quotes the whole KQL → field filters become phrase search | WP-O365 | open |
-| O365-06 | crit | `o365/auth.py` | `authenticate(scopes=)` ignored (param is `requested_scopes`) → all 24 default scopes, readonly not enforced; device code ignored | WP-O365 | open |
-| O365-07 | high | `o365/email.py` attachments | Attachments never downloaded; content is base64 str, not bytes | WP-O365 | open |
-| O365-08 | med | `o365/email.py` `set_star` | `Message.flag` is read-only | WP-O365 | open |
-| O365-09 | med | `o365/files.py` | Wrong DriveItem attrs (`parent`, `created_datetime`), `Folder.mkdir` missing | WP-O365 | open |
-| O365-10 | med | `o365/calendar.py` conversion | location dict, body str, attendee status object mis-read → fields always None | WP-O365 | open |
-| O365-11 | med | `o365/email.py` delta sync | 410 raises HTTPError (never `_DeltaGoneError`); `@removed` counted as new | WP-O365 | open |
-| O365-12 | med | `o365/auth.py` | One token per account regardless of mode/scopes; no scope-coverage check | WP-O365 | open |
-| O365-13 | med | `o365/email.py` `$batch` | Per-item failures ignored; `//` double-slash URLs | WP-O365 | open |
-| O365-14 | low | `o365/email.py` | `contentType` case compare; `send` returns `"sent_message"` id; `update_event` raw keys; OneDrive `permanent` ignored | WP-O365 | open |
+| O365-01 | crit | `o365/email.py` `_set_immutable_id_header` | `con.session` is None before first request → every Outlook call fails; calendar/files never set header | WP-O365 | fixed (df7a151, 84dde40) — needs live-tenant verification |
+| O365-02 | crit | `o365/calendar.py` `list_events` | `get_events` takes `start_recurring/end_recurring`; `Schedule.search_events` doesn't exist | WP-O365 | fixed (a4db471) — needs live-tenant verification |
+| O365-03 | crit | `o365/calendar.py` | `Schedule.get_event`, `Event.accept/decline/tentatively_accept` don't exist | WP-O365 | fixed (a4db471) — needs live-tenant verification |
+| O365-04 | crit | `o365/email.py` query building | O365 2.1 `QueryBuilder` has no `on_attribute`/`as_params`; invalid OData for to/categories | WP-O365 | fixed (84dde40) — needs live-tenant verification |
+| O365-05 | high | `o365/email.py` `$search` | `QueryBuilder.search` quotes the whole KQL → field filters become phrase search | WP-O365 | fixed (84dde40) — needs live-tenant verification |
+| O365-06 | crit | `o365/auth.py` | `authenticate(scopes=)` ignored (param is `requested_scopes`) → all 24 default scopes, readonly not enforced; device code ignored | WP-O365 | fixed (df7a151) — needs live-tenant verification |
+| O365-07 | high | `o365/email.py` attachments | Attachments never downloaded; content is base64 str, not bytes | WP-O365 | fixed (84dde40) — needs live-tenant verification |
+| O365-08 | med | `o365/email.py` `set_star` | `Message.flag` is read-only | WP-O365 | fixed (84dde40) — needs live-tenant verification |
+| O365-09 | med | `o365/files.py` | Wrong DriveItem attrs (`parent`, `created_datetime`), `Folder.mkdir` missing | WP-O365 | fixed (818202e) — needs live-tenant verification |
+| O365-10 | med | `o365/calendar.py` conversion | location dict, body str, attendee status object mis-read → fields always None | WP-O365 | fixed (a4db471) — needs live-tenant verification |
+| O365-11 | med | `o365/email.py` delta sync | 410 raises HTTPError (never `_DeltaGoneError`); `@removed` counted as new | WP-O365 | fixed (84dde40) — needs live-tenant verification |
+| O365-12 | med | `o365/auth.py` | One token per account regardless of mode/scopes; no scope-coverage check | WP-O365 | fixed (df7a151, f61c8a4) — needs live-tenant verification |
+| O365-13 | med | `o365/email.py` `$batch` | Per-item failures ignored; `//` double-slash URLs | WP-O365 | fixed (84dde40) — needs live-tenant verification |
+| O365-14 | low | `o365/email.py` | `contentType` case compare; `send` returns `"sent_message"` id; `update_event` raw keys; OneDrive `permanent` ignored | WP-O365 | fixed (84dde40, a4db471, 818202e) — needs live-tenant verification |
 
 ## Work packages
 
@@ -157,6 +157,12 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 | FU-07 | low | `space_config.validate_account` | Rejects any account containing `..`, so `a..b@x.com` can't be added | open |
 | FU-08 | low | `workspace.search` | Event results in cross-type search sorted by `created_at`, not start time | open |
 | FU-09 | med | — | No CLI/MCP command builds the semantic index (`embed_resources` is SDK-only) | deferred (feature) |
+| FU-10 | med | `pyproject.toml`, CI | O365/MCP tests skipped without the libraries; CI installed only `.[dev]` | fixed (a16dd98) |
+| FU-11 | med | `o365/email.py` search | `include_spam_trash` ignored for Outlook → Deleted Items and Junk always included | open |
+| FU-12 | low | `o365/email.py` attachments | Listing attachments also downloads their content (slow for large files) | open |
+| FU-13 | low | `o365/email.py` drafts | New drafts > ~3 MB with attachments fail (library chunks uploads only for existing drafts) | open |
+| FU-14 | low | `o365/email.py` `$batch` | Throttled (429) batch items reported as failures, not retried | open |
+| FU-15 | med | O365 providers | Live-tenant checks: KQL quoting/`hasAttachments:`, `any()` filters vs InefficientFilter, draft ImmutableId after send, public-client app setup, granted-scope format, calendarView `$orderby`, `permanentDelete` | open (needs M365 dev tenant) |
 
 ## Previously fixed (2026-10-31, branch `docs-restructure-and-fixes`)
 

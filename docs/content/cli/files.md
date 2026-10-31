@@ -129,7 +129,7 @@ iobox files delete FILE_ID [OPTIONS]
 | `--workspace` | `-w` | TEXT | `None` | Named workspace |
 
 !!! warning
-    OneDrive has no trash via this API: deletion is always permanent, with or without `--permanent`.
+    On OneDrive, deletion without `--permanent` goes to the recycle bin; `--permanent` (OneDrive for Business / SharePoint only) deletes immediately.
 
 ```bash
 iobox files delete FILE_ID --yes

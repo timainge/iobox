@@ -16,6 +16,7 @@ pip install 'iobox[outlook]'
 1. Open the [Microsoft Entra admin center](https://entra.microsoft.com/) → **App registrations → New registration**.
 2. **Supported account types:** pick the option that matches your accounts (single tenant for one organisation; *any organisational directory and personal Microsoft accounts* for the broadest reach).
 3. **Redirect URI:** platform *Public client/native*, value `https://login.microsoftonline.com/common/oauth2/nativeclient`.
+    Then, under **Authentication → Advanced settings**, set **Allow public client flows** to **Yes** — iobox signs in as a public client (no client secret), which this setting enables, and device-code sign-in needs it too.
 4. Under **API permissions → Add a permission → Microsoft Graph → Delegated permissions**, add what you need:
 
     | Scope | Read-only | Read-write |
@@ -42,16 +43,16 @@ iobox space add o365 you@company.com --email --calendar --read
 iobox space status
 ```
 
-A browser sign-in opens. The token is stored at `~/.iobox/tokens/you@company.com/microsoft_token.txt`.
+A browser sign-in opens. The token is stored at `~/.iobox/tokens/you@company.com/microsoft_token_readonly.txt` (`microsoft_token_standard.txt` for read-write sessions).
 
 !!! note
     `--drive` is not yet accepted for `o365` sessions in `space add`, even though the `OneDriveProvider` exists and can be used from the [SDK](../sdk/providers.md).
 
 ## Differences from Google
 
-- **Outlook searches the Inbox only.** Gmail searches all mail. Messages in Sent, Archive, or custom folders may not be returned.
+- **Outlook searches every folder**, including Deleted Items and Junk (spam/trash filtering isn't applied for Outlook yet).
 - **Message IDs are ImmutableIds**, so they stay stable when a message is moved between folders.
-- **OneDrive deletion is permanent** — there's no trash API via `O365`.
+- **OneDrive deletion goes to the recycle bin**; `--permanent` deletes permanently (OneDrive for Business / SharePoint only).
 
 See [Provider behaviour](../reference/providers.md) for the full list.
 

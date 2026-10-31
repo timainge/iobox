@@ -47,11 +47,12 @@ iobox normalises results across providers, but the underlying services differ. T
 
 ## Outlook
 
-- **Searches the Inbox only.** Messages in Sent, Archive, or custom folders may not be returned.
-- **Query syntax** is passed to Microsoft Graph `$search` (KQL).
-- **Message IDs are ImmutableIds** (`Prefer: IdType="ImmutableId"`), stable across folder moves.
+- **Searches every folder** (`/me/messages`: Inbox, Sent, Archive, custom folders — and also Deleted Items and Junk, since `include_spam_trash` isn't applied for Outlook yet).
+- **Query syntax** is Microsoft Graph `$search` (KQL). Structured filters (from, to, dates, attachments) use `$filter`; Graph can't combine `$search` with `$filter`/`$orderby`, so when both are needed unread/category filters and ordering are applied client-side.
+- **Message IDs are ImmutableIds** (`Prefer: IdType="ImmutableId"` on every Graph request), stable across folder moves.
 - **Categories** map to iobox tags.
-- Incremental sync is not implemented.
+- **Incremental sync** (SDK `get_sync_state()` / `get_new_messages()`) uses a Graph delta link on the Inbox; an expired delta link triggers a full re-sync. `iobox save --sync` uses the provider-neutral query window instead.
+- New drafts larger than about 3 MB with attachments may fail (the library only uploads large attachments in chunks to existing drafts).
 
 | Mode | Scopes |
 |---|---|
@@ -60,6 +61,8 @@ iobox normalises results across providers, but the underlying services differ. T
 
 ## Outlook Calendar
 
+- Lists the default calendar's events in a date window (default: now to one year ahead), with recurring events expanded.
+- **Text search is done client-side** over the window — Graph doesn't support `$search` on events.
 - Incremental event sync is not implemented.
 
 | Mode | Scopes |
@@ -69,7 +72,7 @@ iobox normalises results across providers, but the underlying services differ. T
 
 ## OneDrive
 
-- **Deletion is always permanent** — there's no trash API via the `O365` library.
+- `delete_file` sends items to the OneDrive recycle bin; `permanent=True` deletes permanently (Graph `permanentDelete`, available on OneDrive for Business and SharePoint only).
 - Not yet addable via `iobox space add`; available through the [SDK](../sdk/providers.md).
 
 | Mode | Scopes |
@@ -77,5 +80,9 @@ iobox normalises results across providers, but the underlying services differ. T
 | read-only | `Files.Read.All` |
 | read-write | `Files.ReadWrite.All` |
 
+## Microsoft 365 tokens
+
+Tokens are stored per account and tier at `~/.iobox/tokens/ACCOUNT/microsoft_token_{readonly|standard}.txt` (0600). A read-only session never reuses a read-write token. Tokens from older iobox versions (`microsoft_token.txt`, `o365_token.txt`) are migrated into the `standard` tier on first use.
+
 !!! warning
-    Microsoft 365 providers have not yet been tested against a real tenant.
+    Microsoft 365 providers are verified against the real python-o365 library, but have not yet been tested end-to-end against a real tenant.

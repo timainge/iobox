@@ -32,7 +32,7 @@ Workspace configuration (`iobox space`, `events`, `files`, the MCP workspace too
     ACCOUNT/
       token_readonly.json      # Google, read-only scopes
       token_standard.json      # Google, read-write scopes
-      microsoft_token.txt      # Microsoft 365
+      microsoft_token_{tier}.txt  # Microsoft 365 (readonly / standard)
   indexes/                     # semantic search indexes
 ```
 

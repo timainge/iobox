@@ -84,7 +84,7 @@ Common query operators:
 | `has:attachment` | `has:attachment` | Only emails with attachments |
 | `is:unread` | `is:unread` | Only unread emails |
 
-Outlook searches the Inbox only; Gmail searches all mail.
+Both providers search all mail. For Outlook this currently includes Deleted Items and Junk.
 
 ## Related Commands
 
