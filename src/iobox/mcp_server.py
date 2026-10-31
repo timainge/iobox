@@ -679,7 +679,6 @@ def save_email(
     download_attachments: bool = False,
     attachment_types: str | None = None,
     include_inline: bool = False,
-    include_spam_trash: bool = False,
     provider: str | None = None,
     workspace: str | None = None,
 ) -> dict:
@@ -705,7 +704,6 @@ def save_email(
             these extensions (comma-separated, e.g. ``"pdf,docx"``).
         include_inline: Include inline parts (signature logos, cid images) when
             downloading attachments (default False — skip inline cruft).
-        include_spam_trash: Include messages from SPAM and TRASH (default False).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
@@ -741,8 +739,6 @@ def save_email(
 def save_thread(
     thread_id: str,
     output_dir: str = ".",
-    prefer_html: bool = True,
-    include_spam_trash: bool = False,
     provider: str | None = None,
     workspace: str | None = None,
 ) -> str | dict:
@@ -753,8 +749,6 @@ def save_thread(
         output_dir: Directory to save the file, inside the MCP root
             (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
             under it (default: the root itself).
-        prefer_html: Use HTML content if available (default: True).
-        include_spam_trash: Include messages from SPAM and TRASH (default False).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
@@ -828,6 +822,8 @@ def save_emails_by_query(
             Gmail slots only.
         attachment_types: When ``download_attachments`` is True, restrict to
             these extensions (comma-separated, e.g. ``"pdf,docx"``).
+        include_inline: Include inline parts (signature logos, cid images) when
+            downloading attachments (default False — skip inline cruft).
         include_spam_trash: Include SPAM and TRASH (default False).
         sync: Enable incremental sync — Gmail only (default False).
         provider: Optional email slot name.

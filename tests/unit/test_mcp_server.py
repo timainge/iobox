@@ -1929,3 +1929,35 @@ class TestGetEmailsAlignment:
         with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
             result = get_emails(["m1", "m1"])
         assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# No accepted-but-ignored parameters (MCP-04)
+# ---------------------------------------------------------------------------
+
+
+class TestToolParameters:
+    def test_every_tool_parameter_is_used(self):
+        import ast
+        import inspect
+        import textwrap
+
+        from iobox.mcp_server import _ALL_TOOLS
+
+        unused = []
+        for name, wrapper in _ALL_TOOLS.items():
+            fn = inspect.unwrap(wrapper)
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+            func = tree.body[0]
+            assert isinstance(func, ast.FunctionDef)
+            used = {n.id for n in ast.walk(func) if isinstance(n, ast.Name)}
+            unused += [f"{name}.{a.arg}" for a in func.args.args if a.arg not in used]
+        assert unused == []
+
+    def test_save_tools_drop_ignored_params(self):
+        import inspect
+
+        assert "include_spam_trash" not in inspect.signature(save_email).parameters
+        params = inspect.signature(save_thread).parameters
+        assert "include_spam_trash" not in params
+        assert "prefer_html" not in params
