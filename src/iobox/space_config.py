@@ -152,6 +152,40 @@ def _derive_slug(account: str) -> str:
     return f"{local}-{domain_part}".lower()
 
 
+def unique_slug(config: SpaceConfig, account: str) -> str:
+    """Derive a slug for *account* that is unique within *config*.
+
+    Starts from the usual ``local-domain`` slug (``tim@gmail.com`` → ``tim-gmail``)
+    and appends ``-2``, ``-3``, … if another service in the space already uses
+    it (e.g. ``tim@gmail.co.uk`` → ``tim-gmail-2``). Slugs already stored in a
+    config are never changed — pass the result as ``ServiceEntry(slug=...)``
+    when adding a new entry.
+    """
+    base = _derive_slug(account)
+    taken = {s.slug for s in config.services}
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    return f"{base}-{n}"
+
+
+def find_service(config: SpaceConfig, service: str, account: str) -> ServiceEntry | None:
+    """Return the entry in *config* for ``(service, account)``, or None.
+
+    Accounts compare case-insensitively and legacy service names (``gmail``,
+    ``outlook``) are normalised, so callers can reject duplicate ``space add``
+    requests before running OAuth.
+    """
+    svc = _SERVICE_MIGRATION.get(service.lower(), service.lower())
+    acct = account.strip().lower()
+    for entry in config.services:
+        if entry.service == svc and entry.account.lower() == acct:
+            return entry
+    return None
+
+
 # ── Directory management ──────────────────────────────────────────────────────
 
 

@@ -104,6 +104,67 @@ class TestServiceEntry:
         assert entry.mode == "standard"
 
 
+# ── Slug uniqueness / duplicate detection (WS-04) ─────────────────────────────
+
+
+def _entry(account: str, service: str = "google", slug: str = "") -> ServiceEntry:
+    return ServiceEntry(
+        number=1,
+        service=service,  # type: ignore[arg-type]
+        account=account,
+        scopes=["email"],
+        slug=slug,
+    )
+
+
+class TestUniqueSlug:
+    def test_no_collision_returns_derived_slug(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("work@company.com")])
+        assert sc.unique_slug(cfg, "tim@gmail.com") == "tim-gmail"
+
+    def test_collision_appends_suffix(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("tim@gmail.com")])
+        assert sc.unique_slug(cfg, "tim@gmail.co.uk") == "tim-gmail-2"
+
+    def test_multiple_collisions_increment(self) -> None:
+        cfg = SpaceConfig(
+            name="p",
+            services=[_entry("tim@gmail.com"), _entry("tim@gmail.co.uk", slug="tim-gmail-2")],
+        )
+        assert sc.unique_slug(cfg, "tim@gmail.de") == "tim-gmail-3"
+
+    def test_same_account_other_service_gets_distinct_slug(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("tim@company.com", "google")])
+        assert sc.unique_slug(cfg, "tim@company.com") == "tim-company-2"
+
+    def test_existing_stored_slugs_unchanged_on_load(self) -> None:
+        cfg = SpaceConfig(
+            name="personal",
+            services=[_entry("tim@gmail.com"), _entry("tim@gmail.co.uk", slug="tim-gmail")],
+        )
+        save_space(cfg)
+        assert [s.slug for s in load_space("personal").services] == ["tim-gmail", "tim-gmail"]
+
+
+class TestFindService:
+    def test_finds_existing_entry_case_insensitive(self) -> None:
+        e = _entry("Tim@Gmail.com")
+        cfg = SpaceConfig(name="p", services=[e])
+        assert sc.find_service(cfg, "google", "tim@gmail.com") is e
+
+    def test_different_service_not_matched(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("tim@gmail.com", "google")])
+        assert sc.find_service(cfg, "o365", "tim@gmail.com") is None
+
+    def test_legacy_service_name_normalised(self) -> None:
+        e = _entry("corp@megacorp.com", "o365")
+        cfg = SpaceConfig(name="p", services=[e])
+        assert sc.find_service(cfg, "outlook", "corp@megacorp.com") is e
+
+    def test_missing_returns_none(self) -> None:
+        assert sc.find_service(SpaceConfig(name="p"), "google", "x@y.com") is None
+
+
 # ── ensure_iobox_home ─────────────────────────────────────────────────────────
 
 

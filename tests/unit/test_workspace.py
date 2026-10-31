@@ -511,6 +511,29 @@ class TestFromConfig:
         assert ws.calendar_providers[0].provider.mode == "standard"
         assert ws.file_providers[0].provider.mode == "standard"
 
+    def test_duplicate_slugs_in_legacy_config_get_unique_slot_names(self) -> None:
+        from iobox.space_config import ServiceEntry, SpaceConfig
+
+        config = SpaceConfig(
+            name="test",
+            services=[
+                ServiceEntry(number=1, service="google", account="tim@gmail.com", scopes=["email"]),
+                ServiceEntry(
+                    number=2,
+                    service="google",
+                    account="tim@gmail.co.uk",
+                    scopes=["email"],
+                    slug="tim-gmail",
+                ),
+            ],
+        )
+        with (
+            patch("iobox.providers.google.email.GmailProvider.__init__", return_value=None),
+            patch("iobox.providers.google.auth.GoogleAuth.__init__", return_value=None),
+        ):
+            ws = Workspace.from_config(config)
+        assert [s.name for s in ws.email_providers] == ["tim-gmail", "tim-gmail-2"]
+
     def test_workspace_name_from_config(self) -> None:
         from iobox.space_config import SpaceConfig
 

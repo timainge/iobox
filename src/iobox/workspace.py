@@ -369,6 +369,9 @@ class Workspace:
                     )
                     file_slots.append(ProviderSlot(name=f"{entry.slug}-drive", provider=o_drv))
 
+        for slots in (email_slots, calendar_slots, file_slots):
+            _dedupe_slot_names(slots)
+
         session = WorkspaceSession(workspace_name=config.name)
         return cls(
             name=config.name,
@@ -380,6 +383,26 @@ class Workspace:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _dedupe_slot_names(slots: list[ProviderSlot]) -> None:
+    """Rename colliding slot names in place (``x``, ``x-2``, ``x-3`` …).
+
+    Configs written before slugs were made unique can contain two services with
+    the same slug; without this, ``providers=[name]`` would be ambiguous.
+    """
+    seen: set[str] = set()
+    for slot in slots:
+        if slot.name in seen:
+            n = 2
+            while f"{slot.name}-{n}" in seen:
+                n += 1
+            new_name = f"{slot.name}-{n}"
+            logger.warning(
+                "Duplicate provider slot name '%s'; using '%s' instead", slot.name, new_name
+            )
+            slot.name = new_name
+        seen.add(slot.name)
 
 
 def _email_data_to_resource(email: EmailData) -> Email:
