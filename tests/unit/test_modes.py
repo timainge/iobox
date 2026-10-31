@@ -67,9 +67,12 @@ class TestCliCommandsByMode:
     def test_standard_allows_drafts_and_label(self):
         cmds = CLI_COMMANDS_BY_MODE[AccessMode.standard]
         assert "draft-create" in cmds
-        assert "draft-send" in cmds
         assert "draft-delete" in cmds
         assert "label" in cmds
+
+    def test_draft_send_requires_dangerous(self):
+        assert "draft-send" not in CLI_COMMANDS_BY_MODE[AccessMode.standard]
+        assert "draft-send" in CLI_COMMANDS_BY_MODE[AccessMode.dangerous]
 
     def test_standard_blocks_send_forward_trash(self):
         cmds = CLI_COMMANDS_BY_MODE[AccessMode.standard]

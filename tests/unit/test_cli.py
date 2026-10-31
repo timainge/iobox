@@ -840,6 +840,8 @@ class TestDraftCommands:
             result = runner.invoke(
                 app,
                 [
+                    "--mode",
+                    "dangerous",
                     "draft-send",
                     "--draft-id",
                     "draft-1",

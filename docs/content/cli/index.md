@@ -51,8 +51,8 @@ Not to be confused with the `--provider SLOT` option on `events` and `files` sub
 | Mode | Commands |
 |---|---|
 | `readonly` | `search`, `save`, `draft-list`, `auth-status`, `version`, `space`, `workspace`, `events list/get/save`, `files list/get/save` |
-| `standard` | + `draft-create`, `draft-send`, `draft-delete`, `label`, `events create/rsvp`, `files upload/mkdir/delete` |
-| `dangerous` | + `send`, `forward`, `trash`, `events delete` |
+| `standard` | + `draft-create`, `draft-delete`, `label`, `events create/rsvp`, `files upload/mkdir/delete` |
+| `dangerous` | + `send`, `draft-send`, `forward`, `trash`, `events delete` |
 
 ```bash
 iobox --mode dangerous send --to someone@example.com --subject "Hi" --body "Hello"

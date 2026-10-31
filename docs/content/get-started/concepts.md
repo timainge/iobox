@@ -80,7 +80,7 @@ iobox has two layers of protection against unintended changes.
 Modes are additive: `standard` includes everything in `readonly`, and `dangerous` includes everything in `standard`.
 
 !!! note
-    The two layers are independent: an operation must be allowed by **both** the process mode and the account's token. In the CLI, the process mode gates email commands and the `events` / `files` subcommands the same way as the MCP tools (e.g. `events delete` needs `dangerous`; `files upload` needs `standard`); `space` and `workspace` are allowed in every mode. Note that `standard` mode also permits `draft-send` / `send_gmail_draft`, which sends mail, and `files delete` / `delete_file`. For a hard guarantee, add accounts with `--read`.
+    The two layers are independent: an operation must be allowed by **both** the process mode and the account's token. In the CLI, the process mode gates email commands and the `events` / `files` subcommands the same way as the MCP tools (e.g. `events delete` needs `dangerous`; `files upload` needs `standard`); `space` and `workspace` are allowed in every mode. Sending mail — including sending a draft — always needs `dangerous`; note that `standard` permits `files delete` / `delete_file`. For a hard guarantee, add accounts with `--read`.
 
 !!! tip
     For an AI assistant, start with `IOBOX_MODE=readonly` and add accounts with `--read`. Widen access deliberately once you trust the setup.

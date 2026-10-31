@@ -14,6 +14,7 @@ iobox loads a `.env` file from the working directory if present.
 | `GMAIL_TOKEN_FILE` | `token.json` | CLI email commands | Override the token path (disables per-account tokens) |
 | `OUTLOOK_CLIENT_ID` | — | All (Microsoft 365) | Entra app client ID |
 | `OUTLOOK_TENANT_ID` | `common` | All (Microsoft 365) | Entra tenant ID |
+| `IOBOX_MCP_ROOT` | `~/iobox` | MCP server | Only directory MCP tools may read from or write to |
 | `ANTHROPIC_API_KEY` | — | `processing.summarize` | Claude API key for summaries |
 | `OPENAI_API_KEY` / `VOYAGE_API_KEY` | — | `processing.embed` | Embedding backend keys |
 

@@ -128,7 +128,6 @@ _READONLY_CLI = {
 }
 _STANDARD_CLI = _READONLY_CLI | {
     "draft-create",
-    "draft-send",
     "draft-delete",
     "label",
     "events create",
@@ -137,7 +136,8 @@ _STANDARD_CLI = _READONLY_CLI | {
     "files mkdir",
     "files delete",
 }
-_DANGEROUS_CLI = _STANDARD_CLI | {"send", "forward", "trash", "events delete"}
+# draft-send sends mail, so it sits with send/forward (matches send_gmail_draft in MCP).
+_DANGEROUS_CLI = _STANDARD_CLI | {"send", "draft-send", "forward", "trash", "events delete"}
 
 CLI_COMMANDS_BY_MODE: dict[AccessMode, set[str]] = {
     AccessMode.readonly: _READONLY_CLI,

@@ -166,6 +166,7 @@ Knowing these prevents subtle bugs when working across providers or converters:
 - **Outlook searches inbox only; Gmail searches all mail** — `OutlookProvider` queries `inbox_folder()` by default. Emails in Sent, Archive, or custom folders may not be returned.
 - **Outlook message IDs use ImmutableId** — Stable across folder moves. Set via `Prefer: IdType="ImmutableId"` header on all Graph requests.
 - **Write ops return `{"message_id": ..., "status": ...}` — not `"id"`** — All provider write methods return a dict with `message_id` as the ID key. CLI code must read `result.get("message_id", ...)`.
+- **Access modes gate subcommands, not just top-level commands** — `modes.py` lists qualified CLI names (`"events delete"`) and MCP tool names per mode; anything that sends mail (`send`, `forward`, `draft-send`, `send_gmail_draft`) is `dangerous`. Add new write commands/tools to the right set.
 - **Partial failure in Workspace fan-out must not propagate as exceptions** — `Workspace.search()` and `list_events()`/`list_files()` catch per-slot exceptions, log them, and continue. Never let one provider bring down the whole query.
 
 ## Configuration
@@ -182,6 +183,7 @@ Environment variables (`.env` or shell):
 | `GMAIL_TOKEN_FILE` | `token.json` | Override token path (disables multi-profile) |
 | `OUTLOOK_CLIENT_ID` | — | Azure app client ID (required for Outlook) |
 | `OUTLOOK_TENANT_ID` | `common` | Azure tenant ID |
+| `IOBOX_MCP_ROOT` | `~/iobox` | Only directory MCP tools may read from or write to (`~/.iobox` is always refused) |
 
 ## CLI Commands
 

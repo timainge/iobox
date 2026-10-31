@@ -11,7 +11,7 @@ Create, list, send, and delete email drafts.
 |---|---|---|
 | `draft-list` | all modes | List existing drafts |
 | `draft-create` | `standard` or `dangerous` | Create a draft without sending |
-| `draft-send` | `standard` or `dangerous` | Send an existing draft |
+| `draft-send` | `dangerous` | Send an existing draft |
 | `draft-delete` | `standard` or `dangerous` | Permanently delete a draft |
 
 `standard` is the default mode, so no `--mode` flag is needed unless `IOBOX_MODE` is set to `readonly`.
@@ -103,8 +103,10 @@ Send an existing draft by its draft ID.
 ### Syntax
 
 ```
-iobox draft-send --draft-id DRAFT_ID
+iobox --mode dangerous draft-send --draft-id DRAFT_ID
 ```
+
+Sending mail requires `dangerous` mode, the same as `send` and `forward`.
 
 ### Options
 
@@ -115,7 +117,7 @@ iobox draft-send --draft-id DRAFT_ID
 ### Example
 
 ```bash
-iobox draft-send --draft-id r18e4a2b3c1d5f6a7
+iobox --mode dangerous draft-send --draft-id r18e4a2b3c1d5f6a7
 ```
 
 Output:
