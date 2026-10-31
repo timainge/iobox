@@ -441,8 +441,7 @@ class TestDateSorting:
     def test_search_merges_rfc2822_and_iso(self) -> None:
         email_p = _mock_email_provider([_email("e1", date="Tue, 10 Mar 2026 10:00:00 +0000")])
         file_p = _mock_file_provider([])
-        f = _file("f1")
-        f["created_at"] = "2026-03-11T00:00:00Z"
+        f = _file("f1", modified_at="2026-03-11T00:00:00Z")
         file_p.list_files.return_value = [f]
         ws = Workspace(
             name="test",
@@ -545,6 +544,20 @@ class TestSearch:
         results = ws.search("planning")
         resource_types = {r["resource_type"] for r in results}
         assert resource_types == {"email", "event", "file"}
+
+    def test_events_sorted_by_start_and_files_by_modified(self) -> None:
+        """All events/files here were created 2026-01-01; order must follow start/modified."""
+        email_p = _mock_email_provider([_email("e1", date="2026-03-05")])
+        cal_p = _mock_calendar_provider([_event("ev1", start="2026-03-08T10:00:00+00:00")])
+        file_p = _mock_file_provider([_file("f1", modified_at="2026-03-01T00:00:00+00:00")])
+        ws = Workspace(
+            name="test",
+            email_providers=[ProviderSlot(name="msg", provider=email_p)],
+            calendar_providers=[ProviderSlot(name="cal", provider=cal_p)],
+            file_providers=[ProviderSlot(name="drv", provider=file_p)],
+        )
+        results = ws.search("planning")
+        assert [r["id"] for r in results] == ["ev1", "e1", "f1"]
 
     def test_type_filter_limits_queries(self) -> None:
         email_p = _mock_email_provider([_email("e1")])

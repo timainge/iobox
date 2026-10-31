@@ -358,8 +358,8 @@ class Workspace:
                 provider as ``max_results``).
 
         Returns:
-            Merged list sorted by ``created_at`` descending, at most
-            ``max_results_per_type`` per type. Events are limited to the last
+            Merged list, newest first by event start / file modified time /
+            email date, at most ``max_results_per_type`` per type. Events are limited to the last
             ``DEFAULT_EVENT_SEARCH_DAYS`` days (and the future). Failed slots
             are listed in :attr:`last_errors`.
         """
@@ -396,7 +396,7 @@ class Workspace:
                     errors[f"search:{type_name}"] = _describe_error(exc)
 
         self.last_errors = errors
-        return sort_by_date(all_results, lambda r: r.get("created_at"))
+        return sort_by_date(all_results, _relevance_date)
 
     # ── Slot lookup (for fetch-by-ID and writes) ──────────────────────────────
 
@@ -572,6 +572,15 @@ class Workspace:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _relevance_date(resource: Any) -> Any:
+    """Date a resource is most meaningfully "at": event start, file modified, else created."""
+    if resource.get("resource_type") == "event" and resource.get("start"):
+        return resource["start"]
+    if resource.get("resource_type") == "file" and resource.get("modified_at"):
+        return resource["modified_at"]
+    return resource.get("created_at")
 
 
 def _dedupe_slot_names(slots: list[ProviderSlot]) -> None:

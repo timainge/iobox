@@ -46,7 +46,7 @@ ws = Workspace(
 results = ws.search("Henderson", types=["email", "event", "file"], max_results_per_type=10)
 ```
 
-Returns a single `list[Resource]` sorted by `created_at`, newest first, with at most `max_results_per_type` results of each type. Emails are converted to the `Email` resource shape (`to`/`cc` split into lists) so all three types can be handled uniformly — dispatch on `r["resource_type"]`.
+Returns a single `list[Resource]` sorted newest first — by start time for events, modified time for files, and date for emails — with at most `max_results_per_type` results of each type. Emails are converted to the `Email` resource shape (`to`/`cc` split into lists) so all three types can be handled uniformly — dispatch on `r["resource_type"]`.
 
 Event matches are limited to the last 90 days and the future (`DEFAULT_EVENT_SEARCH_DAYS`); use `list_events()` with an explicit `after` to search further back.
 
@@ -66,7 +66,7 @@ files  = ws.list_files(FileQuery(text="budget", max_results=20))
 | `search_emails(query, providers=None, tags=None)` | `list[EmailData]` | `date`, newest first | `query.max_results` |
 | `list_events(query, providers=None, tags=None)` | `list[Event]` | `start`, chronological | `query.max_results` |
 | `list_files(query, providers=None, tags=None)` | `list[File]` | `modified_at`, newest first | `query.max_results` |
-| `search(text, types=None, max_results_per_type=10)` | `list[Resource]` | `created_at`, newest first | `max_results_per_type` per type |
+| `search(text, types=None, max_results_per_type=10)` | `list[Resource]` | event start / file modified / email date, newest first | `max_results_per_type` per type |
 
 Each slot is asked for up to `max_results`; the merged list is then sorted and cut back to `max_results` (a value of `0` means no cap). Dates are compared as real instants: RFC 2822 email headers and ISO 8601 timestamps with any offset are parsed to UTC (`iobox.workspace.to_utc_datetime`), values without a timezone are taken as local time, and items with a missing or unparsable date sort last.
 
