@@ -157,9 +157,9 @@ _READONLY_MCP = {
     "workspace_auth_status",
 }
 _STANDARD_MCP = _READONLY_MCP | {
-    # Email writes
+    # Email writes (drafts can be created/deleted, but sending one is
+    # outbound mail and lives in dangerous)
     "create_gmail_draft",
-    "send_gmail_draft",
     "delete_gmail_draft",
     "create_label",
     "modify_labels",
@@ -178,6 +178,7 @@ _STANDARD_MCP = _READONLY_MCP | {
 _DANGEROUS_MCP = _STANDARD_MCP | {
     # Email send + irreversible
     "send_email",
+    "send_gmail_draft",
     "forward_gmail",
     "batch_forward_gmail",
     "trash_gmail",

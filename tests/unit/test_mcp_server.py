@@ -1591,3 +1591,45 @@ class TestOutgoingFileConfinement:
         ws.file_providers[0].provider.upload_file.assert_called_once_with(
             str(mcp_root / "r.pdf"), parent_id=None, name="r.pdf"
         )
+
+
+# ---------------------------------------------------------------------------
+# Mode allowlists (SEC-02)
+# ---------------------------------------------------------------------------
+
+
+class TestModeAllowlists:
+    def test_send_gmail_draft_is_dangerous_only(self):
+        from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode
+
+        assert "send_gmail_draft" not in MCP_TOOLS_BY_MODE[AccessMode.readonly]
+        assert "send_gmail_draft" not in MCP_TOOLS_BY_MODE[AccessMode.standard]
+        assert "send_gmail_draft" in MCP_TOOLS_BY_MODE[AccessMode.dangerous]
+
+    def test_standard_has_no_outbound_mail_tool(self):
+        from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode
+
+        outbound = {"send_email", "send_gmail_draft", "forward_gmail", "batch_forward_gmail"}
+        assert not outbound & MCP_TOOLS_BY_MODE[AccessMode.standard]
+
+    def test_check_auth_standard_reports_no_send(self, monkeypatch):
+        monkeypatch.setenv("IOBOX_MODE", "standard")
+        with (
+            patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
+            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
+        ):
+            result = check_auth()
+        assert result["available_write_ops"] is True
+        assert result["available_send_ops"] is False
+        assert "dangerous" in result["mode_hint"]
+
+    def test_capabilities_match_registered_tools(self, monkeypatch):
+        from iobox.mcp_server import _SEND_OP_TOOLS, _WRITE_OP_TOOLS, _mode_capabilities
+        from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode
+
+        for mode in AccessMode:
+            monkeypatch.setenv("IOBOX_MODE", mode.value)
+            caps = _mode_capabilities()
+            allowed = MCP_TOOLS_BY_MODE[mode]
+            assert caps["available_send_ops"] == any(t in allowed for t in _SEND_OP_TOOLS)
+            assert caps["available_write_ops"] == any(t in allowed for t in _WRITE_OP_TOOLS)

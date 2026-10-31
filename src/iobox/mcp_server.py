@@ -1399,6 +1399,33 @@ def batch_trash_gmail(
 # ---------------------------------------------------------------------------
 
 
+_WRITE_OP_TOOLS = ("create_gmail_draft", "modify_labels", "create_event", "upload_file")
+_SEND_OP_TOOLS = ("send_email", "send_gmail_draft", "forward_gmail", "trash_gmail")
+
+
+def _mode_capabilities() -> dict[str, Any]:
+    """Describe the active mode, derived from the same allowlist that registers tools."""
+    mode = get_mode_from_env()
+    allowed = MCP_TOOLS_BY_MODE[mode]
+    caps: dict[str, Any] = {
+        "mode": mode.value,
+        "available_write_ops": all(t in allowed for t in _WRITE_OP_TOOLS),
+        "available_send_ops": all(t in allowed for t in _SEND_OP_TOOLS),
+    }
+    if not caps["available_send_ops"]:
+        caps["mode_hint"] = (
+            f"Running in {mode.value} mode. "
+            + (
+                "Set IOBOX_MODE=standard for labels/drafts/calendar/file writes, or "
+                if not caps["available_write_ops"]
+                else ""
+            )
+            + "set IOBOX_MODE=dangerous to send mail (including sending drafts), "
+            "forward, or trash."
+        )
+    return caps
+
+
 @_tool
 def check_auth() -> dict:
     """Check authentication status, profile info, and the active access mode.
@@ -1410,22 +1437,11 @@ def check_auth() -> dict:
     Returns:
         Status dict including ``mode`` (readonly|standard|dangerous),
         ``available_write_ops`` (labels/drafts/calendar/file writes),
-        ``available_send_ops`` (send/forward/trash), and a ``mode_hint`` when
+        ``available_send_ops`` (send email or drafts, forward, trash), and a ``mode_hint`` when
         running read-only.
     """
-    from iobox.modes import AccessMode, get_mode_from_env
-
     status = check_auth_status()
-
-    mode = get_mode_from_env()
-    status["mode"] = mode.value
-    status["available_write_ops"] = mode != AccessMode.readonly
-    status["available_send_ops"] = mode == AccessMode.dangerous
-    if mode == AccessMode.readonly:
-        status["mode_hint"] = (
-            "Running read-only. Set IOBOX_MODE=standard for labels/drafts/"
-            "calendar/file writes, or IOBOX_MODE=dangerous for send/forward/trash."
-        )
+    status.update(_mode_capabilities())
 
     try:
         service = get_gmail_service()

@@ -32,7 +32,7 @@ Every tool below is registered only in the [access mode](configuration.md#access
 | `list_gmail_drafts` | readonly | List drafts | `max_results=10` |
 | `list_labels` | readonly | List labels (Gmail) or categories (Outlook) | — |
 | `create_gmail_draft` | standard | Create a draft | `to`, `subject`, `body`, `cc`, `bcc`, `html`, `attachments` |
-| `send_gmail_draft` | standard | Send an existing draft | `draft_id` |
+| `send_gmail_draft` | dangerous | Send an existing draft | `draft_id` |
 | `delete_gmail_draft` | standard | Delete a draft | `draft_id` |
 | `create_label` | standard | Create a label, including nested (`Parent/Child`) | `name` |
 | `modify_labels` | standard | Read/unread, star, archive, add/remove label on one message | `message_id`, `mark_read`, `mark_unread`, `star`, `unstar`, `archive`, `add_label`, `remove_label` |
