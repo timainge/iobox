@@ -159,6 +159,30 @@ def version():
     typer.echo(f"iobox version {__version__}")
 
 
+def _gmail_token_missing_scopes(token_path: str | None) -> set[str]:
+    """Return scopes the active mode needs that the Gmail token lacks.
+
+    Returns an empty set when the token can't be read (``check_auth_status``
+    already reports that) or grants everything required.
+    """
+    import json
+
+    from iobox.providers.google.auth import _expand_scopes, get_active_scopes
+
+    if not token_path:
+        return set()
+    try:
+        with open(token_path, encoding="utf-8") as fh:
+            granted = json.load(fh).get("scopes") or []
+    except (OSError, ValueError, AttributeError):
+        return set()
+    if isinstance(granted, str):
+        granted = granted.split()
+    if not granted:
+        return set()
+    return set(get_active_scopes()) - _expand_scopes(set(granted))
+
+
 @app.command()
 def auth_status(ctx: typer.Context):
     """Check the status of email provider authentication.
@@ -196,6 +220,8 @@ def auth_status(ctx: typer.Context):
             typer.echo("3. Set OUTLOOK_CLIENT_ID in your .env file")
             typer.echo("4. Optionally set OUTLOOK_CLIENT_SECRET and OUTLOOK_TENANT_ID")
 
+        # Only touch the provider when the cached token is usable, so that
+        # auth-status never starts an interactive sign-in.
         if status["authenticated"]:
             try:
                 provider = _get_provider(ctx)
@@ -204,8 +230,13 @@ def auth_status(ctx: typer.Context):
                 typer.echo("-------------------")
                 typer.echo(f"Email: {profile.get('email', 'Unknown')}")
                 typer.echo(f"Display name: {profile.get('display_name', 'Unknown')}")
-            except Exception:
-                pass
+            except Exception as exc:
+                typer.echo(f"\nCould not fetch Outlook profile: {exc}", err=True)
+        else:
+            typer.echo(
+                "\nNot signed in. Run any email command (e.g. `iobox --provider outlook "
+                "search -q ...`) to sign in."
+            )
     else:
         # Gmail auth status
         from iobox.providers.google.auth import (  # noqa: PLC0415
@@ -236,16 +267,35 @@ def auth_status(ctx: typer.Context):
                 "6. Download the JSON file and save it as 'credentials.json' in the project root"
             )
 
-        try:
-            service = get_gmail_service()
-            profile = get_gmail_profile(service)
-            typer.echo("\nGmail Profile")
-            typer.echo("-------------------")
-            typer.echo(f"Email: {profile.get('emailAddress', 'Unknown')}")
-            typer.echo(f"Emails: {profile.get('messagesTotal', 0):,}")
-            typer.echo(f"Threads: {profile.get('threadsTotal', 0):,}")
-        except Exception:
-            pass
+        if "error" in status:
+            typer.echo(f"Error: {status['error']}")
+
+        # Building the Gmail service runs the OAuth browser flow when there is
+        # no usable token, so only do it when the token is valid or can be
+        # refreshed silently, and has the scopes this mode needs.
+        refreshable = bool(status.get("expired") and status.get("has_refresh_token"))
+        missing_scopes = _gmail_token_missing_scopes(status.get("token_path"))
+        if not (status["authenticated"] or refreshable):
+            typer.echo(
+                "\nNot signed in. Run any email command (e.g. `iobox search -q ...`) "
+                "to start the OAuth flow."
+            )
+        elif missing_scopes:
+            typer.echo(
+                f"\nToken is missing scopes required for '{current_mode.value}' mode: "
+                f"{', '.join(sorted(missing_scopes))}. Re-authenticate to grant them."
+            )
+        else:
+            try:
+                service = get_gmail_service()
+                profile = get_gmail_profile(service)
+                typer.echo("\nGmail Profile")
+                typer.echo("-------------------")
+                typer.echo(f"Email: {profile.get('emailAddress', 'Unknown')}")
+                typer.echo(f"Emails: {profile.get('messagesTotal', 0):,}")
+                typer.echo(f"Threads: {profile.get('threadsTotal', 0):,}")
+            except Exception as exc:
+                typer.echo(f"\nCould not fetch Gmail profile: {exc}", err=True)
 
 
 @app.command()

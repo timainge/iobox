@@ -1392,3 +1392,125 @@ class TestUntrashBatch:
         assert eq.include_spam_trash is False
         assert eq.raw_query == "from:x@y.com"
         provider.trash.assert_called_once_with("m1")
+
+
+class TestAuthStatusNoInteractiveFlow:
+    """auth-status never starts OAuth and reports profile errors (CLI-05)."""
+
+    _base = {
+        "credentials_file_exists": True,
+        "credentials_path": "/p/credentials.json",
+    }
+
+    def _run_gmail(self, status: dict, svc_side_effect=None):
+        with (
+            patch("iobox.cli.get_provider", return_value=_mock_provider()),
+            patch("iobox.providers.google.auth.check_auth_status", return_value=status),
+            patch("iobox.providers.google.auth.get_gmail_service") as mock_svc,
+            patch(
+                "iobox.providers.google.auth.get_gmail_profile",
+                return_value={"emailAddress": "u@gmail.com"},
+            ),
+        ):
+            if svc_side_effect is not None:
+                mock_svc.side_effect = svc_side_effect
+            result = runner.invoke(app, ["auth-status"])
+        return result, mock_svc
+
+    def test_no_token_does_not_build_service(self):
+        status = {
+            **self._base,
+            "authenticated": False,
+            "token_file_exists": False,
+            "token_path": "/p/none.json",
+        }
+        result, mock_svc = self._run_gmail(status)
+        assert result.exit_code == 0
+        mock_svc.assert_not_called()
+        assert "Not signed in" in result.output
+
+    def test_expired_without_refresh_token_does_not_build_service(self):
+        status = {
+            **self._base,
+            "authenticated": False,
+            "token_file_exists": True,
+            "token_path": "/p/t.json",
+            "expired": True,
+            "has_refresh_token": False,
+        }
+        result, mock_svc = self._run_gmail(status)
+        mock_svc.assert_not_called()
+
+    def test_expired_with_refresh_token_fetches_profile(self):
+        status = {
+            **self._base,
+            "authenticated": False,
+            "token_file_exists": True,
+            "token_path": "/p/t.json",
+            "expired": True,
+            "has_refresh_token": True,
+        }
+        result, mock_svc = self._run_gmail(status)
+        mock_svc.assert_called_once()
+        assert "u@gmail.com" in result.output
+
+    def test_token_missing_scopes_does_not_build_service(self, tmp_path):
+        token = tmp_path / "token_standard.json"
+        token.write_text(
+            '{"scopes": ["https://www.googleapis.com/auth/gmail.readonly"]}', encoding="utf-8"
+        )
+        status = {
+            **self._base,
+            "authenticated": True,
+            "token_file_exists": True,
+            "token_path": str(token),
+        }
+        result, mock_svc = self._run_gmail(status)
+        mock_svc.assert_not_called()
+        assert "missing scopes" in result.output
+
+    def test_profile_error_is_reported(self):
+        status = {
+            **self._base,
+            "authenticated": True,
+            "token_file_exists": True,
+            "token_path": "/p/t.json",
+        }
+        result, _ = self._run_gmail(status, svc_side_effect=RuntimeError("refresh failed"))
+        assert result.exit_code == 0
+        assert "Could not fetch Gmail profile: refresh failed" in result.stderr
+
+    def test_outlook_unauthenticated_does_not_touch_provider(self):
+        status = {
+            "authenticated": False,
+            "client_id_configured": True,
+            "tenant_id": "common",
+            "token_file_exists": False,
+            "token_path": "/t/o365_token.txt",
+        }
+        provider = _mock_provider()
+        with (
+            patch("iobox.cli.get_provider", return_value=provider),
+            patch("iobox.providers.o365.auth.check_outlook_auth_status", return_value=status),
+        ):
+            result = runner.invoke(app, ["--provider", "outlook", "auth-status"])
+        assert result.exit_code == 0
+        provider.get_profile.assert_not_called()
+        assert "Not signed in" in result.output
+
+    def test_outlook_profile_error_is_reported(self):
+        status = {
+            "authenticated": True,
+            "client_id_configured": True,
+            "tenant_id": "common",
+            "token_file_exists": True,
+            "token_path": "/t/o365_token.txt",
+        }
+        provider = _mock_provider()
+        provider.get_profile.side_effect = RuntimeError("graph down")
+        with (
+            patch("iobox.cli.get_provider", return_value=provider),
+            patch("iobox.providers.o365.auth.check_outlook_auth_status", return_value=status),
+        ):
+            result = runner.invoke(app, ["--provider", "outlook", "auth-status"])
+        assert "Could not fetch Outlook profile: graph down" in result.stderr

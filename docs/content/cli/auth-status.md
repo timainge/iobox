@@ -27,7 +27,7 @@ Always prints the provider, access mode, and account name. Then:
 - Whether a valid token exists (`Authenticated`)
 - The OAuth client file (`credentials.json`, or `GOOGLE_APPLICATION_CREDENTIALS`) and whether it exists
 - The token file for the current mode's tier and whether it exists; expiry and refresh-token status if it does
-- Gmail profile (email address, message and thread counts) when a token works
+- Gmail profile (email address, message and thread counts) when the token is valid, or expired but refreshable, and grants the scopes the current mode needs
 - Google Cloud setup steps if the credentials file is missing
 
 The readonly mode reads `token_readonly.json` but also accepts an existing `token_standard.json`.
@@ -37,6 +37,8 @@ The readonly mode reads `token_readonly.json` but also accepts an existing `toke
 - Whether a valid token exists, whether `OUTLOOK_CLIENT_ID` is set, the tenant ID, and the token file path
 - Azure app setup steps if `OUTLOOK_CLIENT_ID` is not set
 - Profile email and display name when authenticated
+
+`auth-status` never opens a browser or starts an OAuth flow. If there's no usable token it prints `Not signed in` and how to sign in; if the token lacks scopes for the current mode it lists the missing scopes. Errors fetching the profile are printed (to stderr) rather than hidden.
 
 ## Example Output
 
