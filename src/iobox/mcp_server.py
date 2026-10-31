@@ -383,6 +383,91 @@ def _apply_body_mode(data: dict[str, Any], mode: str, max_body_chars: int | None
     return data
 
 
+BATCH_MAX_RESULTS = 100
+
+
+def _parse_ymd(value: str, field: str) -> Any:
+    """Parse ``YYYY/MM/DD`` (or ``YYYY-MM-DD``) into a ``date``."""
+    from datetime import date
+
+    try:
+        y, m, d = (int(x) for x in value.replace("-", "/").split("/"))
+        return date(y, m, d)
+    except (ValueError, TypeError):
+        raise ToolInputError(f"{field} must be YYYY/MM/DD, got {value!r}.") from None
+
+
+def _batch_query(
+    query: str,
+    max_results: int,
+    days: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[Any, str | None]:
+    """Build a bounded ``EmailQuery`` for a destructive batch tool.
+
+    Requires a non-empty query, and ``days >= 1`` unless ``start_date`` gives
+    an explicit lower bound. Clamps ``max_results`` to 1..``BATCH_MAX_RESULTS``.
+    Returns ``(query, note)`` where *note* explains any clamping.
+    """
+    from datetime import date, timedelta
+
+    from iobox.providers.base import EmailQuery
+
+    if not query or not query.strip():
+        raise ToolInputError(
+            "Batch operations require a non-empty query; refusing to act on the whole mailbox."
+        )
+    if start_date:
+        after = _parse_ymd(start_date, "start_date")
+    elif days is None or days < 1:
+        raise ToolInputError(
+            "Batch operations require days >= 1 (or an explicit start_date); "
+            "refusing to act on the whole mailbox history."
+        )
+    else:
+        after = date.today() - timedelta(days=days)
+    before = _parse_ymd(end_date, "end_date") if end_date else None
+    limit = max(1, min(int(max_results), BATCH_MAX_RESULTS))
+    eq = EmailQuery(text=query, max_results=limit, after=after, before=before)
+    note = f"max_results clamped to {limit}." if limit != max_results else None
+    return eq, note
+
+
+def _run_batch(
+    message_ids: list[str], action: Callable[[str], Any]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Apply *action* to each ID, collecting per-item failures instead of aborting."""
+    succeeded: list[str] = []
+    failed: list[dict[str, str]] = []
+    for mid in message_ids:
+        try:
+            action(mid)
+            succeeded.append(mid)
+        except Exception as exc:
+            failed.append({"message_id": mid, "error": str(exc)})
+    return succeeded, failed
+
+
+def _batch_result(
+    count_key: str,
+    matched: int,
+    succeeded: list[str],
+    failed: list[dict[str, str]],
+    note: str | None,
+) -> dict[str, Any]:
+    """Summarise a batch: ``<count_key>`` (successes), matched, per-item outcome."""
+    result: dict[str, Any] = {
+        count_key: len(succeeded),
+        "matched_count": matched,
+        "succeeded": succeeded,
+        "failed": failed,
+    }
+    if note:
+        result["detail"] = note
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Search & Read
 # ---------------------------------------------------------------------------
@@ -714,7 +799,8 @@ def save_emails_by_query(
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with saved_count, skipped_count, and attachment_count.
+        Summary dict with saved_count, skipped_count, attachment_count, and
+        ``failed`` (``{message_id, error}`` for messages that could not be saved).
     """
     from datetime import date, timedelta
 
@@ -793,25 +879,32 @@ def save_emails_by_query(
 
     saved_count = 0
     attachment_count = 0
+    failed: list[dict[str, str]] = []
 
     if ids_to_process:
         email_batch = p.batch_get_emails(ids_to_process, preferred_content_type=content_type)
         for email_raw in email_batch:
             if "error" in email_raw:
+                failed.append(
+                    {"message_id": email_raw.get("message_id", ""), "error": email_raw["error"]}
+                )
                 continue
             email_data = _email_data_to_dict(email_raw)
-            md = convert_email_to_markdown(email_data)
-            save_email_to_markdown(email_data, md, out)
-            saved_count += 1
-            if download_attachments and email_data.get("attachments"):
-                res = download_email_attachments(
-                    download_fn=p.download_attachment,
-                    email_data=email_data,
-                    output_dir=out,
-                    attachment_filters=att_filters,
-                    include_inline=include_inline,
-                )
-                attachment_count += res["downloaded_count"]
+            try:
+                md = convert_email_to_markdown(email_data)
+                save_email_to_markdown(email_data, md, out)
+                saved_count += 1
+                if download_attachments and email_data.get("attachments"):
+                    res = download_email_attachments(
+                        download_fn=p.download_attachment,
+                        email_data=email_data,
+                        output_dir=out,
+                        attachment_filters=att_filters,
+                        include_inline=include_inline,
+                    )
+                    attachment_count += res["downloaded_count"]
+            except Exception as exc:
+                failed.append({"message_id": email_data.get("message_id", ""), "error": str(exc)})
 
     if sync:
         try:
@@ -825,6 +918,7 @@ def save_emails_by_query(
         "saved_count": saved_count,
         "skipped_count": len(duplicates),
         "attachment_count": attachment_count,
+        "failed": failed,
     }
 
 
@@ -980,8 +1074,9 @@ def batch_forward_gmail(
     Args:
         query: Email search syntax to find messages.
         to: Recipient email address.
-        max_results: Maximum messages to forward (default 10).
-        days: Days back to search (default 7).
+        max_results: Maximum messages to forward (default 10, capped at 100).
+        days: Days back to search (default 7; must be >= 1 unless
+            ``start_date`` is given).
         start_date: Start date YYYY/MM/DD (overrides days).
         end_date: End date YYYY/MM/DD.
         note: Optional text to prepend to each forwarded email.
@@ -989,34 +1084,21 @@ def batch_forward_gmail(
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with forwarded_count.
+        Summary dict: ``forwarded_count`` (successes), ``matched_count``,
+        ``succeeded`` (message IDs) and ``failed`` (``{message_id, error}``).
+        One failure doesn't stop the rest.
     """
-    from datetime import date, timedelta
-
-    from iobox.providers.base import EmailQuery
-
-    after: date | None = None
-    before: date | None = None
-    if start_date:
-        parts = start_date.replace("-", "/").split("/")
-        after = date(int(parts[0]), int(parts[1]), int(parts[2]))
-    elif days:
-        after = date.today() - timedelta(days=days)
-    if end_date:
-        parts = end_date.replace("-", "/").split("/")
-        before = date(int(parts[0]), int(parts[1]), int(parts[2]))
-
+    eq, limit_note = _batch_query(query, max_results, days, start_date, end_date)
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    results = p.search_emails(
-        EmailQuery(text=query, max_results=max_results, after=after, before=before)
-    )
+    results = p.search_emails(eq)[: eq.max_results]
     if not results:
-        return {"forwarded_count": 0, "detail": "No emails found matching the query."}
+        return _batch_result("forwarded_count", 0, [], [], "No emails found matching the query.")
 
-    for r in results:
-        p.forward_message(message_id=r["message_id"], to=to, comment=note)
-
-    return {"forwarded_count": len(results)}
+    succeeded, failed = _run_batch(
+        [r["message_id"] for r in results],
+        lambda mid: p.forward_message(message_id=mid, to=to, comment=note),
+    )
+    return _batch_result("forwarded_count", len(results), succeeded, failed, limit_note)
 
 
 # ---------------------------------------------------------------------------
@@ -1275,8 +1357,8 @@ def batch_modify_gmail_labels(
 
     Args:
         query: Email search syntax to find messages.
-        max_results: Maximum messages to modify (default 10).
-        days: Days back to search (default 7).
+        max_results: Maximum messages to modify (default 10, capped at 100).
+        days: Days back to search (default 7; must be >= 1).
         mark_read: Mark as read.
         mark_unread: Mark as unread.
         star: Star messages.
@@ -1288,21 +1370,19 @@ def batch_modify_gmail_labels(
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with ``modified_count``.
+        Summary dict: ``modified_count`` (successes), ``matched_count``,
+        ``succeeded`` (message IDs) and ``failed`` (``{message_id, error}``).
+        One failure doesn't stop the rest.
     """
-    from datetime import date, timedelta
-
-    from iobox.providers.base import EmailQuery
-
+    eq, limit_note = _batch_query(query, max_results, days)
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    after_date: date | None = date.today() - timedelta(days=days) if days else None
-    results = p.search_emails(EmailQuery(text=query, max_results=max_results, after=after_date))
+    results = p.search_emails(eq)[: eq.max_results]
     if not results:
-        return {"modified_count": 0, "detail": "No emails found matching the query."}
+        return _batch_result("modified_count", 0, [], [], "No emails found matching the query.")
 
-    msg_ids = [r["message_id"] for r in results]
-    for mid in msg_ids:
-        _apply_label_actions(
+    succeeded, failed = _run_batch(
+        [r["message_id"] for r in results],
+        lambda mid: _apply_label_actions(
             p,
             mid,
             mark_read=mark_read,
@@ -1312,9 +1392,9 @@ def batch_modify_gmail_labels(
             archive=archive,
             add_label=add_label,
             remove_label=remove_label,
-        )
-
-    return {"modified_count": len(msg_ids)}
+        ),
+    )
+    return _batch_result("modified_count", len(results), succeeded, failed, limit_note)
 
 
 # ---------------------------------------------------------------------------
@@ -1370,28 +1450,24 @@ def batch_trash_gmail(
 
     Args:
         query: Email search syntax to find messages.
-        max_results: Maximum messages to trash (default 10).
-        days: Days back to search (default 7).
+        max_results: Maximum messages to trash (default 10, capped at 100).
+        days: Days back to search (default 7; must be >= 1).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with trashed_count.
+        Summary dict: ``trashed_count`` (successes), ``matched_count``,
+        ``succeeded`` (message IDs) and ``failed`` (``{message_id, error}``).
+        One failure doesn't stop the rest.
     """
-    from datetime import date, timedelta
-
-    from iobox.providers.base import EmailQuery
-
+    eq, limit_note = _batch_query(query, max_results, days)
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    after_date: date | None = date.today() - timedelta(days=days) if days else None
-    results = p.search_emails(EmailQuery(text=query, max_results=max_results, after=after_date))
+    results = p.search_emails(eq)[: eq.max_results]
     if not results:
-        return {"trashed_count": 0, "detail": "No emails found matching the query."}
+        return _batch_result("trashed_count", 0, [], [], "No emails found matching the query.")
 
-    for r in results:
-        p.trash(r["message_id"])
-
-    return {"trashed_count": len(results)}
+    succeeded, failed = _run_batch([r["message_id"] for r in results], p.trash)
+    return _batch_result("trashed_count", len(results), succeeded, failed, limit_note)
 
 
 # ---------------------------------------------------------------------------

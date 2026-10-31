@@ -1633,3 +1633,126 @@ class TestModeAllowlists:
             allowed = MCP_TOOLS_BY_MODE[mode]
             assert caps["available_send_ops"] == any(t in allowed for t in _SEND_OP_TOOLS)
             assert caps["available_write_ops"] == any(t in allowed for t in _WRITE_OP_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# Batch guard rails and partial failure (SEC-06, MCP-01)
+# ---------------------------------------------------------------------------
+
+
+def _batch_calls():
+    """(tool, kwargs) for each destructive batch tool."""
+    return [
+        (batch_trash_gmail, {}),
+        (batch_forward_gmail, {"to": "bob@example.com"}),
+        (batch_modify_gmail_labels, {"archive": True}),
+    ]
+
+
+class TestBatchGuardRails:
+    @pytest.mark.parametrize("query", ["", "   "])
+    def test_empty_query_refused(self, query):
+        for tool, extra in _batch_calls():
+            provider = _make_provider()
+            with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+                result = tool(query, **extra)
+            assert "error" in result, tool.__name__
+            provider.search_emails.assert_not_called()
+
+    @pytest.mark.parametrize("days", [0, -3])
+    def test_days_below_one_refused(self, days):
+        for tool, extra in _batch_calls():
+            provider = _make_provider()
+            with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+                result = tool("from:x@y.com", days=days, **extra)
+            assert "error" in result, tool.__name__
+            provider.search_emails.assert_not_called()
+
+    def test_forward_explicit_start_date_allows_days_zero(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_forward_gmail(
+                "subject:x", "bob@example.com", days=0, start_date="2024/01/01"
+            )
+        assert result["forwarded_count"] == 1
+
+    def test_invalid_date_refused(self):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_forward_gmail("subject:x", "bob@example.com", start_date="soon")
+        assert "error" in result
+
+    def test_max_results_clamped(self):
+        for tool, extra in _batch_calls():
+            provider = _make_provider()
+            provider.search_emails.return_value = [{"message_id": f"m{i}"} for i in range(150)]
+            with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+                result = tool("from:x@y.com", max_results=100000, **extra)
+            query = provider.search_emails.call_args[0][0]
+            assert query.max_results == 100, tool.__name__
+            assert result["matched_count"] == 100
+            assert "clamped" in result["detail"]
+
+    def test_days_bounds_query(self):
+        from datetime import date, timedelta
+
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            batch_trash_gmail("from:x@y.com", days=3)
+        query = provider.search_emails.call_args[0][0]
+        assert query.after == date.today() - timedelta(days=3)
+
+
+class TestBatchPartialFailure:
+    def test_trash_continues_after_failure(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [
+            {"message_id": "m1"},
+            {"message_id": "m2"},
+            {"message_id": "m3"},
+        ]
+        provider.trash.side_effect = [None, RuntimeError("rate limited"), None]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_trash_gmail("from:x@y.com")
+        assert result["trashed_count"] == 2
+        assert result["matched_count"] == 3
+        assert result["succeeded"] == ["m1", "m3"]
+        assert result["failed"] == [{"message_id": "m2", "error": "rate limited"}]
+
+    def test_forward_continues_after_failure(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
+        provider.forward_message.side_effect = [RuntimeError("boom"), {"message_id": "f2"}]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_forward_gmail("from:x@y.com", "bob@example.com")
+        assert result["forwarded_count"] == 1
+        assert result["succeeded"] == ["m2"]
+        assert result["failed"][0]["message_id"] == "m1"
+
+    def test_modify_continues_after_failure(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
+        provider.archive.side_effect = [None, RuntimeError("gone")]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_modify_gmail_labels("from:x@y.com", archive=True)
+        assert result["modified_count"] == 1
+        assert result["succeeded"] == ["m1"]
+        assert result["failed"] == [{"message_id": "m2", "error": "gone"}]
+
+    def test_save_by_query_reports_failed(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m1", "subject": "A", "from_": "x"},
+            {"message_id": "m2", "error": "Not found"},
+        ]
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch(f"{MODULE}.check_for_duplicates", return_value=[]),
+            patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
+            patch(f"{MODULE}.save_email_to_markdown", return_value="email.md"),
+        ):
+            result = save_emails_by_query("in:inbox")
+        assert result["saved_count"] == 1
+        assert result["failed"] == [{"message_id": "m2", "error": "Not found"}]

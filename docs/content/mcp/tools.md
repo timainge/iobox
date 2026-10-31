@@ -36,15 +36,31 @@ Every tool below is registered only in the [access mode](configuration.md#access
 | `delete_gmail_draft` | standard | Delete a draft | `draft_id` |
 | `create_label` | standard | Create a label, including nested (`Parent/Child`) | `name` |
 | `modify_labels` | standard | Read/unread, star, archive, add/remove label on one message | `message_id`, `mark_read`, `mark_unread`, `star`, `unstar`, `archive`, `add_label`, `remove_label` |
-| `batch_modify_gmail_labels` | standard | Same actions for every message matching a query | `query`, `max_results=10`, `days=7`, …same flags |
+| `batch_modify_gmail_labels` | standard | Same actions for every message matching a query (see [batch limits](#batch-limits)) | `query`, `max_results=10`, `days=7`, …same flags |
 | `send_email` | dangerous | Send a new email | `to`, `subject`, `body`, `cc`, `bcc`, `html`, `attachments` |
 | `forward_gmail` | dangerous | Forward a message | `message_id`, `to`, `note` |
-| `batch_forward_gmail` | dangerous | Forward every message matching a query | `query`, `to`, `max_results=10`, `days=7`, `note` |
+| `batch_forward_gmail` | dangerous | Forward every message matching a query (see [batch limits](#batch-limits)) | `query`, `to`, `max_results=10`, `days=7`, `start_date`, `end_date`, `note` |
 | `trash_gmail` | dangerous | Move a message to trash | `message_id` |
 | `untrash_gmail` | dangerous | Restore a message from trash | `message_id` |
-| `batch_trash_gmail` | dangerous | Trash every message matching a query | `query`, `max_results=10`, `days=7` |
+| `batch_trash_gmail` | dangerous | Trash every message matching a query (see [batch limits](#batch-limits)) | `query`, `max_results=10`, `days=7` |
 
 Despite the `gmail` in some names, email tools work against whichever email provider the slot uses (Gmail or Outlook).
+
+### Batch limits
+
+`batch_modify_gmail_labels`, `batch_forward_gmail`, and `batch_trash_gmail` refuse requests that could sweep the whole mailbox:
+
+- `query` must be non-empty.
+- `days` must be at least 1 (`batch_forward_gmail` also accepts an explicit `start_date` instead).
+- `max_results` is capped at 100; a larger value is clamped and the result's `detail` says so.
+
+Each message is processed independently, so one failure doesn't stop the rest. The result reports what happened to every message:
+
+```json
+{"trashed_count": 2, "matched_count": 3, "succeeded": ["m1", "m3"], "failed": [{"message_id": "m2", "error": "..."}]}
+```
+
+The count key is `modified_count`, `forwarded_count`, or `trashed_count` depending on the tool. `save_emails_by_query` likewise returns a `failed` list for messages it couldn't save.
 
 !!! tip "Keeping responses small"
     A raw HTML email can be tens of thousands of characters. For triage, search first, then call `get_emails(message_ids=[…], body="none")` to scan headers, and only fetch bodies (`body="markdown"`, `max_body_chars=4000`) for the messages that matter.
