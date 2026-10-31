@@ -109,6 +109,34 @@ _EMAIL_COMMANDS = {
 }
 
 
+def _enforce_mode(cmd: str, mode: AccessMode) -> None:
+    """Exit with an error if *cmd* is not allowed in *mode*.
+
+    *cmd* is a top-level command name (``"send"``) or a qualified group
+    subcommand (``"events delete"``).  The hint names the lowest mode that
+    allows the command.
+    """
+    if cmd in CLI_COMMANDS_BY_MODE[mode]:
+        return
+    required = next((m for m in AccessMode if cmd in CLI_COMMANDS_BY_MODE[m]), None)
+    hint = f" Use --mode {required.value} to enable it." if required else ""
+    typer.echo(
+        f"Error: Command '{cmd}' is not allowed in '{mode.value}' mode.{hint}",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+def _gate_group_subcommand(ctx: typer.Context, group: str) -> None:
+    """Mode-gate a subcommand of a command group (``events``/``files``)."""
+    sub = ctx.invoked_subcommand
+    if sub is None:
+        return
+    obj = ctx.find_root().obj or {}
+    mode = obj.get("mode") or get_mode_from_env()
+    _enforce_mode(f"{group} {sub}", mode)
+
+
 def _get_provider(ctx: typer.Context) -> EmailProvider:
     """Return the provider stored on the Typer context."""
     return ctx.obj["provider"]
@@ -1464,6 +1492,12 @@ events_app = typer.Typer(help="Calendar event operations.")
 app.add_typer(events_app, name="events")
 
 
+@events_app.callback()
+def _events_callback(ctx: typer.Context) -> None:
+    """Calendar event operations."""
+    _gate_group_subcommand(ctx, "events")
+
+
 @events_app.command("list")
 def events_list(
     after: str | None = typer.Option(
@@ -1575,7 +1609,7 @@ def events_delete(
     workspace_name: str | None = typer.Option(None, "--workspace", "-w"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ) -> None:
-    """Delete a calendar event (requires --mode standard)."""
+    """Delete a calendar event (requires --mode dangerous)."""
     if not yes:
         typer.confirm(f"Delete event '{event_id}'?", abort=True)
     ws = _get_workspace(workspace_name)
@@ -1607,6 +1641,12 @@ def events_rsvp(
 
 files_app = typer.Typer(help="Cloud file operations.")
 app.add_typer(files_app, name="files")
+
+
+@files_app.callback()
+def _files_callback(ctx: typer.Context) -> None:
+    """Cloud file operations."""
+    _gate_group_subcommand(ctx, "files")
 
 
 @files_app.command("list")
@@ -1834,14 +1874,8 @@ def main(
 
     # Gate the invoked subcommand against the allowed set for this mode.
     cmd = ctx.invoked_subcommand
-    if cmd is not None and cmd not in CLI_COMMANDS_BY_MODE[resolved_mode]:
-        required = next((m for m in AccessMode if cmd in CLI_COMMANDS_BY_MODE[m]), None)
-        hint = f" Use --mode {required.value} to enable it." if required else ""
-        typer.echo(
-            f"Error: Command '{cmd}' is not allowed in '{resolved_mode.value}' mode.{hint}",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+    if cmd is not None:
+        _enforce_mode(cmd, resolved_mode)
 
     # Instantiate the email provider only for commands that use it
     # (lazy auth — no browser/prompt in callback).

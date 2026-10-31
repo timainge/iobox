@@ -102,7 +102,12 @@ def _tier_for_mode(mode: str) -> str:
 
 
 # CLI command names allowed per mode (typer subcommand names).
-# "space" is always allowed — space management doesn't require an active mode.
+#
+# Top-level commands are listed by name.  The ``events`` and ``files`` command
+# groups are always reachable, but each of their subcommands is gated
+# individually via a qualified name ("events delete", "files upload", ...),
+# mirroring the MCP tool tiers below.
+# "space" and "workspace" are always allowed — they only manage local config.
 _READONLY_CLI = {
     "search",
     "save",
@@ -110,12 +115,29 @@ _READONLY_CLI = {
     "version",
     "draft-list",
     "space",
+    "workspace",
+    # Calendar / file groups (subcommands gated below)
     "events",
     "files",
-    "workspace",
+    "events list",
+    "events get",
+    "events save",
+    "files list",
+    "files get",
+    "files save",
 }
-_STANDARD_CLI = _READONLY_CLI | {"draft-create", "draft-send", "draft-delete", "label"}
-_DANGEROUS_CLI = _STANDARD_CLI | {"send", "forward", "trash"}
+_STANDARD_CLI = _READONLY_CLI | {
+    "draft-create",
+    "draft-send",
+    "draft-delete",
+    "label",
+    "events create",
+    "events rsvp",
+    "files upload",
+    "files mkdir",
+    "files delete",
+}
+_DANGEROUS_CLI = _STANDARD_CLI | {"send", "forward", "trash", "events delete"}
 
 CLI_COMMANDS_BY_MODE: dict[AccessMode, set[str]] = {
     AccessMode.readonly: _READONLY_CLI,

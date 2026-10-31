@@ -4,7 +4,7 @@ Cloud file operations on the file slots of a workspace.
 
 Unlike the top-level email commands, `files` uses the active workspace (set with [`iobox space use`](space.md#use)), or the one named with `--workspace/-w`. Each session added with `--drive` contributes a file slot named `<slug>-drive`, where the slug comes from the account email (`you@gmail.com` → `you-gmail`, so the slot is `you-gmail-drive`). `iobox space add` only accepts `--drive` for Google, so file slots are Google Drive in practice; OneDrive slots exist only if added to the space's TOML by hand. See [Concepts](../get-started/concepts.md) for workspaces and slots.
 
-**Access mode:** `files` is allowed in every global `--mode`. Write subcommands (`upload`, `delete`, `mkdir`) also need the drive session to have been added without `--read`.
+**Access mode:** `list`, `get`, and `save` work in every global `--mode`; `upload`, `mkdir`, and `delete` need `--mode standard` (the default) or higher. Write subcommands also need the drive session to have been added without `--read`.
 
 !!! note "`--provider` here is a slot name"
     The `--provider` option after `files <subcommand>` selects a workspace slot (e.g. `you-gmail-drive`). It is different from the global `iobox --provider gmail|outlook` option, which goes before `files` and must still be `gmail` or `outlook`.

@@ -46,19 +46,26 @@ Not to be confused with the `--provider SLOT` option on `events` and `files` sub
 
 ## Access modes
 
-`--mode` decides which top-level commands are allowed:
+`--mode` decides which commands are allowed. It gates email commands and each `events` / `files` subcommand, using the same tiers as the [MCP tools](../mcp/index.md):
 
 | Mode | Commands |
 |---|---|
-| `readonly` | `search`, `save`, `draft-list`, `auth-status`, `version`, `space`, `workspace`, `events`, `files` |
-| `standard` | + `draft-create`, `draft-send`, `draft-delete`, `label` |
-| `dangerous` | + `send`, `forward`, `trash` |
+| `readonly` | `search`, `save`, `draft-list`, `auth-status`, `version`, `space`, `workspace`, `events list/get/save`, `files list/get/save` |
+| `standard` | + `draft-create`, `draft-send`, `draft-delete`, `label`, `events create/rsvp`, `files upload/mkdir/delete` |
+| `dangerous` | + `send`, `forward`, `trash`, `events delete` |
 
 ```bash
 iobox --mode dangerous send --to someone@example.com --subject "Hi" --body "Hello"
+iobox --mode dangerous events delete EVENT_ID
 ```
 
-`events` and `files` writes are not gated by `--mode`; they're blocked only when the account was added with `--read`. See [access modes](../get-started/concepts.md#access-modes).
+A blocked command exits with an error naming the lowest mode that allows it:
+
+```text
+Error: Command 'events delete' is not allowed in 'readonly' mode. Use --mode dangerous to enable it.
+```
+
+Writes also need the account to have been added without `--read`. See [access modes](../get-started/concepts.md#access-modes).
 
 ## Common recipes
 

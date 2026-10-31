@@ -4,7 +4,7 @@ Calendar event operations on the calendar slots of a workspace.
 
 Unlike the top-level email commands, `events` uses the active workspace (set with [`iobox space use`](space.md#use)), or the one named with `--workspace/-w`. Each session added with `--calendar` contributes a calendar slot named `<slug>-cal`, where the slug comes from the account email (`you@gmail.com` → `you-gmail`, so the slot is `you-gmail-cal`). Run `iobox space status` to see your sessions. See [Concepts](../get-started/concepts.md) for workspaces and slots.
 
-**Access mode:** `events` is allowed in every global `--mode`. Write subcommands (`create`, `delete`, `rsvp`) also need the calendar session to have been added without `--read`.
+**Access mode:** `list`, `get`, and `save` work in every global `--mode`; `create` and `rsvp` need `--mode standard` (the default) or higher; `delete` needs `--mode dangerous`. Write subcommands also need the calendar session to have been added without `--read`.
 
 !!! note "`--provider` here is a slot name"
     The `--provider` option after `events <subcommand>` selects a workspace slot (e.g. `you-gmail-cal`). It is different from the global `iobox --provider gmail|outlook` option, which goes before `events` and must still be `gmail` or `outlook`.
@@ -131,7 +131,7 @@ iobox events create \
 
 ## delete
 
-Delete a calendar event. Asks for confirmation unless `--yes` is given.
+Delete a calendar event. Asks for confirmation unless `--yes` is given. Requires `--mode dangerous`.
 
 ```
 iobox events delete EVENT_ID [OPTIONS]
@@ -144,7 +144,7 @@ iobox events delete EVENT_ID [OPTIONS]
 | `--workspace` | `-w` | TEXT | `None` | Named workspace |
 
 ```bash
-iobox events delete abc123xyz --yes
+iobox --mode dangerous events delete abc123xyz --yes
 ```
 
 ---

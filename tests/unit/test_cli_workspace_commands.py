@@ -296,3 +296,132 @@ class TestWorkspaceStatusCommand:
         with patch("iobox.space_config.get_active_space", return_value=None):
             result = runner.invoke(app, ["workspace", "status"])
         assert result.exit_code != 0
+
+
+# ── TestEventsFilesModeGating (SEC-08) ────────────────────────────────────────
+
+
+class TestEventsFilesModeGating:
+    """events/files subcommands are gated by --mode, matching the MCP tiers."""
+
+    def _ws(self) -> Workspace:
+        ws = _make_ws(events=[_mock_event()], files=[_mock_file()])
+        cal = ws.calendar_providers[0].provider
+        cal.create_event.return_value = _mock_event()
+        cal.rsvp.return_value = _mock_event()
+        fp = ws.file_providers[0].provider
+        fp.upload_file.return_value = _mock_file()
+        fp.create_folder.return_value = _mock_file(name="New")
+        return ws
+
+    def _invoke(self, ws: Workspace, args: list[str], env: dict[str, str] | None = None):
+        with patch("iobox.cli._get_workspace", return_value=ws):
+            return runner.invoke(app, args, env=env)
+
+    def test_readonly_blocks_events_delete(self) -> None:
+        ws = self._ws()
+        result = self._invoke(ws, ["--mode", "readonly", "events", "delete", "evt1", "--yes"])
+        assert result.exit_code == 1
+        assert (
+            "Command 'events delete' is not allowed in 'readonly' mode. "
+            "Use --mode dangerous to enable it." in result.stderr
+        )
+        ws.calendar_providers[0].provider.delete_event.assert_not_called()
+
+    def test_standard_blocks_events_delete(self) -> None:
+        ws = self._ws()
+        result = self._invoke(ws, ["--mode", "standard", "events", "delete", "evt1", "--yes"])
+        assert result.exit_code == 1
+        assert "Use --mode dangerous" in result.stderr
+        ws.calendar_providers[0].provider.delete_event.assert_not_called()
+
+    def test_dangerous_allows_events_delete(self) -> None:
+        ws = self._ws()
+        result = self._invoke(ws, ["--mode", "dangerous", "events", "delete", "evt1", "--yes"])
+        assert result.exit_code == 0, result.output
+        ws.calendar_providers[0].provider.delete_event.assert_called_once_with("evt1")
+
+    def test_readonly_blocks_events_create(self) -> None:
+        ws = self._ws()
+        args = [
+            "--mode",
+            "readonly",
+            "events",
+            "create",
+            "--title",
+            "x",
+            "--start",
+            "2026-04-01T09:00",
+            "--end",
+            "2026-04-01T09:30",
+        ]
+        result = self._invoke(ws, args)
+        assert result.exit_code == 1
+        assert "Command 'events create' is not allowed in 'readonly' mode." in result.stderr
+        assert "Use --mode standard" in result.stderr
+        ws.calendar_providers[0].provider.create_event.assert_not_called()
+
+    def test_readonly_blocks_events_rsvp(self) -> None:
+        ws = self._ws()
+        result = self._invoke(
+            ws, ["--mode", "readonly", "events", "rsvp", "evt1", "--response", "accepted"]
+        )
+        assert result.exit_code == 1
+        assert "Use --mode standard" in result.stderr
+
+    def test_standard_allows_events_rsvp(self) -> None:
+        ws = self._ws()
+        result = self._invoke(
+            ws, ["--mode", "standard", "events", "rsvp", "evt1", "--response", "accepted"]
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_readonly_blocks_file_writes(self, tmp_path: Path) -> None:
+        local = tmp_path / "a.txt"
+        local.write_text("x")
+        for args in (
+            ["files", "upload", str(local)],
+            ["files", "mkdir", "New"],
+            ["files", "delete", "file1", "--yes"],
+        ):
+            ws = self._ws()
+            result = self._invoke(ws, ["--mode", "readonly", *args])
+            assert result.exit_code == 1, args
+            assert f"Command 'files {args[1]}' is not allowed" in result.stderr
+            assert "Use --mode standard" in result.stderr
+            fp = ws.file_providers[0].provider
+            fp.upload_file.assert_not_called()
+            fp.create_folder.assert_not_called()
+            fp.delete_file.assert_not_called()
+
+    def test_standard_allows_file_writes(self) -> None:
+        ws = self._ws()
+        result = self._invoke(ws, ["--mode", "standard", "files", "mkdir", "New"])
+        assert result.exit_code == 0, result.output
+        result = self._invoke(ws, ["--mode", "standard", "files", "delete", "file1", "--yes"])
+        assert result.exit_code == 0, result.output
+
+    def test_readonly_allows_reads(self, tmp_path: Path) -> None:
+        for args in (
+            ["events", "list"],
+            ["events", "get", "evt1"],
+            ["events", "save", "evt1", "-o", str(tmp_path)],
+            ["files", "list", "-q", "x"],
+            ["files", "get", "file1"],
+            ["files", "save", "file1", "-o", str(tmp_path)],
+        ):
+            result = self._invoke(self._ws(), ["--mode", "readonly", *args])
+            assert result.exit_code == 0, (args, result.output)
+
+    def test_mode_from_env_is_enforced(self) -> None:
+        ws = self._ws()
+        result = self._invoke(
+            ws, ["events", "delete", "evt1", "--yes"], env={"IOBOX_MODE": "readonly"}
+        )
+        assert result.exit_code == 1
+        assert "not allowed in 'readonly' mode" in result.stderr
+
+    def test_workspace_group_allowed_in_readonly(self) -> None:
+        with patch("iobox.space_config.get_active_space", return_value=None):
+            result = runner.invoke(app, ["--mode", "readonly", "workspace", "status"])
+        assert "not allowed" not in result.output
