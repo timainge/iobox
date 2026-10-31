@@ -278,6 +278,7 @@ class TestCliCommands:
                     "from:test@example.com",
                     "--to",
                     "bob@example.com",
+                    "--yes",
                 ],
             )
 
@@ -1247,3 +1248,62 @@ class TestValidationExits:
             )
         assert result.exit_code == 1
         assert "Error sending email: boom" in result.output
+
+
+class TestForwardBatchSafety:
+    """Batch forward confirms first and reports partial failures (CLI-01)."""
+
+    _e = {"from_": "", "date": "", "snippet": "", "labels": [], "thread_id": ""}
+
+    def _emails(self, n: int = 2):
+        return [{"message_id": f"m{i}", "subject": f"S{i}", **self._e} for i in range(1, n + 1)]
+
+    def _args(self, *extra: str) -> list[str]:
+        return ["--mode", "dangerous", "forward", "-q", "x", "--to", "bob@example.com", *extra]
+
+    def test_prompts_with_count_and_recipient(self):
+        provider = _mock_provider(search_emails=self._emails())
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(app, self._args(), input="y\n")
+        assert result.exit_code == 0
+        assert "Forward 2 email(s) to bob@example.com?" in result.output
+        assert provider.forward_message.call_count == 2
+
+    def test_declining_aborts_without_forwarding(self):
+        provider = _mock_provider(search_emails=self._emails())
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(app, self._args(), input="n\n")
+        assert "Aborted." in result.output
+        provider.forward_message.assert_not_called()
+
+    def test_yes_skips_prompt(self):
+        provider = _mock_provider(search_emails=self._emails())
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(app, self._args("-y"))
+        assert result.exit_code == 0
+        assert "Forward 2 email(s) to" not in result.output
+        assert provider.forward_message.call_count == 2
+
+    def test_partial_failure_reported_and_exit_1(self):
+        provider = _mock_provider(search_emails=self._emails(3))
+        provider.forward_message.side_effect = [
+            {"message_id": "f1"},
+            RuntimeError("quota"),
+            {"message_id": "f3"},
+        ]
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(app, self._args("--yes"))
+        assert result.exit_code == 1
+        assert provider.forward_message.call_count == 3
+        assert "Forwarded 2 emails" in result.output
+        assert "Failed to forward m2: quota" in result.stderr
+        assert "1 email(s) failed to forward." in result.stderr
+
+    def test_single_mode_does_not_prompt(self):
+        provider = _mock_provider()
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(
+                app, ["--mode", "dangerous", "forward", "-m", "m1", "--to", "bob@example.com"]
+            )
+        assert result.exit_code == 0
+        provider.forward_message.assert_called_once()

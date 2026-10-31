@@ -25,8 +25,9 @@ iobox --mode dangerous [--provider gmail|outlook] [--account NAME] forward [OPTI
 | `--start-date` | `-s` | TEXT | `None` | Start date `YYYY/MM/DD`; overrides `--days` (batch mode) |
 | `--end-date` | `-e` | TEXT | `None` | End date `YYYY/MM/DD` (batch mode) |
 | `--note` | `-n` | TEXT | `None` | Note to prepend to the forwarded email |
+| `--yes` | `-y` | FLAG | `False` | Skip the batch-mode confirmation prompt |
 
-One of `--message-id` or `--query` is required; `--message-id` wins if both are given. Batch mode forwards every match without a confirmation prompt, so preview with [`search`](search.md) first.
+One of `--message-id` or `--query` is required; `--message-id` wins if both are given. Batch mode shows how many emails matched and asks `Forward N email(s) to RECIPIENT?` before sending anything; pass `--yes` to skip the prompt (e.g. in scripts). If some forwards fail, the rest still go out, each failure is printed to stderr, and the command exits with status 1.
 
 ## Examples
 
@@ -63,6 +64,7 @@ Batch mode:
 ```
 Searching for emails matching: from:reports@example.com
 Found 2 emails to forward.
+Forward 2 email(s) to team@example.com? [y/N]: y
 Forwarding: Monthly Report - March 2026
 Forwarding: Monthly Report - February 2026
 

@@ -614,6 +614,9 @@ def forward(
     note: str = typer.Option(
         None, "--note", "-n", help="Optional note to prepend to forwarded email"
     ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt in batch mode"
+    ),
     ctx: typer.Context = typer.Option(None, hidden=True),
 ):
     """
@@ -621,7 +624,8 @@ def forward(
 
     Supports two modes:
     1. Single mode: Forward one email (use --message-id)
-    2. Batch mode: Forward emails matching a query (use --query)
+    2. Batch mode: Forward emails matching a query (use --query); asks for
+       confirmation unless --yes is given
     """
     try:
         if message_id is None and query is None:
@@ -651,14 +655,28 @@ def forward(
                 return
 
             typer.echo(f"Found {len(results)} emails to forward.")
+            if not yes:
+                confirmed = typer.confirm(f"Forward {len(results)} email(s) to {to}?")
+                if not confirmed:
+                    typer.echo("Aborted.")
+                    raise typer.Exit()
+
             forwarded = 0
+            failed: list[tuple[str, str]] = []
             for email_summary in results:
                 mid = email_summary["message_id"]
                 typer.echo(f"Forwarding: {email_summary.get('subject', 'No Subject')}")
-                provider.forward_message(message_id=mid, to=to, comment=note)
-                forwarded += 1
+                try:
+                    provider.forward_message(message_id=mid, to=to, comment=note)
+                    forwarded += 1
+                except Exception as exc:  # noqa: BLE001 — report and continue
+                    failed.append((mid, str(exc)))
+                    typer.echo(f"  Failed to forward {mid}: {exc}", err=True)
 
             typer.echo(f"\nForwarded {forwarded} emails to {to}.")
+            if failed:
+                typer.echo(f"{len(failed)} email(s) failed to forward.", err=True)
+                raise typer.Exit(code=1)
 
     except typer.Exit:
         raise
