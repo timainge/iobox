@@ -162,7 +162,7 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 | FU-12 | low | `o365/email.py` attachments | Listing attachments also downloads their content (slow for large files) | open |
 | FU-13 | low | `o365/email.py` drafts | New drafts > ~3 MB with attachments fail (library chunks uploads only for existing drafts) | open |
 | FU-14 | low | `o365/email.py` `$batch` | Throttled (429) batch items reported as failures, not retried | open |
-| FU-16 | low | `google/_retrieval.get_thread_content` | Thread fetches never resolve label IDs to names (raw `Label_123`) | open |
+| FU-16 | low | `google/_retrieval.get_thread_content` | Thread fetches never resolve label IDs to names (raw `Label_123`) | fixed (82b3036) |
 | FU-15 | med | O365 providers | Live-tenant checks: KQL quoting/`hasAttachments:`, `any()` filters vs InefficientFilter, draft ImmutableId after send, public-client app setup, granted-scope format, calendarView `$orderby`, `permanentDelete` | open (needs M365 dev tenant) |
 
 ## Previously fixed (2026-10-31, branch `docs-restructure-and-fixes`)
