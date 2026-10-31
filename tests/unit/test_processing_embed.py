@@ -13,6 +13,7 @@ import pytest
 
 from iobox.processing.embed import (
     EmbeddingBackend,
+    IndexMismatchError,
     LocalEmbeddingBackend,
     OpenAIEmbeddingBackend,
     ResourceIndex,
@@ -63,13 +64,27 @@ def _fake_embedding(dims: int = 4, value: float = 0.5) -> list[float]:
     return [value] * dims
 
 
-def _mock_backend(dims: int = 4, value: float = 0.5) -> EmbeddingBackend:
+def _mock_backend(
+    dims: int = 4,
+    value: float = 0.5,
+    name: str = "mock",
+    model: str = "mock-1",
+    declared_dims: int | None = None,
+) -> EmbeddingBackend:
     """Return a mock EmbeddingBackend that returns a fixed vector."""
 
     class _MockBackend(EmbeddingBackend):
         @property
         def dimensions(self) -> int:
-            return dims
+            return declared_dims if declared_dims is not None else dims
+
+        @property
+        def name(self) -> str:
+            return name
+
+        @property
+        def model(self) -> str:
+            return model
 
         def embed(self, texts: list[str]) -> list[list[float]]:
             return [_fake_embedding(dims, value) for _ in texts]
@@ -184,8 +199,17 @@ class TestOpenAIEmbeddingBackend:
 
 class TestVoyageEmbeddingBackend:
     def test_dimensions(self) -> None:
+        # PROC-03: voyage-3-lite produces 512-dimension vectors
         backend = VoyageEmbeddingBackend()
-        assert backend.dimensions == 1024
+        assert backend.dimensions == 512
+
+    def test_dimensions_other_model(self) -> None:
+        assert VoyageEmbeddingBackend(model="voyage-3").dimensions == 1024
+
+    def test_name_and_model(self) -> None:
+        backend = VoyageEmbeddingBackend()
+        assert backend.name == "voyage"
+        assert backend.model == "voyage-3-lite"
 
     def test_embed_via_client_fn(self) -> None:
         fake_embeddings = [[0.2] * 1024]
@@ -292,9 +316,11 @@ class TestResourceIndex:
         results = idx.search(query, top_k=2)
 
         assert len(results) == 2
-        # r1 should come first (lower distance = higher similarity)
+        # r1 should come first (higher cosine similarity = closer match)
         assert results[0][0] == "r1"
-        assert results[0][3] < results[1][3]  # lower distance = closer match
+        assert results[0][3] > results[1][3]
+        assert results[0][3] == pytest.approx(1.0)
+        assert results[1][3] == pytest.approx(0.0)
 
     def test_search_filter_by_type(self) -> None:
         idx = _make_index(dimensions=4)
@@ -418,3 +444,334 @@ class TestSemanticSearch:
 
         results = semantic_search("test", "test-ws", backend=backend, top_k=3, _index=idx)
         assert len(results) <= 3
+
+
+# ---------------------------------------------------------------------------
+# PROC-02: plain Python floats
+# ---------------------------------------------------------------------------
+
+
+class _F32:
+    """Stand-in for numpy.float32: convertible with float() but not JSON-serialisable."""
+
+    def __init__(self, v: float) -> None:
+        self.v = v
+
+    def __float__(self) -> float:
+        return self.v
+
+
+class _FakeArray(list):
+    def tolist(self) -> list[float]:
+        return [float(x) for x in self]
+
+
+class TestPlainFloats:
+    def test_local_backend_returns_python_floats(self) -> None:
+        mock_model = MagicMock()
+        mock_model.encode.return_value = [[_F32(0.1), _F32(0.2)]]
+        result = LocalEmbeddingBackend(_model_fn=lambda: mock_model).embed(["x"])
+        assert result == [[0.1, 0.2]]
+        assert all(type(x) is float for x in result[0])
+
+    def test_local_backend_handles_tolist_arrays(self) -> None:
+        mock_model = MagicMock()
+        mock_model.encode.return_value = [_FakeArray([_F32(0.5), _F32(0.25)])]
+        result = LocalEmbeddingBackend(_model_fn=lambda: mock_model).embed(["x"])
+        assert result == [[0.5, 0.25]]
+
+    def test_local_backend_numpy_float32(self) -> None:
+        np = pytest.importorskip("numpy")
+        mock_model = MagicMock()
+        mock_model.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]], dtype=np.float32)
+        backend = LocalEmbeddingBackend(_model_fn=lambda: mock_model)
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        assert embed_resources([_make_resource("r1")], "test-ws", backend=backend, _index=idx) == 1
+
+    def test_local_backend_end_to_end(self) -> None:
+        mock_model = MagicMock()
+        mock_model.encode.side_effect = lambda texts: [[_F32(0.5)] * 4 for _ in texts]
+        backend = LocalEmbeddingBackend(_model_fn=lambda: mock_model)
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        n = embed_resources([_make_resource("r1")], "test-ws", backend=backend, _index=idx)
+        assert n == 1
+        hits = semantic_search("q", "test-ws", backend=backend, _index=idx)
+        assert hits[0]["id"] == "r1"
+
+    def test_upsert_accepts_non_float_numbers(self) -> None:
+        idx = _make_index(dimensions=2)
+        idx.upsert("r1", "email", "gmail", [_F32(1.0), _F32(0.0)], "h")  # type: ignore[list-item]
+        assert idx.get_content_hash("r1") == "h"
+
+
+# ---------------------------------------------------------------------------
+# PROC-01: backend/model/dimension metadata
+# ---------------------------------------------------------------------------
+
+
+class TestIndexMetadata:
+    def test_records_backend_and_dimensions_from_first_embedding(self) -> None:
+        backend = _mock_backend(dims=4, declared_dims=999)
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        embed_resources([_make_resource("r1")], "test-ws", backend=backend, _index=idx)
+        meta = idx.get_metadata()
+        assert meta["backend"] == "mock"
+        assert meta["model"] == "mock-1"
+        assert meta["dimensions"] == "4"
+        assert idx.dimensions == 4
+
+    def test_different_backend_raises(self) -> None:
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        embed_resources([_make_resource("r1")], "test-ws", backend=_mock_backend(), _index=idx)
+        other = _mock_backend(name="other")
+        with pytest.raises(IndexMismatchError, match="rebuild=True"):
+            embed_resources([_make_resource("r2")], "test-ws", backend=other, _index=idx)
+
+    def test_different_model_raises(self) -> None:
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        embed_resources([_make_resource("r1")], "test-ws", backend=_mock_backend(), _index=idx)
+        with pytest.raises(IndexMismatchError):
+            semantic_search("q", "test-ws", backend=_mock_backend(model="mock-2"), _index=idx)
+
+    def test_rebuild_switches_backend(self) -> None:
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        embed_resources(
+            [_make_resource("r1"), _make_resource("r2")],
+            "test-ws",
+            backend=_mock_backend(dims=4),
+            _index=idx,
+        )
+        other = _mock_backend(dims=8, name="other", model="m")
+        n = embed_resources(
+            [_make_resource("r1")], "test-ws", backend=other, _index=idx, rebuild=True
+        )
+        assert n == 1
+        assert idx.count() == 1
+        assert idx.get_metadata()["backend"] == "other"
+        assert idx.dimensions == 8
+        assert semantic_search("q", "test-ws", backend=other, _index=idx)[0]["id"] == "r1"
+
+    def test_wrong_dimension_embedding_raises(self) -> None:
+        idx = _make_index(dimensions=4)
+        with pytest.raises(IndexMismatchError):
+            idx.upsert("r1", "email", "gmail", [1.0, 0.0], "h")
+
+    def test_wrong_dimension_query_raises(self) -> None:
+        idx = _make_index(dimensions=4)
+        idx.upsert("r1", "email", "gmail", [1.0, 0.0, 0.0, 0.0], "h")
+        with pytest.raises(IndexMismatchError):
+            idx.search([1.0, 0.0])
+
+    def test_hash_depends_on_backend(self) -> None:
+        r = _make_resource("r1")
+        assert _content_hash(r, "openai:a") != _content_hash(r, "local:b")
+        assert _content_hash(r) == _content_hash(r, "")
+
+    def test_metadata_persists_across_reopen(self, tmp_path) -> None:
+        backend = _mock_backend(dims=4)
+        embed_resources(
+            [_make_resource("r1")], "ws", backend=backend, credentials_dir=str(tmp_path)
+        )
+        # Reopen from disk: same backend works, different one is rejected.
+        hits = semantic_search("q", "ws", backend=backend, credentials_dir=str(tmp_path))
+        assert [h["id"] for h in hits] == ["r1"]
+        with pytest.raises(IndexMismatchError):
+            semantic_search(
+                "q", "ws", backend=_mock_backend(dims=8, name="x"), credentials_dir=str(tmp_path)
+            )
+
+    def test_explicit_dimensions_mismatch_on_open(self, tmp_path) -> None:
+        idx = ResourceIndex("ws", None, str(tmp_path))
+        idx.upsert("r1", "email", "gmail", [1.0, 0.0, 0.0, 0.0], "h")
+        idx.close()
+        with pytest.raises(IndexMismatchError):
+            ResourceIndex("ws", 8, str(tmp_path)).count()
+
+    def test_legacy_index_without_metadata(self) -> None:
+        conn = _make_conn()
+        conn.execute(
+            """CREATE TABLE resource_embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, resource_id TEXT UNIQUE NOT NULL,
+                workspace TEXT NOT NULL, resource_type TEXT NOT NULL,
+                provider_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+                embedding_json TEXT NOT NULL, indexed_at TEXT NOT NULL)"""
+        )
+        conn.execute(
+            "INSERT INTO resource_embeddings VALUES (1,'r1','test-ws','email','gmail','old',"
+            "'[1.0, 0.0, 0.0, 0.0]','2026-01-01')"
+        )
+        conn.commit()
+        idx = ResourceIndex("test-ws", None, _conn=conn)
+        assert idx.dimensions is None
+        assert idx.count() == 1
+        assert idx.dimensions == 4  # inferred from stored vector
+        backend = _mock_backend(dims=4, value=1.0)
+        hits = semantic_search("q", "test-ws", backend=backend, _index=idx)
+        assert hits[0]["id"] == "r1"
+        assert idx.get_metadata()["backend"] == "mock"
+        # The legacy hash didn't include the backend, so the row is re-embedded.
+        assert embed_resources([_make_resource("r1")], "test-ws", backend=backend, _index=idx) == 1
+
+    def test_empty_index_search_with_any_backend(self) -> None:
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        assert semantic_search("q", "test-ws", backend=_mock_backend(), _index=idx) == []
+
+
+# ---------------------------------------------------------------------------
+# PROC-04: transactional writes, backfill, partial failure
+# ---------------------------------------------------------------------------
+
+
+class TestIndexWrites:
+    def test_vec_write_failure_rolls_back_main_row(self) -> None:
+        idx = _make_index(dimensions=4)
+        idx.upsert("r1", "email", "gmail", [1.0, 0.0, 0.0, 0.0], "old")
+        # Simulate a failing vec write (table missing) — the main-row update
+        # must be rolled back so the stale hash is not recorded as current.
+        idx._get_conn().execute("DROP TABLE IF EXISTS resource_embeddings_vss")
+        idx._has_vec = True
+        with pytest.raises(sqlite3.OperationalError):
+            idx.upsert("r1", "email", "gmail", [0.0, 1.0, 0.0, 0.0], "new")
+        idx._has_vec = False
+        assert idx.get_content_hash("r1") == "old"
+
+    def test_batch_length_mismatch_is_skipped(self) -> None:
+        class _Short(EmbeddingBackend):
+            @property
+            def dimensions(self) -> int:
+                return 4
+
+            def embed(self, texts: list[str]) -> list[list[float]]:
+                return [[1.0, 0.0, 0.0, 0.0]]  # one vector regardless of input
+
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        n = embed_resources(
+            [_make_resource("r1"), _make_resource("r2")], "test-ws", backend=_Short(), _index=idx
+        )
+        assert n == 0
+        assert idx.count() == 0
+
+    def test_failed_batch_not_recorded(self) -> None:
+        class _Boom(EmbeddingBackend):
+            @property
+            def dimensions(self) -> int:
+                return 4
+
+            def embed(self, texts: list[str]) -> list[list[float]]:
+                raise RuntimeError("api down")
+
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        assert embed_resources([_make_resource("r1")], "test-ws", backend=_Boom(), _index=idx) == 0
+        assert idx.get_content_hash("r1") is None
+
+    def test_backfills_rows_written_without_sqlite_vec(self, tmp_path) -> None:
+        pytest.importorskip("sqlite_vec")
+        from unittest.mock import patch
+
+        with patch.object(ResourceIndex, "_try_load_vec", return_value=False):
+            idx = ResourceIndex("ws", None, str(tmp_path))
+            idx.upsert("r1", "email", "gmail", [1.0, 0.0, 0.0, 0.0], "h1")
+            idx.upsert("r2", "email", "gmail", [0.0, 1.0, 0.0, 0.0], "h2")
+            idx.close()
+
+        idx = ResourceIndex("ws", None, str(tmp_path))
+        conn = idx._get_conn()
+        assert idx._has_vec
+        n_vec = conn.execute("SELECT COUNT(*) FROM resource_embeddings_vss").fetchone()[0]
+        assert n_vec == 2
+        assert [r[0] for r in idx.search([1.0, 0.0, 0.0, 0.0], top_k=2)] == ["r1", "r2"]
+        idx.close()
+
+    def test_migrates_legacy_l2_vec_table(self, tmp_path) -> None:
+        sqlite_vec = pytest.importorskip("sqlite_vec")
+        db = tmp_path / "indexes" / "ws" / "index.db"
+        db.parent.mkdir(parents=True)
+        conn = sqlite3.connect(str(db))
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.execute("CREATE VIRTUAL TABLE resource_embeddings_vss USING vec0(embedding float[4])")
+        conn.commit()
+        conn.close()
+
+        idx = ResourceIndex("ws", None, str(tmp_path))
+        idx.upsert("r1", "email", "gmail", [1.0, 0.0, 0.0, 0.0], "h1")
+        meta = idx.get_metadata()
+        assert meta["vec_metric"] == "cosine"
+        sql = (
+            idx._get_conn()
+            .execute("SELECT sql FROM sqlite_master WHERE name = 'resource_embeddings_vss'")
+            .fetchone()[0]
+        )
+        assert "distance_metric=cosine" in sql
+        idx.close()
+
+    def test_close_called_on_error(self, tmp_path) -> None:
+        from unittest.mock import patch
+
+        backend = _mock_backend(dims=4)
+        embed_resources(
+            [_make_resource("r1")], "ws", backend=backend, credentials_dir=str(tmp_path)
+        )
+        with (
+            patch.object(ResourceIndex, "search", side_effect=RuntimeError("boom")),
+            patch.object(ResourceIndex, "close", autospec=True) as close,
+            pytest.raises(RuntimeError),
+        ):
+            semantic_search("q", "ws", backend=backend, credentials_dir=str(tmp_path))
+        close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# PROC-05: consistent cosine scores
+# ---------------------------------------------------------------------------
+
+
+class TestCosineScores:
+    def _populate(self, idx: ResourceIndex) -> None:
+        idx.upsert("same", "email", "gmail", [2.0, 0.0, 0.0, 0.0], "h1")
+        idx.upsert("diag", "email", "gmail", [1.0, 1.0, 0.0, 0.0], "h2")
+        idx.upsert("orth", "event", "gcal", [0.0, 0.0, 3.0, 0.0], "h3")
+
+    def test_python_path_scores_are_cosine_similarity(self) -> None:
+        backend = _mock_backend(dims=4, value=0.0)
+        backend.embed = lambda texts: [[1.0, 0.0, 0.0, 0.0] for _ in texts]  # type: ignore[method-assign]
+        idx = _make_index(dimensions=None)  # type: ignore[arg-type]
+        idx._try_load_vec = lambda conn: False  # type: ignore[method-assign]
+        self._populate(idx)
+        hits = semantic_search("q", "test-ws", backend=backend, _index=idx)
+        scores = {h["id"]: h["score"] for h in hits}
+        assert scores["same"] == pytest.approx(1.0)
+        assert scores["diag"] == pytest.approx(0.7071, abs=1e-4)
+        assert scores["orth"] == pytest.approx(0.0)
+        assert [h["id"] for h in hits] == ["same", "diag", "orth"]
+
+    def test_vec_and_python_paths_agree(self, tmp_path) -> None:
+        pytest.importorskip("sqlite_vec")
+        from unittest.mock import patch
+
+        query = [1.0, 0.0, 0.0, 0.0]
+        vec_idx = ResourceIndex("a", None, str(tmp_path))
+        self._populate(vec_idx)
+        assert vec_idx._has_vec
+        vec_results = vec_idx.search(query, top_k=3)
+        vec_idx.close()
+
+        with patch.object(ResourceIndex, "_try_load_vec", return_value=False):
+            py_idx = ResourceIndex("b", None, str(tmp_path))
+            self._populate(py_idx)
+            py_results = py_idx.search(query, top_k=3)
+            py_idx.close()
+
+        assert [r[0] for r in vec_results] == [r[0] for r in py_results]
+        for v, p in zip(vec_results, py_results, strict=True):
+            assert v[3] == pytest.approx(p[3], abs=1e-5)
+
+    def test_vec_type_filter_returns_enough_results(self, tmp_path) -> None:
+        pytest.importorskip("sqlite_vec")
+        idx = ResourceIndex("ws", None, str(tmp_path))
+        for i in range(10):
+            idx.upsert(f"e{i}", "email", "gmail", [1.0, 0.01 * i, 0.0, 0.0], f"h{i}")
+        idx.upsert("ev", "event", "gcal", [0.0, 1.0, 0.0, 0.0], "hx")
+        results = idx.search([1.0, 0.0, 0.0, 0.0], top_k=1, filter_types=["event"])
+        assert [r[0] for r in results] == ["ev"]
+        idx.close()

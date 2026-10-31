@@ -10,8 +10,37 @@ from datetime import datetime
 from typing import Any
 
 import html2text
+import yaml
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def _to_yaml_safe(value: Any) -> Any:
+    """Coerce *value* into types ``yaml.safe_dump`` can represent."""
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _to_yaml_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_yaml_safe(v) for v in value]
+    return str(value)
+
+
+def dump_frontmatter(frontmatter: dict[str, Any]) -> str:
+    """Serialise *frontmatter* as a ``---``-delimited YAML block.
+
+    Uses ``yaml.safe_dump`` so values containing ``:``, ``#``, newlines, or
+    YAML-significant words (``yes``, ``null``, ``12345``) are quoted and
+    round-trip through ``yaml.safe_load`` unchanged.
+    """
+    body = yaml.safe_dump(
+        _to_yaml_safe(frontmatter),
+        sort_keys=True,
+        allow_unicode=True,
+        default_flow_style=False,
+        width=2**31 - 1,  # never fold long values across lines
+    )
+    return f"---\n{body}---\n\n"
 
 
 def generate_yaml_frontmatter(email_data: dict[str, Any]) -> str:
@@ -28,12 +57,14 @@ def generate_yaml_frontmatter(email_data: dict[str, Any]) -> str:
 
     frontmatter = {
         "message_id": message_id,
-        "thread_id": email_data.get("thread_id", ""),
-        "subject": email_data.get("subject", "No Subject"),
-        "from": email_data.get("from", "Unknown"),
-        "to": email_data.get("to", ""),
-        "date": email_data.get("date", datetime.now().isoformat()),
-        "labels": email_data.get("labels", []),
+        "thread_id": email_data.get("thread_id") or "",
+        "subject": (
+            email_data["subject"] if email_data.get("subject") is not None else "No Subject"
+        ),
+        "from": email_data.get("from") or "Unknown",
+        "to": email_data.get("to") or "",
+        "date": email_data.get("date") or datetime.now().isoformat(),
+        "labels": email_data.get("labels") or [],
         "saved_date": datetime.now().isoformat(),
     }
 
@@ -43,26 +74,15 @@ def generate_yaml_frontmatter(email_data: dict[str, Any]) -> str:
             frontmatter[opt_key] = email_data[opt_key]
 
     if "attachments" in email_data:
-        frontmatter["attachments"] = email_data["attachments"]
+        frontmatter["attachments"] = [
+            {
+                "filename": attachment.get("filename", ""),
+                "mime_type": attachment.get("mime_type", ""),
+            }
+            for attachment in email_data["attachments"] or []
+        ]
 
-    yaml_str = "---\n"
-
-    for key, value in sorted(frontmatter.items()):
-        if key == "labels":
-            yaml_str += f"{key}:\n"
-            for label in value:
-                yaml_str += f"  - {label}\n"
-        elif key == "attachments":
-            yaml_str += f"{key}:\n"
-            for attachment in value:
-                yaml_str += f"  - filename: {attachment.get('filename', '')}\n"
-                yaml_str += f"    mime_type: {attachment.get('mime_type', '')}\n"
-        else:
-            yaml_str += f"{key}: {value}\n"
-
-    yaml_str += "---\n\n"
-
-    return yaml_str
+    return dump_frontmatter(frontmatter)
 
 
 def convert_html_to_markdown(html_content: str) -> str:
@@ -97,7 +117,7 @@ def convert_html_to_markdown(html_content: str) -> str:
         markdown = _clean_email_markdown(markdown)
         return markdown
     except Exception as e:
-        logging.warning(f"Error converting HTML to markdown: {e}")
+        logger.warning(f"Error converting HTML to markdown: {e}")
         return strip_html_tags(html_content)
 
 
@@ -124,7 +144,7 @@ def convert_html_to_text(html_content: str) -> str:
         text: str = h.handle(html_content)
         return _clean_email_markdown(text)
     except Exception as e:
-        logging.warning(f"Error converting HTML to text: {e}")
+        logger.warning(f"Error converting HTML to text: {e}")
         return strip_html_tags(html_content)
 
 
@@ -169,7 +189,8 @@ def convert_email_to_markdown(email_data: dict[str, Any]) -> str:
         markdown_content = generate_yaml_frontmatter(email_data)
 
         subject = email_data.get("subject", "No Subject")
-        markdown_content += f"# {subject}\n\n"
+        heading = " ".join(str(subject).split()) or "No Subject"
+        markdown_content += f"# {heading}\n\n"
 
         content = email_data.get("body", "") or email_data.get("content", "")
         content_type = email_data.get("content_type", "text/plain")
@@ -182,7 +203,7 @@ def convert_email_to_markdown(email_data: dict[str, Any]) -> str:
         return markdown_content
 
     except Exception as e:
-        logging.error(f"Error converting email to markdown: {e}")
+        logger.error(f"Error converting email to markdown: {e}")
         raise
 
 
@@ -222,17 +243,17 @@ def convert_thread_to_markdown(messages: list[dict[str, Any]]) -> str:
     date_end = dates[-1] if len(dates) > 1 else date_start
 
     # Build YAML frontmatter
-    yaml_str = "---\n"
-    yaml_str += f"thread_id: {thread_id}\n"
-    yaml_str += f"message_count: {message_count}\n"
-    yaml_str += f"subject: {subject}\n"
-    yaml_str += f"date_start: {date_start}\n"
-    yaml_str += f"date_end: {date_end}\n"
-    yaml_str += "labels:\n"
-    for lbl in all_labels:
-        yaml_str += f"  - {lbl}\n"
-    yaml_str += f"saved_date: {datetime.now().isoformat()}\n"
-    yaml_str += "---\n\n"
+    yaml_str = dump_frontmatter(
+        {
+            "thread_id": thread_id,
+            "message_count": message_count,
+            "subject": subject,
+            "date_start": date_start,
+            "date_end": date_end,
+            "labels": all_labels,
+            "saved_date": datetime.now().isoformat(),
+        }
+    )
 
     # Build message sections
     sections = []

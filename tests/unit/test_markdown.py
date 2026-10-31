@@ -8,6 +8,9 @@ for converting email content to markdown with YAML frontmatter.
 from datetime import datetime
 from unittest.mock import patch
 
+import pytest
+import yaml
+
 from iobox.processing.markdown_converter import (
     _clean_email_markdown,
     convert_email_to_markdown,
@@ -17,6 +20,40 @@ from iobox.processing.markdown_converter import (
     strip_html_tags,
 )
 from iobox.utils import create_markdown_filename
+
+NASTY_SUBJECTS = [
+    "Re: hi",
+    "yes",
+    "no",
+    "null",
+    "12345",
+    "1.5",
+    "# x",
+    "a\nmessage_id: evil",
+    "---",
+    "...",
+    "Ünïcödé — 日本語 ✓",
+    "key: value # comment",
+    "[list, like]",
+    "{map: like}",
+    "*alias",
+    "&anchor",
+    "!tag",
+    "@at",
+    "`tick`",
+    "  leading and trailing  ",
+    "",
+]
+
+
+def _parse_frontmatter(text: str) -> dict:
+    """Extract and parse the leading ``---`` YAML block of *text*."""
+    assert text.startswith("---\n")
+    lines = text.split("\n")[1:]
+    end = lines.index("---")
+    data = yaml.safe_load("\n".join(lines[:end]))
+    assert isinstance(data, dict)
+    return data
 
 
 class TestMarkdownConversion:
@@ -53,19 +90,18 @@ class TestMarkdownConversion:
         frontmatter = generate_yaml_frontmatter(email_data)
 
         # Verify all key email data is included in the frontmatter
-        assert "---" in frontmatter
-        assert "message_id: message-id-1" in frontmatter
-        assert "thread_id: thread-id-1" in frontmatter
-        assert "subject: Test Email Subject" in frontmatter
-        assert "from: sender@example.com" in frontmatter
-        assert "to: recipient@example.com" in frontmatter
-        assert "date: Mon, 23 Mar 2025 10:00:00 +1100" in frontmatter
-        assert "labels:" in frontmatter
-        assert "  - INBOX" in frontmatter
-        assert "  - CATEGORY_PERSONAL" in frontmatter
-        assert "attachments:" in frontmatter
-        assert "  - filename: document.pdf" in frontmatter
-        assert "    mime_type: application/pdf" in frontmatter
+        assert frontmatter.startswith("---\n")
+        assert frontmatter.endswith("---\n\n")
+        data = _parse_frontmatter(frontmatter)
+        assert data["message_id"] == "message-id-1"
+        assert data["thread_id"] == "thread-id-1"
+        assert data["subject"] == "Test Email Subject"
+        assert data["from"] == "sender@example.com"
+        assert data["to"] == "recipient@example.com"
+        assert data["date"] == "Mon, 23 Mar 2025 10:00:00 +1100"
+        assert data["labels"] == ["INBOX", "CATEGORY_PERSONAL"]
+        assert data["attachments"] == [{"filename": "document.pdf", "mime_type": "application/pdf"}]
+        assert isinstance(data["saved_date"], str)
 
     def test_create_markdown_filename(self):
         """Test creating a valid markdown filename from email data."""
@@ -387,3 +423,89 @@ class TestConvertThreadToMarkdown:
         assert len(label_lines) == 1
         assert "- STARRED" in result
         assert "- UNREAD" in result
+
+
+class TestFrontmatterYamlSafety:
+    """DATA-01: frontmatter must be valid YAML whose values round-trip as strings."""
+
+    @pytest.mark.parametrize("subject", NASTY_SUBJECTS)
+    def test_email_subject_round_trips(self, subject):
+        email_data = {
+            "message_id": "msg-1",
+            "thread_id": "t-1",
+            "subject": subject,
+            "from": "Alice <a@example.com>",
+            "to": "b@example.com",
+            "date": "Mon, 23 Mar 2025 10:00:00 +1100",
+            "labels": ["INBOX", "yes"],
+            "body": "Body",
+            "content_type": "text/plain",
+        }
+        data = _parse_frontmatter(convert_email_to_markdown(email_data))
+        assert data["subject"] == subject
+        assert data["message_id"] == "msg-1"
+        assert data["labels"] == ["INBOX", "yes"]
+        assert "evil" not in str(data.get("message_id"))
+
+    @pytest.mark.parametrize("subject", NASTY_SUBJECTS)
+    def test_thread_subject_round_trips(self, subject):
+        messages = [
+            {
+                "message_id": "m1",
+                "thread_id": "12345",
+                "subject": subject,
+                "from": "a@example.com",
+                "date": "Mon, 01 Jan 2024 00:00:00 +0000",
+                "labels": ["INBOX"],
+                "body": "Hi",
+            }
+        ]
+        data = _parse_frontmatter(convert_thread_to_markdown(messages))
+        assert data["subject"] == subject
+        assert data["thread_id"] == "12345"
+        assert data["message_count"] == 1
+
+    def test_injection_does_not_add_keys(self):
+        email_data = {
+            "message_id": "real-id",
+            "subject": "a\nmessage_id: evil\nlabels: [x]",
+            "labels": ["INBOX"],
+        }
+        data = _parse_frontmatter(generate_yaml_frontmatter(email_data))
+        assert data["message_id"] == "real-id"
+        assert data["labels"] == ["INBOX"]
+
+    def test_values_are_strings(self):
+        email_data = {
+            "message_id": "0123",
+            "thread_id": "1e5",
+            "subject": "true",
+            "from": "null",
+            "to": "~",
+            "date": "2024-01-01",
+            "labels": ["123"],
+        }
+        data = _parse_frontmatter(generate_yaml_frontmatter(email_data))
+        for key in ("message_id", "thread_id", "subject", "from", "to", "date"):
+            assert data[key] == email_data[key]
+            assert isinstance(data[key], str)
+        assert data["labels"] == ["123"]
+
+    def test_heading_is_single_line(self):
+        md = convert_email_to_markdown(
+            {"message_id": "m", "subject": "line one\n# line two", "body": "b"}
+        )
+        assert "# line one # line two\n" in md
+
+
+class TestFrontmatterNoneValues:
+    def test_none_values_become_strings(self):
+        data = _parse_frontmatter(
+            generate_yaml_frontmatter(
+                {"message_id": "m", "subject": None, "from": None, "to": None, "labels": None}
+            )
+        )
+        assert data["subject"] == "No Subject"
+        assert data["from"] == "Unknown"
+        assert data["to"] == ""
+        assert data["labels"] == []

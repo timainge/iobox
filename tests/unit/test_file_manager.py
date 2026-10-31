@@ -8,8 +8,11 @@ for saving email content to markdown files and handling duplicates.
 import os
 from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
+
 from iobox.processing.file_manager import (
     SyncState,
+    _read_frontmatter_message_id,
     check_file_exists,
     check_for_duplicates,
     create_attachments_directory,
@@ -357,6 +360,56 @@ class TestCheckForDuplicates:
         assert check_for_duplicates(["abc"], str(tmp_path / "nope")) == []
 
 
+class TestReadFrontmatterMessageId:
+    """DATA-01: message_id read via yaml.safe_load, tolerant of legacy files."""
+
+    def _save(self, tmp_path, subject, message_id="real-id"):
+        from iobox.processing.markdown_converter import convert_email_to_markdown
+
+        email = {
+            "message_id": message_id,
+            "subject": subject,
+            "from": "a@example.com",
+            "date": "Mon, 05 Jan 2026 09:00:00 +0000",
+            "body": "Hello",
+        }
+        path = tmp_path / "x.md"
+        path.write_text(convert_email_to_markdown(email), encoding="utf-8")
+        return str(path)
+
+    @pytest.mark.parametrize(
+        "subject",
+        ["Re: hi", "yes", "12345", "# x", "a\nmessage_id: evil", "---", "Ünïcödé ✓"],
+    )
+    def test_nasty_subjects(self, tmp_path, subject):
+        path = self._save(tmp_path, subject)
+        assert _read_frontmatter_message_id(path) == "real-id"
+
+    def test_numeric_message_id_stays_string(self, tmp_path):
+        path = self._save(tmp_path, "x", message_id="012345")
+        assert _read_frontmatter_message_id(path) == "012345"
+
+    def test_legacy_unquoted_frontmatter(self, tmp_path):
+        path = tmp_path / "legacy.md"
+        path.write_text(
+            "---\ndate: Mon, 05 Jan\nmessage_id: abc123\nsubject: Re: hi: there\n---\n\nBody\n"
+        )
+        assert _read_frontmatter_message_id(str(path)) == "abc123"
+
+    def test_legacy_numeric_id_uses_raw_text(self, tmp_path):
+        path = tmp_path / "legacy.md"
+        path.write_text("---\nmessage_id: 0777\nsubject: x\n---\n")
+        assert _read_frontmatter_message_id(str(path)) == "0777"
+
+    def test_no_frontmatter(self, tmp_path):
+        path = tmp_path / "plain.md"
+        path.write_text("message_id: abc\n")
+        assert _read_frontmatter_message_id(str(path)) is None
+
+    def test_missing_file(self, tmp_path):
+        assert _read_frontmatter_message_id(str(tmp_path / "nope.md")) is None
+
+
 class TestSyncState:
     """Tests for the SyncState class."""
 
@@ -400,6 +453,60 @@ class TestSyncState:
         state2.load()
         assert set(state2.synced_message_ids) == {"msg-1", "msg-2", "msg-3", "msg-4"}
         assert state2.last_history_id == "hist-500"
+
+    @pytest.mark.parametrize("content", ["", "{not json", "[1, 2]", "null", "\xff\xfe"])
+    def test_load_corrupt_file_is_treated_as_no_state(self, tmp_path, content, caplog):
+        """SYNC-03: a corrupt state file logs a warning and returns False."""
+        path = tmp_path / SyncState.FILENAME
+        path.write_bytes(content.encode("latin-1"))
+        state = SyncState(str(tmp_path))
+        with caplog.at_level("WARNING", logger="iobox.processing.file_manager"):
+            assert state.load() is False
+        assert state.last_history_id is None
+        assert state.synced_message_ids == []
+        assert "corrupt sync state" in caplog.text
+
+    def test_save_after_corrupt_load_recovers(self, tmp_path):
+        (tmp_path / SyncState.FILENAME).write_text("{trunc")
+        state = SyncState(str(tmp_path))
+        state.load()
+        state.update("hist-1", ["m1"])
+        state2 = SyncState(str(tmp_path))
+        assert state2.load() is True
+        assert state2.last_history_id == "hist-1"
+
+    def test_save_is_atomic_on_write_failure(self, tmp_path):
+        """SYNC-03: a failed write leaves the previous state intact and no temp files."""
+        state = SyncState(str(tmp_path))
+        state.update("hist-1", ["m1"])
+        original = (tmp_path / SyncState.FILENAME).read_text()
+
+        state.last_history_id = "hist-2"
+        with (
+            patch("iobox.processing.file_manager.json.dump", side_effect=OSError("disk full")),
+            pytest.raises(OSError),
+        ):
+            state.save()
+
+        assert (tmp_path / SyncState.FILENAME).read_text() == original
+        assert os.listdir(tmp_path) == [SyncState.FILENAME]
+
+    def test_save_uses_os_replace(self, tmp_path):
+        state = SyncState(str(tmp_path))
+        with patch("iobox.processing.file_manager.os.replace", wraps=os.replace) as rep:
+            state.save()
+        rep.assert_called_once()
+        src, dst = rep.call_args[0]
+        assert dst == state.filepath
+        assert os.path.dirname(src) == str(tmp_path)
+
+    def test_save_sets_timezone_aware_sync_time(self, tmp_path):
+        state = SyncState(str(tmp_path))
+        state.save()
+        state2 = SyncState(str(tmp_path))
+        state2.load()
+        assert state2.last_sync_time is not None
+        assert state2.last_sync_time.endswith("+00:00")
 
     def test_sync_state_update_without_prior_load(self, tmp_path):
         """update() can be called on a fresh SyncState without prior load()."""
@@ -487,6 +594,48 @@ class TestDownloadEmailAttachments:
         # Only pdf was downloaded
         mock_dl.assert_called_once_with(mock_service, "msg-test", "att-1")
 
+    def test_filter_excludes_extensionless_attachments(self, tmp_path):
+        """DATA-15: an extensionless attachment never matches a type filter."""
+        email_data = self._make_email_data(
+            [
+                {"id": "att-1", "filename": "report.pdf", "mime_type": "application/pdf"},
+                {"id": "att-2", "filename": "README", "mime_type": "text/plain"},
+            ]
+        )
+        download_fn = MagicMock(return_value=b"data")
+        result = download_email_attachments(
+            email_data=email_data,
+            output_dir=str(tmp_path),
+            attachment_filters=["pdf"],
+            download_fn=download_fn,
+        )
+        assert result["downloaded_count"] == 1
+        assert result["skipped_count"] == 1
+        download_fn.assert_called_once_with("msg-test", "att-1")
+
+    def test_extensionless_kept_without_filter(self, tmp_path):
+        email_data = self._make_email_data(
+            [{"id": "att-2", "filename": "README", "mime_type": "text/plain"}]
+        )
+        result = download_email_attachments(
+            email_data=email_data,
+            output_dir=str(tmp_path),
+            download_fn=MagicMock(return_value=b"data"),
+        )
+        assert result["downloaded_count"] == 1
+
+    def test_filter_normalises_case_and_dots(self, tmp_path):
+        email_data = self._make_email_data(
+            [{"id": "att-1", "filename": "REPORT.PDF", "mime_type": "application/pdf"}]
+        )
+        result = download_email_attachments(
+            email_data=email_data,
+            output_dir=str(tmp_path),
+            attachment_filters=[".Pdf"],
+            download_fn=MagicMock(return_value=b"data"),
+        )
+        assert result["downloaded_count"] == 1
+
     def test_inline_attachments_skipped_by_default(self, tmp_path):
         """Inline parts (signature logos) are skipped unless include_inline=True."""
         mock_service = MagicMock()
@@ -571,3 +720,107 @@ class TestDownloadEmailAttachments:
         assert result["downloaded_count"] == 0
         assert len(result["errors"]) == 1
         assert "file.pdf" in result["errors"][0]
+
+
+class TestNoImportTimeLoggingConfig:
+    """PROC-06: importing processing modules must not configure the root logger."""
+
+    def test_import_does_not_add_root_handlers(self):
+        import subprocess
+        import sys
+
+        code = (
+            "import logging\n"
+            "import iobox.processing.file_manager\n"
+            "import iobox.processing.markdown_converter\n"
+            "import iobox.processing.markdown\n"
+            "import iobox.utils\n"
+            "assert logging.getLogger().handlers == [], logging.getLogger().handlers\n"
+        )
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    def test_modules_use_named_loggers(self):
+        from iobox.processing import file_manager, markdown_converter
+
+        assert file_manager.logger.name == "iobox.processing.file_manager"
+        assert markdown_converter.logger.name == "iobox.processing.markdown_converter"
+
+
+class TestSanitizeFilenameEdgeCases:
+    """DATA-14: byte-length limits, extensions, dot names, reserved names."""
+
+    def test_truncates_by_utf8_bytes(self):
+        name = "日" * 200 + ".pdf"  # 600 bytes of stem
+        result = sanitize_filename(name)
+        assert len(result.encode("utf-8")) <= 240
+        assert result.endswith(".pdf")
+        result.encode("utf-8").decode("utf-8")  # no split characters
+
+    def test_does_not_split_multibyte_character(self):
+        name = "a" + "é" * 200 + ".txt"
+        result = sanitize_filename(name)
+        assert len(result.encode("utf-8")) <= 240
+        assert result.endswith(".txt")
+        assert "�" not in result
+
+    def test_long_extension_is_capped(self):
+        name = "report." + "x" * 400
+        result = sanitize_filename(name)
+        assert len(result.encode("utf-8")) <= 240
+        assert result.startswith("report")
+
+    @pytest.mark.parametrize("name", ["", ".", "..", "...", "   ", " . ", None])
+    def test_dot_and_empty_names_use_fallback(self, name):
+        assert sanitize_filename(name) == "attachment"
+
+    def test_custom_fallback(self):
+        assert sanitize_filename("..", fallback="x") == "x"
+
+    def test_strips_trailing_dots_and_spaces(self):
+        assert sanitize_filename("report.pdf. . ") == "report.pdf"
+        assert sanitize_filename("  name.txt") == "name.txt"
+
+    @pytest.mark.parametrize("name", ["CON.tar.gz", "nul.txt", "com1", "LPT9.a.b", "aux .txt"])
+    def test_reserved_names_checked_before_first_dot(self, name):
+        assert sanitize_filename(name).startswith("_")
+
+    @pytest.mark.parametrize("name", ["CONSOLE.txt", "icon.png", "com10.txt"])
+    def test_non_reserved_names_unchanged(self, name):
+        assert sanitize_filename(name) == name
+
+    def test_path_separators_removed(self):
+        result = sanitize_filename("../../etc/passwd")
+        assert "/" not in result
+        assert result != ".."
+
+
+class TestAttachmentPathContainment:
+    """SEC-12: message IDs are sanitised and attachment paths stay in output_dir."""
+
+    @pytest.mark.parametrize("email_id", ["../../evil", "..", "a/../../b", "/abs/path", ""])
+    def test_traversal_ids_stay_inside(self, tmp_path, email_id):
+        out = tmp_path / "out"
+        out.mkdir()
+        attachments_dir = create_attachments_directory(str(out), email_id)
+        real = os.path.realpath(attachments_dir)
+        assert real.startswith(os.path.realpath(str(out / "attachments")) + os.sep)
+        assert os.path.isdir(real)
+
+    def test_dotdot_id_uses_fallback(self, tmp_path):
+        attachments_dir = create_attachments_directory(str(tmp_path), "..")
+        assert os.path.basename(attachments_dir) == "unknown-message"
+
+    def test_save_attachment_with_traversal_id(self, tmp_path):
+        out = tmp_path / "out"
+        path = save_attachment(b"x", "../../a.txt", "../../../m", str(out))
+        assert os.path.realpath(path).startswith(os.path.realpath(str(out)) + os.sep)
+
+    def test_symlinked_attachments_dir_escaping_is_rejected(self, tmp_path):
+        out = tmp_path / "out"
+        (out / "attachments").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (out / "attachments" / "msg").symlink_to(outside)
+        with pytest.raises(ValueError, match="outside output directory"):
+            create_attachments_directory(str(out), "msg")

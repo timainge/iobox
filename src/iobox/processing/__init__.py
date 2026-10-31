@@ -8,6 +8,7 @@ Also provides embedding generation and semantic search via embed.py.
 
 from iobox.processing.embed import (
     EmbeddingBackend,
+    IndexMismatchError,
     LocalEmbeddingBackend,
     OpenAIEmbeddingBackend,
     ResourceIndex,
@@ -19,6 +20,7 @@ from iobox.processing.embed import (
 
 __all__ = [
     "EmbeddingBackend",
+    "IndexMismatchError",
     "LocalEmbeddingBackend",
     "OpenAIEmbeddingBackend",
     "ResourceIndex",

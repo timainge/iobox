@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from iobox.providers.base import EmailData, Event, File, Resource
+from iobox.providers.base import Email, EmailData, Event, File, Resource
 
 MAX_FILE_CONTENT_CHARS = 10_000
 
@@ -102,11 +102,48 @@ def convert_file_to_markdown(file: File) -> str:
     return "\n\n".join(parts) + "\n"
 
 
-def convert_message_to_markdown(msg: EmailData) -> str:
-    """Thin adapter: delegates to existing markdown_converter for backward compat."""
+def _normalize_email_for_markdown(msg: Any) -> dict[str, Any]:
+    """Map EmailData / Email(Resource) keys onto what ``markdown_converter`` expects.
+
+    ``markdown_converter`` reads ``subject``, ``from``, ``date``, ``message_id``
+    and string ``to``/``cc``. Providers return ``from_`` (EmailData) and
+    workspace ``Email`` resources use ``title``/``created_at``/``id`` with list
+    recipients. Existing keys are never overwritten.
+    """
+    data: dict[str, Any] = dict(msg)
+
+    def _fill(target: str, *sources: str) -> None:
+        if data.get(target):
+            return
+        for src in sources:
+            if data.get(src):
+                data[target] = data[src]
+                return
+
+    _fill("message_id", "id")
+    _fill("subject", "title")
+    _fill("from", "from_")
+    _fill("date", "created_at", "modified_at")
+    if data.get("thread_id") is None:
+        data.pop("thread_id", None)
+
+    for key in ("to", "cc", "bcc", "reply_to"):
+        value = data.get(key)
+        if isinstance(value, (list, tuple)):
+            data[key] = ", ".join(str(v) for v in value if v)
+
+    return data
+
+
+def convert_message_to_markdown(msg: EmailData | Email) -> str:
+    """Thin adapter: normalises keys, then delegates to ``markdown_converter``.
+
+    Accepts either provider ``EmailData`` (``from_`` key) or a workspace
+    ``Email`` resource (``title``, ``created_at``, list recipients).
+    """
     from iobox.processing.markdown_converter import convert_email_to_markdown
 
-    return convert_email_to_markdown(msg)  # type: ignore[arg-type]
+    return convert_email_to_markdown(_normalize_email_for_markdown(msg))
 
 
 def convert_resource_to_markdown(resource: Resource) -> str:
@@ -117,6 +154,6 @@ def convert_resource_to_markdown(resource: Resource) -> str:
     elif rtype == "file":
         return convert_file_to_markdown(resource)  # type: ignore[arg-type]
     elif rtype == "email":
-        return convert_message_to_markdown(resource)  # type: ignore[arg-type]
+        return convert_message_to_markdown(resource)  # type: ignore[arg-type]  # Email resource
     else:
         raise ValueError(f"Unknown resource_type: {rtype!r}")
