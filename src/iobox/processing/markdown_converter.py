@@ -12,7 +12,7 @@ from typing import Any
 import html2text
 import yaml
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def _to_yaml_safe(value: Any) -> Any:
@@ -115,7 +115,7 @@ def convert_html_to_markdown(html_content: str) -> str:
         markdown = _clean_email_markdown(markdown)
         return markdown
     except Exception as e:
-        logging.warning(f"Error converting HTML to markdown: {e}")
+        logger.warning(f"Error converting HTML to markdown: {e}")
         return strip_html_tags(html_content)
 
 
@@ -142,7 +142,7 @@ def convert_html_to_text(html_content: str) -> str:
         text: str = h.handle(html_content)
         return _clean_email_markdown(text)
     except Exception as e:
-        logging.warning(f"Error converting HTML to text: {e}")
+        logger.warning(f"Error converting HTML to text: {e}")
         return strip_html_tags(html_content)
 
 
@@ -201,7 +201,7 @@ def convert_email_to_markdown(email_data: dict[str, Any]) -> str:
         return markdown_content
 
     except Exception as e:
-        logging.error(f"Error converting email to markdown: {e}")
+        logger.error(f"Error converting email to markdown: {e}")
         raise
 
 

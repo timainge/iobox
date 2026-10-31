@@ -624,3 +624,28 @@ class TestDownloadEmailAttachments:
         assert result["downloaded_count"] == 0
         assert len(result["errors"]) == 1
         assert "file.pdf" in result["errors"][0]
+
+
+class TestNoImportTimeLoggingConfig:
+    """PROC-06: importing processing modules must not configure the root logger."""
+
+    def test_import_does_not_add_root_handlers(self):
+        import subprocess
+        import sys
+
+        code = (
+            "import logging\n"
+            "import iobox.processing.file_manager\n"
+            "import iobox.processing.markdown_converter\n"
+            "import iobox.processing.markdown\n"
+            "import iobox.utils\n"
+            "assert logging.getLogger().handlers == [], logging.getLogger().handlers\n"
+        )
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    def test_modules_use_named_loggers(self):
+        from iobox.processing import file_manager, markdown_converter
+
+        assert file_manager.logger.name == "iobox.processing.file_manager"
+        assert markdown_converter.logger.name == "iobox.processing.markdown_converter"

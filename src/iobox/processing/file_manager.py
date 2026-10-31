@@ -15,8 +15,7 @@ import yaml
 
 from iobox.utils import create_markdown_filename
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def check_file_exists(filepath: str) -> bool:
@@ -47,10 +46,10 @@ def create_output_directory(output_dir: str) -> str:
 
     try:
         os.makedirs(output_path, exist_ok=True)
-        logging.info(f"Created output directory: {output_path}")
+        logger.info(f"Created output directory: {output_path}")
         return output_path
     except Exception as e:
-        logging.error(f"Error creating output directory {output_path}: {e}")
+        logger.error(f"Error creating output directory {output_path}: {e}")
         raise
 
 
@@ -93,10 +92,10 @@ def save_email_to_markdown(
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(markdown_content)
 
-        logging.info(f"Saved email to markdown file: {filepath}")
+        logger.info(f"Saved email to markdown file: {filepath}")
         return filepath
     except Exception as e:
-        logging.error(f"Error saving email to markdown file: {e}")
+        logger.error(f"Error saving email to markdown file: {e}")
         raise
 
 
@@ -159,7 +158,7 @@ def check_for_duplicates(email_ids: list[str], output_dir: str) -> list[str]:
     try:
         files = [f for f in os.listdir(output_dir) if f.endswith(".md")]
     except Exception as e:
-        logging.error(f"Error listing processed emails: {e}")
+        logger.error(f"Error listing processed emails: {e}")
         return []
 
     processed_ids = {os.path.splitext(f)[0] for f in files}
@@ -171,7 +170,7 @@ def check_for_duplicates(email_ids: list[str], output_dir: str) -> list[str]:
     duplicates = [email_id for email_id in email_ids if email_id in processed_ids]
 
     if duplicates:
-        logging.info(f"Found {len(duplicates)} already processed emails")
+        logger.info(f"Found {len(duplicates)} already processed emails")
 
     return duplicates
 
@@ -193,7 +192,7 @@ def handle_duplicate_filename(filepath: str) -> str:
         filepath = f"{base}_{counter}{ext}"
         counter += 1
 
-    logging.info(f"Resolved duplicate filename: {filepath}")
+    logger.info(f"Resolved duplicate filename: {filepath}")
     return filepath
 
 
@@ -266,10 +265,10 @@ def create_attachments_directory(output_dir: str, email_id: str) -> str:
 
     try:
         os.makedirs(attachments_dir, exist_ok=True)
-        logging.info(f"Created attachments directory: {attachments_dir}")
+        logger.info(f"Created attachments directory: {attachments_dir}")
         return attachments_dir
     except Exception as e:
-        logging.error(f"Error creating attachments directory {attachments_dir}: {e}")
+        logger.error(f"Error creating attachments directory {attachments_dir}: {e}")
         raise
 
 
@@ -304,10 +303,10 @@ def save_attachment(attachment_data: bytes, filename: str, email_id: str, output
         with open(filepath, "wb") as f:
             f.write(attachment_data)
 
-        logging.info(f"Saved attachment to: {filepath}")
+        logger.info(f"Saved attachment to: {filepath}")
         return filepath
     except Exception as e:
-        logging.error(f"Error saving attachment: {e}")
+        logger.error(f"Error saving attachment: {e}")
         raise
 
 
@@ -420,10 +419,10 @@ def download_email_attachments(
     attachments = email_data.get("attachments", [])  # type: ignore[union-attr]
 
     if not attachments:
-        logging.info("No attachments found")
+        logger.info("No attachments found")
         return {"downloaded_count": 0, "skipped_count": 0, "errors": [], "saved": []}
 
-    logging.info(f"Found {len(attachments)} attachments for message {message_id}")
+    logger.info(f"Found {len(attachments)} attachments for message {message_id}")
 
     downloaded_count = 0
     skipped_count = 0
@@ -434,26 +433,26 @@ def download_email_attachments(
         filename = attachment.get("filename", "")
 
         if not include_inline and attachment.get("inline"):
-            logging.info(f"Skipping inline attachment: {filename}")
+            logger.info(f"Skipping inline attachment: {filename}")
             skipped_count += 1
             continue
 
         if attachment_filters:
             ext = os.path.splitext(filename)[1].lower().lstrip(".")
             if ext and ext not in attachment_filters:
-                logging.info(f"Skipping attachment (type filter): {filename}")
+                logger.info(f"Skipping attachment (type filter): {filename}")
                 skipped_count += 1
                 continue
 
         attachment_id = attachment.get("id", "")
 
         if not attachment_id or not filename:
-            logging.info("Skipping attachment with missing ID or filename")
+            logger.info("Skipping attachment with missing ID or filename")
             skipped_count += 1
             continue
 
         try:
-            logging.info(f"Downloading attachment: {filename}")
+            logger.info(f"Downloading attachment: {filename}")
             attachment_data = download_fn(message_id, attachment_id)
 
             if attachment_data:
@@ -473,14 +472,14 @@ def download_email_attachments(
                         "size": attachment.get("size", 0),
                     }
                 )
-                logging.info(f"Saved attachment to: {filepath}")
+                logger.info(f"Saved attachment to: {filepath}")
             else:
                 msg = f"Failed to download attachment: {filename}"
-                logging.error(msg)
+                logger.error(msg)
                 errors.append(msg)
         except Exception as e:
             msg = f"Error downloading attachment {filename}: {e}"
-            logging.error(msg)
+            logger.error(msg)
             errors.append(msg)
 
     return {
