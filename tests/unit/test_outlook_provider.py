@@ -459,6 +459,77 @@ class TestSend:
         assert draft["bccRecipients"][0]["emailAddress"]["address"] == "z@x.com"
         assert not tenant.sent
 
+    def test_draft_with_large_attachment_uses_upload_session(
+        self, provider, tenant, tmp_path: Path
+    ) -> None:
+        """FU-13: the whole file went base64-inline into the create-draft
+        POST, which Graph rejects above 4 MB."""
+        big = tmp_path / "big.bin"
+        big_bytes = bytes(range(256)) * (14 * 1024)  # 3.5 MiB
+        big.write_bytes(big_bytes)
+        small = tmp_path / "small.txt"
+        small.write_bytes(b"hello")
+
+        result = provider.create_draft("a@x.com", "Big", "Body", attachments=[str(big), str(small)])
+        mid = result["message_id"]
+        create = tenant.graph.last("POST", r"/me/mailFolders/[^/]+/messages")
+        assert [a["name"] for a in create.body["attachments"]] == ["small.txt"]
+        session = tenant.graph.last("POST", rf"/me/messages/{mid}/attachments/createUploadSession")
+        assert session.body == {
+            "attachmentItem": {"attachmentType": "file", "name": "big.bin", "size": len(big_bytes)}
+        }
+        puts = tenant.graph.find("PUT", r"/api/.*")
+        assert len(puts) == 2  # chunked
+        assert all("Authorization" not in p.headers for p in puts)
+        stored = {a["name"]: a for a in tenant.attachments[mid]}
+        assert sorted(a["name"] for a in tenant.attachments[mid]) == ["big.bin", "small.txt"]
+        assert base64.b64decode(stored["big.bin"]["contentBytes"]) == big_bytes
+        assert not tenant.sent
+
+    def test_many_small_attachments_spill_to_attachment_endpoint(
+        self, provider, tenant, tmp_path: Path
+    ) -> None:
+        """Individually small files can still push the create body over 4 MB."""
+        paths = []
+        for i in range(3):
+            f = tmp_path / f"part{i}.bin"
+            f.write_bytes(bytes([i]) * (2 * 1024 * 1024))
+            paths.append(str(f))
+        mid = provider.create_draft("a@x.com", "Parts", "Body", attachments=paths)["message_id"]
+        create = tenant.graph.last("POST", r"/me/mailFolders/[^/]+/messages")
+        assert [a["name"] for a in create.body["attachments"]] == ["part0.bin"]
+        assert len(tenant.graph.find("POST", rf"/me/messages/{mid}/attachments")) == 2
+        assert sorted(a["name"] for a in tenant.attachments[mid]) == [
+            "part0.bin",
+            "part1.bin",
+            "part2.bin",
+        ]
+
+    def test_send_with_large_attachment(self, provider, tenant, tmp_path: Path) -> None:
+        big = tmp_path / "big.pdf"
+        big.write_bytes(b"%" * (5 * 1024 * 1024))
+        result = provider.send_message("a@x.com", "Big", "Body", attachments=[str(big)])
+        mid = result["message_id"]
+        assert result["status"] == "sent"
+        paths = [f"{c.method} {c.path}" for c in tenant.graph.calls]
+        upload_done = max(i for i, p in enumerate(paths) if p.startswith("PUT "))
+        assert paths.index(f"POST /me/messages/{mid}/send") > upload_done
+        assert [a["name"] for a in tenant.sent[-1]["attachments"]] == ["big.pdf"]
+
+    def test_failed_upload_removes_draft_and_raises(self, provider, tenant, tmp_path: Path) -> None:
+        tenant.graph.route(
+            "POST",
+            r"/me/messages/[^/]+/attachments/createUploadSession",
+            {"error": {"code": "ErrorQuotaExceeded", "message": "quota"}},
+            status=507,
+        )
+        big = tmp_path / "big.bin"
+        big.write_bytes(b"x" * (4 * 1024 * 1024))
+        with pytest.raises(RuntimeError, match="attachment"):
+            provider.send_message("a@x.com", "Big", "Body", attachments=[str(big)])
+        assert not tenant.sent
+        assert tenant.graph.find("DELETE", r"/me/messages/draft-[^/]+")
+
     def test_forward_prepends_comment_and_keeps_original(self, provider, tenant) -> None:
         result = provider.forward_message("outlook-msg-id-2", "z@x.com", comment="FYI\nsee below")
         assert result["status"] == "sent"

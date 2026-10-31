@@ -52,7 +52,7 @@ iobox normalises results across providers, but the underlying services differ. T
 - **Message IDs are ImmutableIds** (`Prefer: IdType="ImmutableId"` on every Graph request), stable across folder moves.
 - **Categories** map to iobox tags.
 - **Incremental sync** (SDK `get_sync_state()` / `get_new_messages()`) uses a Graph delta link on the Inbox; an expired delta link triggers a full re-sync. `iobox save --sync` uses the provider-neutral query window instead.
-- New drafts larger than about 3 MB with attachments may fail (the library only uploads large attachments in chunks to existing drafts).
+- **Attachments** on new drafts and sent messages: small files go in the create request; once they total more than 3 MB the rest are added to the saved draft, files over 3 MB through a chunked upload session. Sending always saves a draft first and then sends it.
 
 | Mode | Scopes |
 |---|---|

@@ -42,6 +42,10 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
+# Graph rejects request bodies over 4 MB (create message, simple attachment).
+GRAPH_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+# Host of attachment upload-session URLs (not Graph; no Authorization header).
+UPLOAD_ROOT = "https://outlook.office.com/api/gv1.0"
 
 # ---------------------------------------------------------------------------
 # Fake HTTP layer
@@ -200,6 +204,8 @@ def make_real_account(graph: FakeGraph | None = None, *, username: str = "user@e
         request_retries=0,
     )
     account.con.session = graph
+    # Attachment upload-session PUTs go through the unauthenticated session.
+    account.con.naive_session = graph
     ensure_immutable_ids(account)
     return account
 
@@ -328,6 +334,8 @@ class FakeOutlookTenant:
         self.sent: list[dict[str, Any]] = []
         self.batch_status: dict[str, int] = {}  # sub-request id → forced status
         self._ids = itertools.count(1)
+        # upload-session id → {"message_id", "item", "data", "next"}
+        self.upload_sessions: dict[str, dict[str, Any]] = {}
         self._install_routes()
 
     # ── seeding ───────────────────────────────────────────────────────────
@@ -355,6 +363,13 @@ class FakeOutlookTenant:
         g.route("GET", rf"/me/messages/{_ID}/attachments/(?P<aid>[^/]+)", self._get_attachment)
         g.route("GET", rf"/me/messages/{_ID}/attachments/(?P<aid>[^/]+)/\$value", self._att_value)
         g.route("POST", r"/me/mailFolders/(?P<folder>[^/]+)/messages", self._create_draft)
+        g.route("POST", rf"/me/messages/{_ID}/attachments", self._add_attachment)
+        g.route(
+            "POST",
+            rf"/me/messages/{_ID}/attachments/createUploadSession",
+            self._create_upload_session,
+        )
+        g.route("PUT", r"/api/gv1\.0/uploads/(?P<sid>[^/]+)", self._upload_chunk)
         g.route("POST", rf"/me/messages/{_ID}/send", self._send_draft)
         g.route("POST", rf"/me/messages/{_ID}/createForward", self._create_forward)
         g.route("POST", r"/me/sendMail", self._send_mail)
@@ -483,19 +498,94 @@ class FakeOutlookTenant:
                 return base64.b64decode(a["contentBytes"])
         return 404, {"error": {"code": "ErrorItemNotFound", "message": "no attachment"}}
 
+    @staticmethod
+    def _too_large(call: GraphCall) -> tuple[int, Any] | None:
+        if len(json.dumps(call.body or {})) > GRAPH_MAX_REQUEST_BYTES:
+            return 413, {
+                "error": {"code": "RequestEntityTooLarge", "message": "request body too large"}
+            }
+        return None
+
     def _create_draft(self, call: GraphCall) -> Any:
+        if err := self._too_large(call):
+            return err
         mid = f"draft-{next(self._ids)}"
-        msg = {**(call.body or {}), "id": mid, "isDraft": True, "parentFolderId": "drafts"}
+        body = dict(call.body or {})
+        attachments = body.pop("attachments", None) or []
+        msg = {**body, "id": mid, "isDraft": True, "parentFolderId": "drafts"}
         msg.setdefault("conversationId", f"conv-{mid}")
         self.messages[mid] = msg
+        for a in attachments:
+            self._store_attachment(mid, a)
         return 201, msg
+
+    def _store_attachment(self, mid: str, attachment: dict[str, Any]) -> dict[str, Any]:
+        att = {"id": f"att-{next(self._ids)}", **attachment}
+        if "contentBytes" in att:
+            att.setdefault("size", len(base64.b64decode(att["contentBytes"])))
+        self.attachments.setdefault(mid, []).append(att)
+        self.messages[mid]["hasAttachments"] = True
+        return att
+
+    def _add_attachment(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        if mid not in self.messages:
+            return 404, {"error": {"code": "ErrorItemNotFound", "message": "not found"}}
+        if err := self._too_large(call):
+            return err
+        return 201, self._store_attachment(mid, call.body)
+
+    def _create_upload_session(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        if mid not in self.messages:
+            return 404, {"error": {"code": "ErrorItemNotFound", "message": "not found"}}
+        item = call.body["attachmentItem"]
+        sid = f"session-{next(self._ids)}"
+        self.upload_sessions[sid] = {"message_id": mid, "item": item, "data": b"", "next": 0}
+        return 201, {
+            "uploadUrl": f"{UPLOAD_ROOT}/uploads/{sid}",
+            "expirationDateTime": "2026-12-31T00:00:00Z",
+            "nextExpectedRanges": ["0-"],
+        }
+
+    def _upload_chunk(self, call: GraphCall) -> Any:
+        session = self.upload_sessions.get(call.path.rsplit("/", 1)[-1])
+        if session is None:
+            return 404, {"error": {"code": "ErrorItemNotFound", "message": "no session"}}
+        if "Authorization" in call.headers:  # upload URLs carry their own token
+            return 401, {"error": {"code": "InvalidAuthenticationToken", "message": "auth"}}
+        m = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", call.headers.get("Content-Range", ""))
+        chunk = call.body if isinstance(call.body, bytes) else b""
+        if not m or int(m.group(1)) != session["next"] or len(chunk) > GRAPH_MAX_REQUEST_BYTES:
+            return 416, {"error": {"code": "InvalidRange", "message": "bad Content-Range"}}
+        start, end, total = (int(g) for g in m.groups())
+        if end - start + 1 != len(chunk) or total != session["item"]["size"]:
+            return 416, {"error": {"code": "InvalidRange", "message": "bad Content-Range"}}
+        session["data"] += chunk
+        session["next"] = end + 1
+        if session["next"] < total:
+            return 200, {"nextExpectedRanges": [f"{session['next']}-"]}
+        self._store_attachment(
+            session["message_id"],
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": session["item"]["name"],
+                "size": total,
+                "isInline": bool(session["item"].get("isInline", False)),
+                "contentBytes": base64.b64encode(session["data"]).decode("ascii"),
+            },
+        )
+        return 201, None
 
     def _send_draft(self, call: GraphCall) -> Any:
         mid = self._m(call)
         msg = self.messages[mid]
         msg["isDraft"] = False
         msg["parentFolderId"] = "sentitems"
-        self.sent.append(copy.deepcopy(msg))
+        sent = copy.deepcopy(msg)
+        if mid in self.attachments:
+            sent["attachments"] = copy.deepcopy(self.attachments[mid])
+        self.sent.append(sent)
         return 202, None
 
     def _create_forward(self, call: GraphCall) -> Any:

@@ -43,6 +43,7 @@ from __future__ import annotations
 import html
 import logging
 import mimetypes
+import os
 import re
 from datetime import datetime
 from typing import Any
@@ -57,6 +58,11 @@ _BATCH_LIMIT = 20
 # When $search results are filtered client-side, examine at least this many
 # candidates (or 5 x max_results, whichever is larger) before giving up.
 _CLIENT_FILTER_FETCH = 250
+# Attachments are sent inline in the create-draft POST while their combined
+# size stays within this budget (Graph caps request bodies at 4 MB and base64
+# adds a third); the rest are added to the saved draft afterwards, files over
+# 3 MB through an upload session (python-o365's UPLOAD_SIZE_LIMIT_SIMPLE).
+_INLINE_ATTACHMENT_BUDGET = 3 * 1024 * 1024
 # Attachment metadata (base ``attachment`` type properties; no contentBytes).
 _ATTACHMENT_SELECT = "id,name,contentType,size,isInline"
 # Well-known folders excluded from search unless include_spam_trash is set.
@@ -639,7 +645,12 @@ class OutlookProvider(EmailProvider):
         bcc: str | None,
         content_type: str,
         attachments: list[str] | None,
-    ) -> Any:
+    ) -> tuple[Any, list[str]]:
+        """Build an unsaved message.
+
+        Returns the message and the attachment paths that did not fit in the
+        create request; pass both to :meth:`_save_new_draft`.
+        """
         msg = self._mb.new_message()
         msg.to.add(self._split_addresses(to))
         if cc:
@@ -649,9 +660,53 @@ class OutlookProvider(EmailProvider):
         msg.subject = subject
         msg.body_type = "html" if content_type.lower() == "html" else "text"
         msg.body = body
-        if attachments:
-            msg.attachments.add(list(attachments))
-        return msg
+        inline: list[str] = []
+        deferred: list[str] = []
+        used = 0
+        for path in attachments or []:
+            size = os.path.getsize(path)
+            if used + size <= _INLINE_ATTACHMENT_BUDGET:
+                inline.append(path)
+                used += size
+            else:
+                deferred.append(path)
+        if inline:
+            msg.attachments.add(inline)
+        return msg, deferred
+
+    def _save_new_draft(self, msg: Any, deferred: list[str]) -> None:
+        """Save a composed message as a draft, then attach ``deferred`` files.
+
+        python-o365 only uses upload sessions (needed above 3 MB) for
+        messages that already exist, so large or overflowing attachments are
+        added after the draft is created: each goes to
+        ``POST /messages/{id}/attachments`` or, when over 3 MB, through
+        ``createUploadSession`` + chunked ``PUT``. If that fails the draft
+        is deleted and ``RuntimeError`` raised.
+        """
+        if not msg.save_draft():
+            raise RuntimeError("Failed to save draft")
+        if not deferred:
+            return
+        # The create POST already stored these, but python-o365 leaves them
+        # flagged as not-on-cloud, so they would be uploaded a second time.
+        for attachment in msg.attachments:
+            attachment.on_cloud = True
+        msg.attachments.add(deferred)
+        error: str = ""
+        try:
+            # save_draft() would call this too but ignores its result.
+            ok = msg.attachments._update_attachments_to_cloud()
+        except Exception as exc:
+            ok, error = False, f": {exc}"
+        if not ok:
+            draft_id = msg.object_id
+            try:
+                msg.delete()
+            except Exception as exc:
+                logger.warning("Could not delete incomplete draft %r: %s", draft_id, exc)
+            raise RuntimeError(f"Failed to upload attachments to draft {draft_id!r}{error}")
+        msg._track_changes.discard("attachments")
 
     def send_message(
         self,
@@ -667,11 +722,11 @@ class OutlookProvider(EmailProvider):
 
         The message is saved as a draft first and then sent, so the returned
         ``message_id`` is a real immutable ID (python-o365's direct
-        ``sendMail`` path only yields the placeholder ``"sent_message"``).
+        ``sendMail`` path only yields the placeholder ``"sent_message"``) and
+        attachments over 3 MB can be uploaded to the draft in chunks.
         """
-        msg = self._compose(to, subject, body, cc, bcc, content_type, attachments)
-        if not msg.save_draft():
-            raise RuntimeError("Failed to create message for sending")
+        msg, deferred = self._compose(to, subject, body, cc, bcc, content_type, attachments)
+        self._save_new_draft(msg, deferred)
         if not msg.send():
             raise RuntimeError(f"Failed to send message: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "sent"}
@@ -710,9 +765,8 @@ class OutlookProvider(EmailProvider):
         attachments: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a new draft message in the Drafts folder."""
-        msg = self._compose(to, subject, body, cc, bcc, content_type, attachments)
-        if not msg.save_draft():
-            raise RuntimeError("Failed to save draft")
+        msg, deferred = self._compose(to, subject, body, cc, bcc, content_type, attachments)
+        self._save_new_draft(msg, deferred)
         return {"message_id": msg.object_id, "status": "draft"}
 
     def list_drafts(self, max_results: int = 10) -> list[dict[str, Any]]:
