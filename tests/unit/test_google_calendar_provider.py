@@ -47,13 +47,43 @@ def mock_svc() -> MagicMock:
 # ── TestToRfc3339 ──────────────────────────────────────────────────────────────
 
 
-class TestToRfc3339:
-    def test_date_only_appends_time(self) -> None:
-        assert _to_rfc3339("2026-03-15") == "2026-03-15T00:00:00Z"
+@pytest.fixture
+def sydney_tz(monkeypatch: pytest.MonkeyPatch):
+    """Pin the process local timezone (AEDT +11 / AEST +10)."""
+    import time
 
-    def test_datetime_passthrough(self) -> None:
-        dt = "2026-03-15T09:00:00Z"
-        assert _to_rfc3339(dt) == dt
+    monkeypatch.setenv("TZ", "Australia/Sydney")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+class TestToRfc3339:
+    """TIME-01: local-midnight bounds, inclusive end date, offsets always sent."""
+
+    def test_date_only_is_local_midnight(self, sydney_tz: None) -> None:
+        assert _to_rfc3339("2026-03-15") == "2026-03-15T00:00:00+11:00"
+
+    def test_date_only_end_is_inclusive(self, sydney_tz: None) -> None:
+        assert _to_rfc3339("2026-03-15", end=True) == "2026-03-16T00:00:00+11:00"
+
+    def test_end_across_dst_change(self, sydney_tz: None) -> None:
+        # AEDT ends 5 April 2026 → next-day midnight is +10:00.
+        assert _to_rfc3339("2026-04-05", end=True) == "2026-04-06T00:00:00+10:00"
+
+    def test_datetime_with_z_kept(self) -> None:
+        assert _to_rfc3339("2026-03-15T09:00:00Z") == "2026-03-15T09:00:00+00:00"
+
+    def test_datetime_with_offset_kept(self) -> None:
+        assert _to_rfc3339("2026-03-15T09:00:00-05:00") == "2026-03-15T09:00:00-05:00"
+
+    def test_naive_datetime_gets_local_offset(self, sydney_tz: None) -> None:
+        assert _to_rfc3339("2026-03-15T09:00") == "2026-03-15T09:00:00+11:00"
+
+    def test_invalid_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="Invalid date"):
+            _to_rfc3339("next tuesday")
 
 
 # ── TestGoogleCalendarProviderInit ────────────────────────────────────────────
@@ -146,18 +176,19 @@ class TestListEvents:
         assert "q" not in call_kwargs
 
     def test_list_events_passes_after_as_time_min(
-        self, provider: GoogleCalendarProvider, mock_svc: MagicMock
+        self, provider: GoogleCalendarProvider, mock_svc: MagicMock, sydney_tz: None
     ) -> None:
         provider.list_events(EventQuery(after="2026-03-01", max_results=5), _service_fn=mock_svc)
         call_kwargs = mock_svc.events().list.call_args.kwargs
-        assert call_kwargs["timeMin"] == "2026-03-01T00:00:00Z"
+        assert call_kwargs["timeMin"] == "2026-03-01T00:00:00+11:00"
 
     def test_list_events_passes_before_as_time_max(
-        self, provider: GoogleCalendarProvider, mock_svc: MagicMock
+        self, provider: GoogleCalendarProvider, mock_svc: MagicMock, sydney_tz: None
     ) -> None:
+        # Date-only ``before`` is inclusive: events on 31 March are returned.
         provider.list_events(EventQuery(before="2026-03-31", max_results=5), _service_fn=mock_svc)
         call_kwargs = mock_svc.events().list.call_args.kwargs
-        assert call_kwargs["timeMax"] == "2026-03-31T00:00:00Z"
+        assert call_kwargs["timeMax"] == "2026-04-01T00:00:00+11:00"
 
     def test_list_events_respects_max_results(self, provider: GoogleCalendarProvider) -> None:
         svc = MagicMock()
@@ -210,6 +241,17 @@ class TestGetEvent:
         provider.get_event("evt001", _service_fn=svc)
         svc.events().get.assert_called_once_with(calendarId="primary", eventId="evt001")
 
+    def test_get_event_named_calendar(self, provider: GoogleCalendarProvider) -> None:
+        svc = MagicMock()
+        provider.get_event("evt001", calendar_id="team@x", _service_fn=svc)
+        svc.events().get.assert_called_once_with(calendarId="team@x", eventId="evt001")
+
+    def test_get_event_not_found_raises_key_error(self, provider: GoogleCalendarProvider) -> None:
+        svc = MagicMock()
+        svc.events().get().execute.side_effect = _http_error(404)
+        with pytest.raises(KeyError):
+            provider.get_event("missing", _service_fn=svc)
+
 
 # ── TestGetSyncState ──────────────────────────────────────────────────────────
 
@@ -253,6 +295,62 @@ class TestGetNewEvents:
         svc.events().list().execute.return_value = {"items": []}
         _, token = provider.get_new_events("my_token", _service_fn=svc)
         assert token == "my_token"
+
+
+def _http_error(status: int) -> Exception:
+    from googleapiclient.errors import HttpError
+
+    resp = MagicMock()
+    resp.status = status
+    resp.reason = "err"
+    return HttpError(resp, b"{}")
+
+
+class TestCalendarSyncPaging:
+    """SYNC-05: sync token taken from the last page; all pages followed; 410 handled."""
+
+    def test_get_sync_state_pages_until_sync_token(self, provider: GoogleCalendarProvider) -> None:
+        svc = MagicMock()
+        svc.events.return_value.list.return_value.execute.side_effect = [
+            {"nextPageToken": "p2"},
+            {"nextPageToken": "p3"},
+            {"nextSyncToken": "final"},
+        ]
+        result = provider.get_sync_state(_service_fn=svc)
+        assert result == {"sync_token": "final"}
+        calls = svc.events.return_value.list.call_args_list
+        assert len(calls) == 3
+        assert calls[0].kwargs["showDeleted"] is True
+        assert "maxResults" not in calls[0].kwargs or calls[0].kwargs["maxResults"] > 1
+        assert calls[2].kwargs["pageToken"] == "p3"
+
+    def test_get_new_events_follows_all_pages(self, provider: GoogleCalendarProvider) -> None:
+        svc = MagicMock()
+        svc.events.return_value.list.return_value.execute.side_effect = [
+            {"items": [MOCK_EVENT_TIMED], "nextPageToken": "p2"},
+            {"items": [MOCK_EVENT_ALL_DAY], "nextSyncToken": "new_tok"},
+        ]
+        events, token = provider.get_new_events("old", _service_fn=svc)
+        assert [e["id"] for e in events] == [MOCK_EVENT_TIMED["id"], MOCK_EVENT_ALL_DAY["id"]]
+        assert token == "new_tok"
+        second = svc.events.return_value.list.call_args_list[1].kwargs
+        assert second["syncToken"] == "old" and second["pageToken"] == "p2"
+
+    def test_get_new_events_410_raises_resync_error(self, provider: GoogleCalendarProvider) -> None:
+        from iobox.providers.google.calendar import CalendarSyncTokenExpiredError
+
+        svc = MagicMock()
+        svc.events.return_value.list.return_value.execute.side_effect = _http_error(410)
+        with pytest.raises(CalendarSyncTokenExpiredError):
+            provider.get_new_events("stale", _service_fn=svc)
+
+    def test_named_calendar(self, provider: GoogleCalendarProvider) -> None:
+        svc = MagicMock()
+        svc.events.return_value.list.return_value.execute.return_value = {"nextSyncToken": "t"}
+        provider.get_sync_state(calendar_id="team@x", _service_fn=svc)
+        provider.get_new_events("t", calendar_id="team@x", _service_fn=svc)
+        for c in svc.events.return_value.list.call_args_list:
+            assert c.kwargs["calendarId"] == "team@x"
 
 
 # ── TestEventNormalization ────────────────────────────────────────────────────
