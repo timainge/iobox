@@ -151,8 +151,8 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 | FU-01 | med | `pyproject.toml` pytest config | `log_cli = true` closed click CliRunner's output for any CLI test that logs | fixed (16f2b86) |
 | FU-02 | med | `modes.py` `_STANDARD_CLI` | CLI `draft-send` allowed in standard mode (sends mail) — aligned with MCP | fixed (8287896) |
 | FU-03 | low | `cli.py` `space status` | Reads `load_session()` error column, but nothing ever writes a session file | fixed (e762cc9) |
-| FU-04 | low | `google/_retrieval.py` | Read paths don't refetch labels for unknown label IDs (new labels show as raw IDs in long-lived MCP) | open |
-| FU-05 | low | `google/_sender.py` | HTML email with attachments sends raw HTML as the text/plain alternative | open |
+| FU-04 | low | `google/_retrieval.py` | Read paths don't refetch labels for unknown label IDs (new labels show as raw IDs in long-lived MCP) | fixed (9288f49) |
+| FU-05 | low | `google/_sender.py` | HTML email with attachments sends raw HTML as the text/plain alternative | fixed (4c09c2a) |
 | FU-06 | low | `cli.py` mode gate | `--help` on a blocked subcommand prints the mode error instead of help | fixed (301e808) |
 | FU-07 | low | `space_config.validate_account` | Rejects any account containing `..`, so `a..b@x.com` can't be added | fixed (e97955e) |
 | FU-08 | low | `workspace.search` | Event results in cross-type search sorted by `created_at`, not start time | fixed (9ce10ba) |
@@ -162,6 +162,7 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 | FU-12 | low | `o365/email.py` attachments | Listing attachments also downloads their content (slow for large files) | open |
 | FU-13 | low | `o365/email.py` drafts | New drafts > ~3 MB with attachments fail (library chunks uploads only for existing drafts) | open |
 | FU-14 | low | `o365/email.py` `$batch` | Throttled (429) batch items reported as failures, not retried | open |
+| FU-16 | low | `google/_retrieval.get_thread_content` | Thread fetches never resolve label IDs to names (raw `Label_123`) | open |
 | FU-15 | med | O365 providers | Live-tenant checks: KQL quoting/`hasAttachments:`, `any()` filters vs InefficientFilter, draft ImmutableId after send, public-client app setup, granted-scope format, calendarView `$orderby`, `permanentDelete` | open (needs M365 dev tenant) |
 
 ## Previously fixed (2026-10-31, branch `docs-restructure-and-fixes`)
