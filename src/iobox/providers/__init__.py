@@ -11,7 +11,7 @@ and the CalendarProvider / FileProvider ABCs added in the workspace expansion.
 """
 
 import importlib
-from typing import Any
+from typing import Any, Literal, overload
 
 from iobox.providers.base import (
     AttachmentInfo,
@@ -72,14 +72,33 @@ _INSTALL_HINTS: dict[str, str] = {
 }
 
 
-def get_provider(name: str = "gmail", **kwargs: Any) -> EmailProvider:
-    """Instantiate an email provider by name.
+EmailProviderName = Literal["gmail", "outlook"]
+CalendarProviderName = Literal["google_calendar", "outlook_calendar"]
+FileProviderName = Literal["google_drive", "onedrive"]
+AnyProvider = EmailProvider | CalendarProvider | FileProvider
+
+
+@overload
+def get_provider(name: EmailProviderName = ..., **kwargs: Any) -> EmailProvider: ...
+@overload
+def get_provider(name: CalendarProviderName, **kwargs: Any) -> CalendarProvider: ...
+@overload
+def get_provider(name: FileProviderName, **kwargs: Any) -> FileProvider: ...
+@overload
+def get_provider(name: str, **kwargs: Any) -> AnyProvider: ...
+
+
+def get_provider(name: str = "gmail", **kwargs: Any) -> AnyProvider:
+    """Instantiate a provider by name.
 
     Uses lazy importlib import so Outlook dependencies are never
-    required for Gmail-only users.
+    required for Gmail-only users. The static return type follows the
+    name: ``"gmail"``/``"outlook"`` → :class:`EmailProvider`,
+    ``"google_calendar"``/``"outlook_calendar"`` → :class:`CalendarProvider`,
+    ``"google_drive"``/``"onedrive"`` → :class:`FileProvider`.
 
     Args:
-        name: Provider name — 'gmail' or 'outlook'.
+        name: Provider name (see ``_PROVIDERS``).
         **kwargs: Passed through to the provider constructor.
 
     Raises:
@@ -101,5 +120,5 @@ def get_provider(name: str = "gmail", **kwargs: Any) -> EmailProvider:
         raise
 
     cls = getattr(module, class_name)
-    instance: EmailProvider = cls(**kwargs)
+    instance: AnyProvider = cls(**kwargs)
     return instance
