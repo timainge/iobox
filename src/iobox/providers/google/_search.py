@@ -11,7 +11,7 @@ from typing import Any
 
 from googleapiclient.errors import HttpError
 
-from iobox.providers.google._retrieval import batch_get_messages
+from iobox.providers.google._retrieval import batch_get_messages, refresh_label_map_for_messages
 
 # Re-export public retrieval functions for backward compatibility
 from iobox.providers.google._retrieval import (
@@ -45,6 +45,7 @@ def batch_get_metadata(
         format="metadata",
         metadataHeaders=["From", "To", "Cc", "Bcc", "Reply-To", "Subject", "Date"],
     )
+    refresh_label_map_for_messages(service, label_map, results.values())
 
     metadata_list = []
     for msg_id in message_ids:
