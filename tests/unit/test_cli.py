@@ -653,19 +653,9 @@ class TestSyncFlag:
         }
 
     def _run_save(self, provider, out, *extra):
-        import logging
-
-        # These tests run the real file manager, which logs at INFO. With the
-        # project's `log_cli = true`, pytest's live-log handler suspends/resumes
-        # capture mid-invoke and closes CliRunner's output stream, so silence
-        # INFO logging for the duration of the invocation.
-        logging.disable(logging.INFO)
-        try:
-            with patch("iobox.cli.get_provider", return_value=provider):
-                args = ["save", "--query", "from:boss@x.com", "--output-dir", str(out)]
-                return runner.invoke(app, [*args, "--sync", *extra])
-        finally:
-            logging.disable(logging.NOTSET)
+        with patch("iobox.cli.get_provider", return_value=provider):
+            args = ["save", "--query", "from:boss@x.com", "--output-dir", str(out)]
+            return runner.invoke(app, [*args, "--sync", *extra])
 
     def test_first_run_records_query_and_saved_ids(self, tmp_path):
         from iobox.processing.file_manager import SyncState

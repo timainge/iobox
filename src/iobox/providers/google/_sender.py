@@ -22,7 +22,7 @@ from googleapiclient.errors import HttpError
 
 from iobox.providers.google._retrieval import download_attachment, get_email_content
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def _encode_address_header(value: str) -> str:
@@ -278,10 +278,10 @@ def send_message(service: Any, message: dict[str, str]) -> dict[str, Any]:
         result: dict[str, Any] = (
             service.users().messages().send(userId="me", body=message).execute()
         )
-        logging.info(f"Message sent successfully. Message Id: {result.get('id', '')}")
+        logger.info(f"Message sent successfully. Message Id: {result.get('id', '')}")
         return result
     except HttpError as error:
-        logging.error(f"Error sending message: {error}")
+        logger.error(f"Error sending message: {error}")
         raise
 
 
@@ -318,7 +318,7 @@ def forward_email(
         try:
             data = download_attachment(service, message_id, att_id)
         except Exception as exc:  # pragma: no cover - logged, non-fatal
-            logging.warning(f"Skipping attachment {att.get('filename', att_id)}: {exc}")
+            logger.warning(f"Skipping attachment {att.get('filename', att_id)}: {exc}")
             continue
         attachment_blobs.append(
             {

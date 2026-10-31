@@ -21,7 +21,7 @@ from iobox.providers.google._retrieval import get_email_content as get_email_con
 from iobox.providers.google._retrieval import get_label_map as get_label_map  # noqa: F401
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def batch_get_metadata(
@@ -79,7 +79,7 @@ def batch_get_metadata(
         else:
             metadata_list.append({"message_id": msg_id, "error": "Not found in batch response"})
 
-    logging.info(f"Batch fetched metadata for {len(metadata_list)} messages ({len(errors)} errors)")
+    logger.info(f"Batch fetched metadata for {len(metadata_list)} messages ({len(errors)} errors)")
     return metadata_list
 
 
@@ -113,11 +113,11 @@ def get_new_messages(service: Any, history_id: str) -> list[str] | None:
             page_token = result.get("nextPageToken")
             if not page_token:
                 break
-        logging.info(f"Found {len(message_ids)} new messages since historyId {history_id}")
+        logger.info(f"Found {len(message_ids)} new messages since historyId {history_id}")
         return message_ids
     except Exception as e:
         if "404" in str(e) or "notFound" in str(e):
-            logging.warning(
+            logger.warning(
                 f"History expired for historyId {history_id}, falling back to full sync"
             )
             return None
@@ -168,7 +168,7 @@ def search_emails(
             )
             full_query = f"{query} {date_query}"
 
-        logging.info(f"Searching for emails with query: {full_query}")
+        logger.info(f"Searching for emails with query: {full_query}")
 
         # First page
         result = (
@@ -190,7 +190,7 @@ def search_emails(
         # Paginate while more results exist and we haven't reached max_results
         while page_token and len(messages) < max_results:
             page_num += 1
-            logging.info(f"Fetching page {page_num}...")
+            logger.info(f"Fetching page {page_num}...")
             result = (
                 service.users()
                 .messages()
@@ -211,10 +211,10 @@ def search_emails(
         messages = messages[:max_results]
 
         if not messages:
-            logging.info("Found 0 matching emails")
+            logger.info("Found 0 matching emails")
             return []
 
-        logging.info(f"Found {len(messages)} matching emails")
+        logger.info(f"Found {len(messages)} matching emails")
 
         message_ids = [m["id"] for m in messages]
         email_list = batch_get_metadata(service, message_ids, label_map=label_map)
@@ -222,10 +222,10 @@ def search_emails(
         return email_list
 
     except HttpError as error:
-        logging.error(f"Error searching for emails: {error}")
+        logger.error(f"Error searching for emails: {error}")
         raise
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
         raise
 
 
@@ -251,5 +251,5 @@ def validate_date_format(date_str: str) -> bool:
         datetime.strptime(date_str, "%Y/%m/%d")
         return True
     except ValueError:
-        logging.warning(f"Invalid date format: {date_str}. Expected YYYY/MM/DD")
+        logger.warning(f"Invalid date format: {date_str}. Expected YYYY/MM/DD")
         return False

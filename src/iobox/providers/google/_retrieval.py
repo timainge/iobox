@@ -15,7 +15,7 @@ from typing import Any
 
 from googleapiclient.errors import HttpError
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 # Label ID → display name caches, one per Gmail service object (i.e. per
 # authenticated account). A module-global dict would leak one account's labels
@@ -110,7 +110,7 @@ def batch_get_messages(
         pending = [m for m in pending if m in retryable]
         if not pending:
             break
-        logging.info(f"Retrying {len(pending)} rate-limited message fetches")
+        logger.info(f"Retrying {len(pending)} rate-limited message fetches")
 
     return results, errors
 
@@ -140,10 +140,10 @@ def get_label_map(service: Any, refresh: bool = False) -> dict[str, str]:
         fresh = {label["id"]: label["name"] for label in labels}
         cache.clear()
         cache.update(fresh)
-        logging.info(f"Fetched label map with {len(cache)} entries")
+        logger.info(f"Fetched label map with {len(cache)} entries")
         return dict(cache)
     except Exception as e:
-        logging.warning(f"Failed to fetch label map, returning empty dict: {e}")
+        logger.warning(f"Failed to fetch label map, returning empty dict: {e}")
         return dict(cache)
 
 
@@ -239,21 +239,21 @@ def get_email_content(
     email_id = message_id if message_id is not None else msg_id
 
     if email_id is None:
-        logging.error("No message ID provided")
+        logger.error("No message ID provided")
         raise ValueError("No message ID provided")
 
     try:
         message = service.users().messages().get(userId="me", id=email_id, format="full").execute()
 
         email_data = _process_message_response(message, preferred_content_type, label_map)
-        logging.info(f"Successfully retrieved email content for {email_id}")
+        logger.info(f"Successfully retrieved email content for {email_id}")
         return email_data
 
     except HttpError as error:
-        logging.error(f"Error retrieving email content for {email_id}: {error}")
+        logger.error(f"Error retrieving email content for {email_id}: {error}")
         raise
     except Exception as e:
-        logging.error(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
         raise
 
 
@@ -289,13 +289,13 @@ def batch_get_emails(
             try:
                 email_data = _process_message_response(message, preferred_content_type, label_map)
             except Exception as e:  # one malformed message must not sink the batch
-                logging.warning(f"Failed to process message {msg_id}: {e}")
+                logger.warning(f"Failed to process message {msg_id}: {e}")
                 email_data = {"message_id": msg_id, "error": f"Failed to process message: {e}"}
             email_list.append(email_data)
         else:
             email_list.append({"message_id": msg_id, "error": "Not found in batch response"})
 
-    logging.info(f"Batch fetched {len(email_list)} emails ({len(errors)} errors)")
+    logger.info(f"Batch fetched {len(email_list)} emails ({len(errors)} errors)")
     return email_list
 
 
@@ -350,14 +350,14 @@ def get_thread_content(
         # Sort chronologically
         email_list.sort(key=lambda m: m["internal_date"])
 
-        logging.info(f"Retrieved {len(email_list)} messages for thread {thread_id}")
+        logger.info(f"Retrieved {len(email_list)} messages for thread {thread_id}")
         return email_list
 
     except HttpError as error:
-        logging.error(f"Error retrieving thread {thread_id}: {error}")
+        logger.error(f"Error retrieving thread {thread_id}: {error}")
         raise
     except Exception as e:
-        logging.error(f"Unexpected error retrieving thread: {e}")
+        logger.error(f"Unexpected error retrieving thread: {e}")
         raise
 
 
@@ -450,7 +450,7 @@ def create_label(service: Any, name: str) -> dict[str, str]:
             name_to_id = {v: k for k, v in existing.items()}
             if name in name_to_id:
                 return {"id": name_to_id[name], "name": name}
-        logging.error(f"Error creating label {name!r}: {error}")
+        logger.error(f"Error creating label {name!r}: {error}")
         raise
     # Update this service's cache so subsequent resolves see the new label.
     _label_cache_for(service)[created["id"]] = created["name"]
@@ -584,18 +584,18 @@ def download_attachment(service: Any, message_id: str, attachment_id: str) -> by
 
         if "data" in attachment:
             file_data = base64.urlsafe_b64decode(attachment["data"])
-            logging.info(f"Successfully downloaded attachment for email {message_id}")
+            logger.info(f"Successfully downloaded attachment for email {message_id}")
             return file_data
         else:
-            logging.warning(f"No data found in attachment {attachment_id} for email {message_id}")
+            logger.warning(f"No data found in attachment {attachment_id} for email {message_id}")
             return b""
     except HttpError as error:
-        logging.error(
+        logger.error(
             f"Error downloading attachment {attachment_id} for email {message_id}: {error}"
         )
         raise
     except Exception as e:
-        logging.error(f"Unexpected error downloading attachment: {e}")
+        logger.error(f"Unexpected error downloading attachment: {e}")
         raise
 
 
