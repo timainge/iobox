@@ -1,790 +1,646 @@
 """
-Mock objects for python-o365 / Microsoft Graph API tests.
+Microsoft Graph test harness for the O365 providers.
 
-This module provides lightweight stand-in classes that mimic the python-o365
-``Account``, ``Mailbox``, ``Message``, ``Attachment``, and delta-response
-objects used by ``OutlookProvider``.  All classes expose only the attributes
-and methods referenced in the provider spec (section 10.3–10.9).
+Earlier versions of this module hand-rolled ``MockMessage`` / ``MockMailbox``
+classes that mirrored an *imagined* python-o365 API, so the providers passed
+their tests while failing against the real library. This module instead runs
+the **real** python-o365 objects (``Account``, ``Connection``, ``MailBox``,
+``Message``, ``Schedule``, ``Drive`` …) and replaces only the HTTP layer:
 
-Usage in tests::
+* :class:`FakeGraph` stands in for the ``requests.Session`` that
+  ``O365.connection.Connection`` sends requests through. It records every
+  request (method, path, params, headers, JSON body) and answers from
+  registered routes; unknown routes return a Graph-style 404 so a wrong URL
+  fails loudly.
+* :class:`FakeOutlookTenant` is a small stateful mailbox server built on
+  ``FakeGraph`` (list/get/patch/move/delete messages, attachments, drafts,
+  send, createForward, ``$batch``, master categories).
+* :func:`make_real_account` builds a real ``O365.Account`` wired to a
+  ``FakeGraph`` with ImmutableId preferences applied exactly as
+  ``MicrosoftAuth`` does.
 
-    from tests.fixtures.mock_outlook_responses import (
-        MockAccount,
-        MockMailbox,
-        MockMessage,
-        MockAttachment,
-        MOCK_PLAIN_TEXT_MESSAGE,
-        MOCK_HTML_MESSAGE,
-        MOCK_ATTACHMENT_MESSAGE,
-        MOCK_DRAFT_MESSAGE,
-        MOCK_DELTA_RESPONSE,
-        MOCK_DELTA_RESPONSE_WITH_REMOVED,
-        MOCK_DELTA_RESPONSE_EXPIRED,
-        make_mock_account,
-        make_mock_mailbox,
-        make_mock_message,
-    )
+Everything here requires the ``outlook`` extra; factories call
+``pytest.importorskip("O365")`` so tests depending on them are skipped (not
+failed) when python-o365 is not installed.
+
+Fixture data is plain Graph JSON (camelCase resource dicts) so the library's
+own parsing code runs on it.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import base64
+import copy
+import itertools
+import json
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+
+GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 
 # ---------------------------------------------------------------------------
-# Low-level building blocks
+# Fake HTTP layer
 # ---------------------------------------------------------------------------
 
 
-class MockEmailAddress:
-    """Mimics the address object on ``msg.sender`` and ``msg.to``."""
+@dataclass
+class GraphCall:
+    """One HTTP request observed by :class:`FakeGraph`."""
 
-    def __init__(self, name: str, address: str) -> None:
-        self.name = name
-        self.address = address
-
-    def __str__(self) -> str:
-        return f"{self.name} <{self.address}>"
-
-
-class MockAttachment:
-    """Mimics an ``O365.message.MessageAttachment`` object."""
-
-    def __init__(
-        self,
-        attachment_id: str,
-        name: str,
-        content_type: str,
-        size: int,
-        content: bytes,
-    ) -> None:
-        self.attachment_id = attachment_id
-        self.name = name
-        self.content_type = content_type
-        self.size = size
-        # Raw bytes — returned by download_attachment()
-        self.content = content
-
-    def __repr__(self) -> str:
-        return f"MockAttachment(name={self.name!r}, size={self.size})"
+    method: str
+    url: str  # full URL without the query string
+    path: str  # URL path relative to GRAPH_ROOT, e.g. "/me/messages"
+    params: dict[str, Any]
+    headers: dict[str, str]
+    body: Any  # decoded JSON body (or raw data when not JSON)
 
 
-class MockAttachments:
-    """Mimics the attachments container on a ``Message``.
+Responder = Callable[[GraphCall], "tuple[int, Any] | Any"]
 
-    Supports iteration and ``add(path)`` (no-op in tests).
+
+@dataclass
+class _Route:
+    method: str
+    pattern: re.Pattern[str]
+    responder: Any
+    status: int = 200
+
+
+@dataclass
+class FakeGraph:
+    """Drop-in for ``requests.Session`` underneath a real O365 ``Connection``.
+
+    ``Connection.oauth_request`` requires ``session.headers['Authorization']``
+    and calls ``session.request(method, url, **kwargs)``; that is all this
+    class needs to provide.
     """
 
-    def __init__(self, attachments: list[MockAttachment] | None = None) -> None:
-        self._items: list[MockAttachment] = attachments or []
-
-    def __iter__(self):
-        return iter(self._items)
-
-    def __len__(self) -> int:
-        return len(self._items)
-
-    def add(self, path: str) -> None:
-        """No-op stub for msg.attachments.add(path) in write-op tests."""
-
-
-class MockRecipients:
-    """Mimics a recipients container (msg.to, msg.cc, msg.bcc)."""
-
-    def __init__(self, addresses: list[MockEmailAddress] | None = None) -> None:
-        self._items: list[MockEmailAddress] = addresses or []
-
-    def __iter__(self):
-        return iter(self._items)
-
-    def add(self, address: str) -> None:
-        """No-op stub for msg.to.add(address) in write-op tests."""
-
-    def __repr__(self) -> str:
-        return f"MockRecipients({self._items!r})"
-
-
-class MockFlag:
-    """Mimics the ``flag`` property on a Graph message."""
-
-    def __init__(self, flag_status: str = "notFlagged") -> None:
-        # Valid values: "notFlagged", "flagged", "complete"
-        self.flag_status = flag_status
-
-    def __repr__(self) -> str:
-        return f"MockFlag(flagStatus={self.flag_status!r})"
-
-
-# ---------------------------------------------------------------------------
-# Message
-# ---------------------------------------------------------------------------
-
-
-class MockMessage:
-    """Mimics an ``O365.message.Message`` object.
-
-    Attributes mirror those accessed in ``OutlookProvider._message_to_email_data``
-    and all write/organization methods described in spec sections 10.4–10.6.
-    """
-
-    def __init__(
-        self,
-        object_id: str,
-        conversation_id: str,
-        subject: str,
-        sender_name: str,
-        sender_address: str,
-        received: datetime,
-        categories: list[str],
-        body_preview: str,
-        body: str,
-        body_type: str = "HTML",
-        is_read: bool = True,
-        is_draft: bool = False,
-        has_attachments: bool = False,
-        attachments: list[MockAttachment] | None = None,
-        flag_status: str = "notFlagged",
-    ) -> None:
-        self.object_id = object_id
-        self.conversation_id = conversation_id
-        self.subject = subject
-        self.sender = MockEmailAddress(sender_name, sender_address)
-        self.received = received
-        self.categories = list(categories)
-        self.body_preview = body_preview
-        self.body = body
-        # body_type is 'HTML' or 'Text' — mirrors Graph bodyType
-        self.body_type = body_type
-        self.is_read = is_read
-        self.is_draft = is_draft
-        self.has_attachments = has_attachments
-        self.attachments = MockAttachments(attachments)
-        self.flag = MockFlag(flag_status)
-        # Recipients containers
-        self.to = MockRecipients()
-        self.cc = MockRecipients()
-        self.bcc = MockRecipients()
-
-        # Track method calls for test assertions
-        self._sent = False
-        self._deleted = False
-        self._draft_saved = False
-        self._moved_to: Any = None
-        self._read_marked: bool | None = None
-        self._message_saved = False
-
-    # ── Read helpers ──────────────────────────────────────────────────────
-
-    def get_body_text(self) -> str:
-        """BeautifulSoup plain-text fallback — returns body_preview in mocks."""
-        return self.body_preview
-
-    # ── Write helpers ─────────────────────────────────────────────────────
-
-    def send(self) -> bool:
-        self._sent = True
-        return True
-
-    def save_draft(self) -> bool:
-        self._draft_saved = True
-        return True
-
-    def save_message(self) -> bool:
-        self._message_saved = True
-        return True
-
-    def delete(self) -> bool:
-        self._deleted = True
-        return True
-
-    def move(self, folder: Any) -> bool:
-        self._moved_to = folder
-        return True
-
-    def mark_as_read(self) -> bool:
-        self.is_read = True
-        self._read_marked = True
-        return True
-
-    def mark_as_unread(self) -> bool:
-        self.is_read = False
-        self._read_marked = False
-        return True
-
-    def forward(self) -> MockMessage:
-        """Returns a new stub message to configure and send as a forward."""
-        fwd = MockMessage(
-            object_id=f"fwd-{self.object_id}",
-            conversation_id=self.conversation_id,
-            subject=f"FW: {self.subject}",
-            sender_name="",
-            sender_address="",
-            received=self.received,
-            categories=[],
-            body_preview="",
-            body=self.body,
-        )
-        return fwd
-
-    def __repr__(self) -> str:
-        return f"MockMessage(object_id={self.object_id!r}, subject={self.subject!r})"
-
-
-# ---------------------------------------------------------------------------
-# Query builder
-# ---------------------------------------------------------------------------
-
-
-class MockQueryCondition:
-    """Mimics a chained condition returned by ``Query.on_attribute()``."""
-
-    def __init__(self, query: MockQuery, attribute: str) -> None:
-        self._query = query
-        self._attribute = attribute
-
-    def equals(self, value: Any) -> MockQuery:
-        self._query._filters.append((self._attribute, "eq", value))
-        return self._query
-
-    def contains(self, value: Any) -> MockQuery:
-        self._query._filters.append((self._attribute, "contains", value))
-        return self._query
-
-    def greater_equal(self, value: Any) -> MockQuery:
-        self._query._filters.append((self._attribute, "ge", value))
-        return self._query
-
-    def less(self, value: Any) -> MockQuery:
-        self._query._filters.append((self._attribute, "lt", value))
-        return self._query
-
-
-class MockQuery:
-    """Mimics ``O365.utils.Query`` — records filter conditions for assertions."""
-
-    def __init__(self) -> None:
-        self._filters: list[tuple[str, str, Any]] = []
-        self._search: str | None = None
-        self._order_by: str | None = None
-
-    def on_attribute(self, attribute: str) -> MockQueryCondition:
-        return MockQueryCondition(self, attribute)
-
-    def search(self, search_text: str) -> MockQuery:
-        self._search = search_text
-        return self
-
-    def order_by(self, attribute: str, ascending: bool = True) -> MockQuery:
-        self._order_by = attribute
-        return self
-
-    def __repr__(self) -> str:
-        return f"MockQuery(filters={self._filters!r}, search={self._search!r})"
-
-
-# ---------------------------------------------------------------------------
-# Folder
-# ---------------------------------------------------------------------------
-
-
-class MockFolder:
-    """Mimics an ``O365.mailbox.MailBox`` folder (Inbox, Drafts, Archive …)."""
-
-    def __init__(
-        self,
-        name: str,
-        messages: list[MockMessage] | None = None,
-    ) -> None:
-        self.name = name
-        self._messages: list[MockMessage] = messages or []
-
-    def get_messages(
-        self,
-        query: MockQuery | None = None,
-        limit: int | None = None,
-        order_by: str | None = None,
-    ) -> list[MockMessage]:
-        msgs = list(self._messages)
-        if limit is not None:
-            msgs = msgs[:limit]
-        return msgs
-
-    def new_query(self) -> MockQuery:
-        return MockQuery()
-
-    def __repr__(self) -> str:
-        return f"MockFolder(name={self.name!r}, messages={len(self._messages)})"
-
-
-# ---------------------------------------------------------------------------
-# Mailbox
-# ---------------------------------------------------------------------------
-
-
-class MockMailbox:
-    """Mimics ``O365.mailbox.MailBox``."""
-
-    def __init__(
-        self,
-        inbox: MockFolder | None = None,
-        drafts: MockFolder | None = None,
-        archive: MockFolder | None = None,
-        messages_by_id: dict[str, MockMessage] | None = None,
-    ) -> None:
-        self._inbox = inbox or MockFolder("Inbox")
-        self._drafts = drafts or MockFolder("Drafts")
-        self._archive = archive or MockFolder("Archive")
-        # For get_message(object_id=…) lookups
-        self._messages_by_id: dict[str, MockMessage] = messages_by_id or {}
-        # Tracks new messages created via new_message()
-        self._new_messages: list[MockMessage] = []
-
-    def inbox_folder(self) -> MockFolder:
-        return self._inbox
-
-    def drafts_folder(self) -> MockFolder:
-        return self._drafts
-
-    def archive_folder(self) -> MockFolder:
-        return self._archive
-
-    def get_message(self, object_id: str) -> MockMessage | None:
-        return self._messages_by_id.get(object_id)
-
-    def new_message(self) -> MockMessage:
-        msg = MockMessage(
-            object_id=f"new-message-{len(self._new_messages) + 1}",
-            conversation_id="new-conversation-id",
-            subject="",
-            sender_name="",
-            sender_address="",
-            received=datetime.now(tz=timezone.utc),
-            categories=[],
-            body_preview="",
-            body="",
-        )
-        self._new_messages.append(msg)
-        return msg
-
-    def get_messages(
-        self,
-        query: MockQuery | None = None,
-        limit: int | None = None,
-        order_by: str | None = None,
-    ) -> list[MockMessage]:
-        """Return messages from all folders (global mailbox search).
-
-        Mimics ``MailBox.get_messages()`` which targets ``/me/messages`` rather
-        than a specific folder.  Query and order_by are ignored in the mock;
-        all messages indexed in ``_messages_by_id`` are returned (respecting
-        *limit*).
+    headers: dict[str, str] = field(default_factory=lambda: {"Authorization": "Bearer test"})
+    calls: list[GraphCall] = field(default_factory=list)
+    verify: bool = True
+    proxies: dict[str, str] = field(default_factory=dict)
+    _routes: list[_Route] = field(default_factory=list)
+
+    # ── route registration ────────────────────────────────────────────────
+
+    def route(self, method: str, path_regex: str, response: Any = None, *, status: int = 200):
+        """Register a response for ``method`` + path (regex, full match).
+
+        ``response`` is JSON-serialisable data, ``bytes`` (raw body), or a
+        callable ``(GraphCall) -> data | (status, data)``. Later routes win.
         """
-        msgs = list(self._messages_by_id.values())
-        if limit is not None:
-            msgs = msgs[:limit]
-        return msgs
+        self._routes.append(_Route(method.upper(), re.compile(path_regex), response, status=status))
+        return self
 
-    def new_query(self) -> MockQuery:
-        return MockQuery()
+    # ── requests.Session protocol ─────────────────────────────────────────
 
-    def __repr__(self) -> str:
-        return "MockMailbox()"
+    def request(self, method: str, url: str, **kwargs: Any):
+        import requests
 
+        split = urlsplit(url)
+        base_url = f"{split.scheme}://{split.netloc}{split.path}"
+        path = base_url[len(GRAPH_ROOT) :] if base_url.startswith(GRAPH_ROOT) else split.path
+        params: dict[str, Any] = {k: v[0] for k, v in parse_qs(split.query).items()}
+        params.update(kwargs.get("params") or {})
+        raw = kwargs.get("data")
+        try:
+            body = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+        except ValueError:
+            body = raw
+        call = GraphCall(
+            method=method.upper(),
+            url=base_url,
+            path=path,
+            params=params,
+            headers=dict(kwargs.get("headers") or {}),
+            body=body,
+        )
+        self.calls.append(call)
 
-# ---------------------------------------------------------------------------
-# Connection / session
-# ---------------------------------------------------------------------------
+        status, payload = (
+            404,
+            {"error": {"code": "ErrorItemNotFound", "message": f"No fake route: {method} {path}"}},
+        )
+        for r in reversed(self._routes):
+            if r.method == call.method and r.pattern.fullmatch(path):
+                result = r.responder(call) if callable(r.responder) else r.responder
+                if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], int):
+                    status, payload = result
+                else:
+                    status, payload = r.status, result
+                break
 
+        resp = requests.Response()
+        resp.status_code = status
+        resp.url = url
+        resp.reason = "OK" if status < 400 else "Error"
+        if isinstance(payload, bytes):
+            resp._content = payload
+            resp.headers["Content-Type"] = "application/octet-stream"
+        elif payload is None:
+            resp._content = b""
+        else:
+            resp._content = json.dumps(payload).encode()
+            resp.headers["Content-Type"] = "application/json"
+        return resp
 
-class MockSession:
-    """Mimics ``account.con.session`` — tracks header mutations."""
-
-    def __init__(self) -> None:
-        self.headers: dict[str, str] = {}
-
-
-class MockConnection:
-    """Mimics ``account.con`` — exposes session and a minimal get() stub."""
-
-    def __init__(self) -> None:
-        self.session = MockSession()
-        self._delta_responses: dict[str, dict] = {}
-
-    def get(self, url: str, **kwargs: Any) -> MockHttpResponse:
-        if url in self._delta_responses:
-            return MockHttpResponse(self._delta_responses[url])
-        raise ValueError(f"No mock delta response registered for URL: {url!r}")
-
-
-class MockHttpResponse:
-    """Minimal HTTP response stub returned by ``MockConnection.get()``."""
-
-    def __init__(self, data: dict) -> None:
-        self._data = data
-        self.status_code = 200
-
-    def json(self) -> dict:
-        return self._data
-
-    def raise_for_status(self) -> None:
+    def mount(self, *args: Any) -> None:  # pragma: no cover - session API parity
         pass
 
+    def close(self) -> None:
+        pass
 
-# ---------------------------------------------------------------------------
-# Account
-# ---------------------------------------------------------------------------
+    # ── assertions helpers ────────────────────────────────────────────────
+
+    def find(self, method: str, path_regex: str) -> list[GraphCall]:
+        pat = re.compile(path_regex)
+        return [c for c in self.calls if c.method == method.upper() and pat.fullmatch(c.path)]
+
+    def last(self, method: str, path_regex: str) -> GraphCall:
+        found = self.find(method, path_regex)
+        assert found, f"no {method} request matching {path_regex!r}; saw {self.summary()}"
+        return found[-1]
+
+    def summary(self) -> list[str]:
+        return [f"{c.method} {c.path}" for c in self.calls]
 
 
-class MockAccount:
-    """Mimics ``O365.Account``.
+def make_real_account(graph: FakeGraph | None = None, *, username: str = "user@example.com"):
+    """Return a real ``O365.Account`` whose HTTP traffic goes to *graph*.
 
-    ``is_authenticated`` defaults to ``True`` so most tests skip the auth flow.
-    Set it to ``False`` to test first-time auth branches.
+    Mirrors what ``MicrosoftAuth.get_account()`` produces: public-client
+    flow, ImmutableId preference on ``con.default_headers``.
     """
+    pytest.importorskip("O365")
+    from O365 import Account
+    from O365.utils.token import BaseTokenBackend
 
-    def __init__(
-        self,
-        is_authenticated: bool = True,
-        mailbox: MockMailbox | None = None,
-    ) -> None:
-        self.is_authenticated = is_authenticated
-        self._mailbox = mailbox or MockMailbox()
-        self.con = MockConnection()
-        # Track authenticate() calls
-        self._authenticate_calls: list[dict] = []
+    from iobox.providers.o365.auth import ensure_immutable_ids
 
-    def authenticate(
-        self,
-        scopes: list[str] | None = None,
-        grant_type: str | None = None,
-    ) -> bool:
-        self._authenticate_calls.append({"scopes": scopes, "grant_type": grant_type})
-        self.is_authenticated = True
-        return True
+    class _MemoryBackend(BaseTokenBackend):  # type: ignore[misc]
+        def load_token(self) -> bool:
+            return False
 
-    def mailbox(self) -> MockMailbox:
-        return self._mailbox
+        def save_token(self, force: bool = False) -> bool:
+            return True
 
-    def __repr__(self) -> str:
-        return f"MockAccount(is_authenticated={self.is_authenticated})"
+    graph = graph or FakeGraph()
+    account = Account(
+        ("test-client-id",),
+        auth_flow_type="public",
+        token_backend=_MemoryBackend(),
+        username=username,
+        timezone="UTC",
+        requests_delay=0,
+        request_retries=0,
+    )
+    account.con.session = graph
+    ensure_immutable_ids(account)
+    return account
+
+
+class FakeAuth:
+    """Minimal ``MicrosoftAuth`` stand-in: ``get_account()`` returns *account*."""
+
+    def __init__(self, account: Any) -> None:
+        self._account = account
+        self.calls = 0
+
+    def get_account(self) -> Any:
+        self.calls += 1
+        return self._account
 
 
 # ---------------------------------------------------------------------------
-# Factory helpers
+# Graph JSON builders
 # ---------------------------------------------------------------------------
 
 
-def make_mock_message(
-    object_id: str = "msg-id-1",
+def _addr(name: str, address: str) -> dict[str, Any]:
+    return {"emailAddress": {"name": name, "address": address}}
+
+
+def graph_message(
+    id: str = "msg-id-1",
+    *,
     conversation_id: str = "conv-id-1",
     subject: str = "Test Subject",
-    sender_name: str = "Alice Sender",
-    sender_address: str = "alice@example.com",
-    received: datetime | None = None,
+    sender: tuple[str, str] = ("Alice Sender", "alice@example.com"),
+    to: list[tuple[str, str]] | None = None,
+    cc: list[tuple[str, str]] | None = None,
+    received: str = "2026-03-06T10:00:00Z",
     categories: list[str] | None = None,
     body_preview: str = "This is a preview of the email body.",
     body: str = "<html><body><p>This is the email body.</p></body></html>",
-    body_type: str = "HTML",
+    content_type: str = "html",
     is_read: bool = True,
     is_draft: bool = False,
     has_attachments: bool = False,
-    attachments: list[MockAttachment] | None = None,
     flag_status: str = "notFlagged",
-) -> MockMessage:
-    """Return a ``MockMessage`` with sensible defaults."""
-    if received is None:
-        received = datetime(2026, 3, 6, 10, 0, 0, tzinfo=timezone.utc)
-    return MockMessage(
-        object_id=object_id,
-        conversation_id=conversation_id,
-        subject=subject,
-        sender_name=sender_name,
-        sender_address=sender_address,
-        received=received,
-        categories=categories or [],
-        body_preview=body_preview,
-        body=body,
-        body_type=body_type,
-        is_read=is_read,
-        is_draft=is_draft,
-        has_attachments=has_attachments,
-        attachments=attachments,
-        flag_status=flag_status,
-    )
+    folder: str = "inbox",
+) -> dict[str, Any]:
+    """Return a Graph ``message`` resource as /me/messages returns it.
 
-
-def make_mock_mailbox(
-    messages: list[MockMessage] | None = None,
-) -> MockMailbox:
-    """Return a ``MockMailbox`` pre-loaded with *messages* in the inbox.
-
-    Each message is also indexed by ``object_id`` for ``get_message()`` lookups.
+    Graph v1.0 serialises ``body.contentType`` in lower case (``"html"`` /
+    ``"text"``).
     """
-    msgs = messages or []
-    by_id = {m.object_id: m for m in msgs}
-    inbox = MockFolder("Inbox", msgs)
-    return MockMailbox(inbox=inbox, messages_by_id=by_id)
+    return {
+        "id": id,
+        "conversationId": conversation_id,
+        "subject": subject,
+        "from": _addr(*sender),
+        "sender": _addr(*sender),
+        "toRecipients": [_addr(n, a) for n, a in (to or [("Me", "me@example.com")])],
+        "ccRecipients": [_addr(n, a) for n, a in (cc or [])],
+        "bccRecipients": [],
+        "replyTo": [],
+        "receivedDateTime": received,
+        "sentDateTime": received,
+        "createdDateTime": received,
+        "lastModifiedDateTime": received,
+        "categories": list(categories or []),
+        "bodyPreview": body_preview,
+        "body": {"contentType": content_type, "content": body},
+        "isRead": is_read,
+        "isDraft": is_draft,
+        "hasAttachments": has_attachments,
+        "flag": {"flagStatus": flag_status},
+        "parentFolderId": folder,
+        "importance": "normal",
+        "webLink": f"https://outlook.office.com/mail/{id}",
+    }
 
 
-def make_mock_account(
-    is_authenticated: bool = True,
-    messages: list[MockMessage] | None = None,
-) -> MockAccount:
-    """Return a ``MockAccount`` wired to a mailbox containing *messages*."""
-    mailbox = make_mock_mailbox(messages)
-    return MockAccount(is_authenticated=is_authenticated, mailbox=mailbox)
+def graph_file_attachment(
+    id: str,
+    name: str,
+    content: bytes,
+    *,
+    content_type: str = "application/octet-stream",
+    is_inline: bool = False,
+    content_id: str | None = None,
+) -> dict[str, Any]:
+    """Return a Graph ``fileAttachment`` (``contentBytes`` is base64 text)."""
+    return {
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        "id": id,
+        "name": name,
+        "contentType": content_type,
+        "size": len(content),
+        "isInline": is_inline,
+        "contentId": content_id,
+        "contentBytes": base64.b64encode(content).decode("ascii"),
+    }
 
 
 # ---------------------------------------------------------------------------
-# Pre-built message fixtures
+# Stateful fake mailbox
 # ---------------------------------------------------------------------------
 
-MOCK_PLAIN_TEXT_MESSAGE: MockMessage = make_mock_message(
-    object_id="outlook-msg-id-1",
+_ID = r"(?P<id>[^/]+)"
+
+
+class FakeOutlookTenant:
+    """In-memory Graph mailbox for ``/me/...`` mail endpoints.
+
+    State lives in ``messages`` (id → Graph JSON), ``attachments``
+    (message id → list of attachment JSON), ``categories`` and ``sent``.
+    """
+
+    def __init__(self, graph: FakeGraph | None = None) -> None:
+        self.graph = graph or FakeGraph()
+        self.messages: dict[str, dict[str, Any]] = {}
+        self.attachments: dict[str, list[dict[str, Any]]] = {}
+        self.categories: list[dict[str, Any]] = []
+        self.sent: list[dict[str, Any]] = []
+        self.batch_status: dict[str, int] = {}  # sub-request id → forced status
+        self._ids = itertools.count(1)
+        self._install_routes()
+
+    # ── seeding ───────────────────────────────────────────────────────────
+
+    def add(self, message: dict[str, Any], attachments: list[dict[str, Any]] | None = None):
+        msg = copy.deepcopy(message)
+        if attachments:
+            msg["hasAttachments"] = True
+            self.attachments[msg["id"]] = copy.deepcopy(attachments)
+        self.messages[msg["id"]] = msg
+        return self
+
+    # ── routes ────────────────────────────────────────────────────────────
+
+    def _install_routes(self) -> None:
+        g = self.graph
+        g.route("GET", r"/me/messages", self._list_all)
+        g.route("GET", r"/me/mailFolders/(?P<folder>[^/]+)/messages", self._list_folder)
+        g.route("GET", rf"/me/messages/{_ID}", self._get)
+        g.route("PATCH", rf"/me/messages/{_ID}", self._patch)
+        g.route("DELETE", rf"/me/messages/{_ID}", self._delete)
+        g.route("POST", rf"/me/messages/{_ID}/move", self._move)
+        g.route("GET", rf"/me/messages/{_ID}/attachments", self._list_attachments)
+        g.route("GET", rf"/me/messages/{_ID}/attachments/(?P<aid>[^/]+)/\$value", self._att_value)
+        g.route("POST", r"/me/mailFolders/(?P<folder>[^/]+)/messages", self._create_draft)
+        g.route("POST", rf"/me/messages/{_ID}/send", self._send_draft)
+        g.route("POST", rf"/me/messages/{_ID}/createForward", self._create_forward)
+        g.route("POST", r"/me/sendMail", self._send_mail)
+        g.route("GET", r"/me/outlook/masterCategories", lambda c: {"value": self.categories})
+        g.route("POST", r"/me/outlook/masterCategories", self._create_category)
+        g.route("POST", r"/\$batch", self._batch)
+
+    @staticmethod
+    def _m(call: GraphCall) -> str:
+        m = re.search(r"/me/messages/([^/]+)", call.path)
+        assert m
+        return m.group(1)
+
+    def _list_all(self, call: GraphCall) -> Any:
+        msgs = list(self.messages.values())
+        # Honour the one $filter shape the fake needs: conversationId eq '...'.
+        m = re.fullmatch(r"conversationId eq '(.*)'", call.params.get("$filter", ""))
+        if m:
+            conv = m.group(1).replace("''", "'")
+            msgs = [x for x in msgs if x.get("conversationId") == conv]
+        return {"value": msgs}
+
+    def _list_folder(self, call: GraphCall) -> Any:
+        # Well-known folder names are case-insensitive in Graph ("Drafts").
+        folder = call.path.split("/")[3].lower()
+        return {
+            "value": [
+                m for m in self.messages.values() if str(m.get("parentFolderId")).lower() == folder
+            ]
+        }
+
+    def _get(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        if mid not in self.messages:
+            return 404, {"error": {"code": "ErrorItemNotFound", "message": "not found"}}
+        return self.messages[mid]
+
+    def _patch(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        if mid not in self.messages:
+            return 404, {"error": {"code": "ErrorItemNotFound", "message": "not found"}}
+        self.messages[mid].update(call.body or {})
+        return self.messages[mid]
+
+    def _delete(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        if mid not in self.messages:
+            return 404, {"error": {"code": "ErrorItemNotFound", "message": "not found"}}
+        self.messages[mid]["parentFolderId"] = "deleteditems"
+        return 204, None
+
+    def _move(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        self.messages[mid]["parentFolderId"] = call.body["destinationId"]
+        return 201, self.messages[mid]
+
+    def _list_attachments(self, call: GraphCall) -> Any:
+        return {"value": self.attachments.get(self._m(call), [])}
+
+    def _att_value(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        aid = call.path.split("/")[-2]
+        for a in self.attachments.get(mid, []):
+            if a["id"] == aid:
+                return base64.b64decode(a["contentBytes"])
+        return 404, {"error": {"code": "ErrorItemNotFound", "message": "no attachment"}}
+
+    def _create_draft(self, call: GraphCall) -> Any:
+        mid = f"draft-{next(self._ids)}"
+        msg = {**(call.body or {}), "id": mid, "isDraft": True, "parentFolderId": "drafts"}
+        msg.setdefault("conversationId", f"conv-{mid}")
+        self.messages[mid] = msg
+        return 201, msg
+
+    def _send_draft(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        msg = self.messages[mid]
+        msg["isDraft"] = False
+        msg["parentFolderId"] = "sentitems"
+        self.sent.append(copy.deepcopy(msg))
+        return 202, None
+
+    def _create_forward(self, call: GraphCall) -> Any:
+        src = self.messages[self._m(call)]
+        mid = f"fwd-{next(self._ids)}"
+        quoted = src["body"]["content"]
+        fwd = graph_message(
+            mid,
+            conversation_id=src["conversationId"],
+            subject=f"FW: {src['subject']}",
+            to=[],
+            body=f"<html><body><div>original:</div>{quoted}</body></html>",
+            is_draft=True,
+            folder="drafts",
+        )
+        fwd["toRecipients"] = []
+        self.messages[mid] = fwd
+        return 201, fwd
+
+    def _send_mail(self, call: GraphCall) -> Any:
+        self.sent.append(copy.deepcopy(call.body))
+        return 202, None
+
+    def _create_category(self, call: GraphCall) -> Any:
+        cat = {"id": f"cat-{next(self._ids)}", **(call.body or {})}
+        self.categories.append(cat)
+        return 201, cat
+
+    def _batch(self, call: GraphCall) -> Any:
+        responses = []
+        for req in call.body["requests"]:
+            status = self.batch_status.get(req["id"], 200)
+            body: Any = {}
+            if status >= 400:
+                body = {"error": {"code": "ErrorItemNotFound", "message": "batch item failed"}}
+            responses.append({"id": req["id"], "status": status, "body": body})
+        return {"responses": responses}
+
+    # ── wiring ────────────────────────────────────────────────────────────
+
+    def account(self):
+        return make_real_account(self.graph)
+
+
+# ---------------------------------------------------------------------------
+# Pre-built fixture data (Graph JSON)
+# ---------------------------------------------------------------------------
+
+ATTACHMENT_PDF_BYTES = b"%PDF-1.4 mock pdf content"
+ATTACHMENT_PNG_BYTES = b"\x89PNG\r\n mock png content"
+
+MOCK_ATTACHMENT_FILE = graph_file_attachment(
+    "outlook-attach-id-1", "document.pdf", ATTACHMENT_PDF_BYTES, content_type="application/pdf"
+)
+MOCK_ATTACHMENT_IMAGE = graph_file_attachment(
+    "outlook-attach-id-2",
+    "screenshot.png",
+    ATTACHMENT_PNG_BYTES,
+    content_type="image/png",
+    is_inline=True,
+    content_id="logo@cid",
+)
+
+MOCK_PLAIN_TEXT_MESSAGE = graph_message(
+    "outlook-msg-id-1",
     conversation_id="outlook-conv-id-1",
     subject="Plain Text Email",
-    sender_name="Bob Sender",
-    sender_address="bob@example.com",
-    received=datetime(2026, 3, 6, 9, 0, 0, tzinfo=timezone.utc),
+    sender=("Bob Sender", "bob@example.com"),
+    received="2026-03-06T09:00:00Z",
     body_preview="This is a plain text email.",
     body="This is a plain text email.",
-    body_type="Text",
-    is_read=True,
+    content_type="text",
     categories=["Work"],
 )
-
-MOCK_HTML_MESSAGE: MockMessage = make_mock_message(
-    object_id="outlook-msg-id-2",
+MOCK_HTML_MESSAGE = graph_message(
+    "outlook-msg-id-2",
     conversation_id="outlook-conv-id-2",
     subject="HTML Email Subject",
-    sender_name="Carol Sender",
-    sender_address="carol@example.com",
-    received=datetime(2026, 3, 6, 10, 0, 0, tzinfo=timezone.utc),
+    sender=("Carol Sender", "carol@example.com"),
+    received="2026-03-06T10:00:00Z",
     body_preview="This is the HTML version of the email.",
-    body=(
-        "<html><body><p>This is the <strong>HTML</strong> version of the email.</p></body></html>"
-    ),
-    body_type="HTML",
+    body="<html><body><p>This is the <strong>HTML</strong> version of the email.</p></body></html>",
     is_read=False,
-    categories=[],
 )
-
-MOCK_ATTACHMENT_FILE = MockAttachment(
-    attachment_id="outlook-attach-id-1",
-    name="document.pdf",
-    content_type="application/pdf",
-    size=1024,
-    content=b"%PDF-1.4 mock pdf content",
-)
-
-MOCK_ATTACHMENT_IMAGE = MockAttachment(
-    attachment_id="outlook-attach-id-2",
-    name="screenshot.png",
-    content_type="image/png",
-    size=2048,
-    content=b"\x89PNG\r\n mock png content",
-)
-
-MOCK_ATTACHMENT_MESSAGE: MockMessage = make_mock_message(
-    object_id="outlook-msg-id-3",
+MOCK_ATTACHMENT_MESSAGE = graph_message(
+    "outlook-msg-id-3",
     conversation_id="outlook-conv-id-3",
     subject="Email with Attachment",
-    sender_name="Dave Sender",
-    sender_address="dave@example.com",
-    received=datetime(2026, 3, 6, 11, 0, 0, tzinfo=timezone.utc),
+    sender=("Dave Sender", "dave@example.com"),
+    received="2026-03-06T11:00:00Z",
     body_preview="This email has an attachment.",
-    body="<html><body><p>This email has an attachment.</p></body></html>",
-    body_type="HTML",
     has_attachments=True,
-    attachments=[MOCK_ATTACHMENT_FILE],
 )
-
-MOCK_MULTI_ATTACHMENT_MESSAGE: MockMessage = make_mock_message(
-    object_id="outlook-msg-id-4",
+MOCK_MULTI_ATTACHMENT_MESSAGE = graph_message(
+    "outlook-msg-id-4",
     conversation_id="outlook-conv-id-3",
     subject="Email with Multiple Attachments",
-    sender_name="Dave Sender",
-    sender_address="dave@example.com",
-    received=datetime(2026, 3, 6, 11, 30, 0, tzinfo=timezone.utc),
-    body_preview="This email has multiple attachments.",
-    body="<html><body><p>This email has multiple attachments.</p></body></html>",
-    body_type="HTML",
+    sender=("Dave Sender", "dave@example.com"),
+    received="2026-03-06T11:30:00Z",
     has_attachments=True,
-    attachments=[MOCK_ATTACHMENT_FILE, MOCK_ATTACHMENT_IMAGE],
 )
-
-MOCK_DRAFT_MESSAGE: MockMessage = make_mock_message(
-    object_id="outlook-draft-id-1",
+MOCK_DRAFT_MESSAGE = graph_message(
+    "outlook-draft-id-1",
     conversation_id="outlook-conv-draft-1",
     subject="Draft Email",
-    sender_name="Eve Sender",
-    sender_address="eve@example.com",
-    received=datetime(2026, 3, 6, 8, 0, 0, tzinfo=timezone.utc),
+    sender=("Eve Sender", "eve@example.com"),
+    received="2026-03-06T08:00:00Z",
     body_preview="This is a draft email.",
-    body="<html><body><p>This is a draft email.</p></body></html>",
-    is_read=True,
     is_draft=True,
-    categories=[],
+    folder="drafts",
 )
-
-MOCK_STARRED_MESSAGE: MockMessage = make_mock_message(
-    object_id="outlook-msg-id-5",
+MOCK_STARRED_MESSAGE = graph_message(
+    "outlook-msg-id-5",
     conversation_id="outlook-conv-id-5",
     subject="Starred/Flagged Email",
-    sender_name="Frank Sender",
-    sender_address="frank@example.com",
-    received=datetime(2026, 3, 6, 7, 0, 0, tzinfo=timezone.utc),
-    body_preview="This email is flagged.",
-    body="<html><body><p>This email is flagged.</p></body></html>",
+    sender=("Frank Sender", "frank@example.com"),
+    received="2026-03-06T07:00:00Z",
     categories=["Important"],
     flag_status="flagged",
 )
-
-MOCK_UNREAD_MESSAGE: MockMessage = make_mock_message(
-    object_id="outlook-msg-id-6",
+MOCK_UNREAD_MESSAGE = graph_message(
+    "outlook-msg-id-6",
     conversation_id="outlook-conv-id-6",
     subject="Unread Email",
-    sender_name="Grace Sender",
-    sender_address="grace@example.com",
-    received=datetime(2026, 3, 6, 6, 0, 0, tzinfo=timezone.utc),
-    body_preview="This email is unread.",
-    body="<html><body><p>This email is unread.</p></body></html>",
+    sender=("Grace Sender", "grace@example.com"),
+    received="2026-03-06T06:00:00Z",
     is_read=False,
-    categories=[],
 )
-
-# A thread with two messages sharing the same conversation_id
-MOCK_THREAD_MESSAGE_1: MockMessage = make_mock_message(
-    object_id="outlook-thread-msg-1",
-    conversation_id="outlook-conv-thread-1",
-    subject="Thread Email",
-    sender_name="Hank Sender",
-    sender_address="hank@example.com",
-    received=datetime(2026, 3, 6, 9, 0, 0, tzinfo=timezone.utc),
-    body_preview="First message in thread.",
-    body="<html><body><p>First message in thread.</p></body></html>",
-)
-
-MOCK_THREAD_MESSAGE_2: MockMessage = make_mock_message(
-    object_id="outlook-thread-msg-2",
+# Thread: reply listed first to prove client-side chronological sorting.
+MOCK_THREAD_MESSAGE_2 = graph_message(
+    "outlook-thread-msg-2",
     conversation_id="outlook-conv-thread-1",
     subject="Re: Thread Email",
-    sender_name="Iris Recipient",
-    sender_address="iris@example.com",
-    received=datetime(2026, 3, 6, 9, 30, 0, tzinfo=timezone.utc),
-    body_preview="Reply in thread.",
-    body="<html><body><p>Reply in thread.</p></body></html>",
+    sender=("Iris Recipient", "iris@example.com"),
+    received="2026-03-06T09:30:00Z",
+    folder="sentitems",
+)
+MOCK_THREAD_MESSAGE_1 = graph_message(
+    "outlook-thread-msg-1",
+    conversation_id="outlook-conv-thread-1",
+    subject="Thread Email",
+    sender=("Hank Sender", "hank@example.com"),
+    received="2026-03-06T09:00:00Z",
 )
 
-# ---------------------------------------------------------------------------
-# Delta / sync response fixtures
-# ---------------------------------------------------------------------------
-
-#: Normal delta response — two new messages, no removals.
-MOCK_DELTA_RESPONSE: dict = {
-    "@odata.context": ("https://graph.microsoft.com/v1.0/$metadata#Collection(message)"),
-    "value": [
-        {
-            "id": "outlook-msg-id-1",
-            "subject": "Plain Text Email",
-            "receivedDateTime": "2026-03-06T09:00:00Z",
-        },
-        {
-            "id": "outlook-msg-id-2",
-            "subject": "HTML Email Subject",
-            "receivedDateTime": "2026-03-06T10:00:00Z",
-        },
-    ],
-    "@odata.deltaLink": (
-        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=abc123"
-    ),
-}
-
-#: Delta response that includes a soft-deleted message (``@removed`` annotation).
-MOCK_DELTA_RESPONSE_WITH_REMOVED: dict = {
-    "@odata.context": ("https://graph.microsoft.com/v1.0/$metadata#Collection(message)"),
-    "value": [
-        {
-            "id": "outlook-msg-id-1",
-            "subject": "New Message",
-            "receivedDateTime": "2026-03-06T09:00:00Z",
-        },
-        {
-            "id": "outlook-msg-id-deleted",
-            "@removed": {"reason": "deleted"},
-        },
-    ],
-    "@odata.deltaLink": (
-        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=def456"
-    ),
-}
-
-#: Empty delta response — no new or removed messages since last sync.
-MOCK_DELTA_RESPONSE_EMPTY: dict = {
-    "@odata.context": ("https://graph.microsoft.com/v1.0/$metadata#Collection(message)"),
-    "value": [],
-    "@odata.deltaLink": (
-        "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=ghi789"
-    ),
-}
-
-#: Simulated 410 Gone response body — deltaLink has expired, full re-sync needed.
-MOCK_DELTA_RESPONSE_EXPIRED: dict = {
-    "error": {
-        "code": "SyncStateNotFound",
-        "message": (
-            "The sync state generation is not found. "
-            "deltaLink may have expired. Please do a full sync."
-        ),
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Master categories (list_tags)
-# ---------------------------------------------------------------------------
-
-#: Mimics GET /me/outlook/masterCategories response value list.
-MOCK_MASTER_CATEGORIES: list[dict] = [
+MOCK_MASTER_CATEGORIES: list[dict[str, Any]] = [
     {"id": "cat-id-1", "displayName": "Work", "color": "preset0"},
     {"id": "cat-id-2", "displayName": "Personal", "color": "preset1"},
     {"id": "cat-id-3", "displayName": "Important", "color": "preset2"},
 ]
 
-# ---------------------------------------------------------------------------
-# Convenience account/mailbox fixtures
-# ---------------------------------------------------------------------------
+DELTA_ROOT = f"{GRAPH_ROOT}/me/mailFolders/inbox/messages/delta"
+
+MOCK_DELTA_RESPONSE: dict[str, Any] = {
+    "value": [
+        {"id": "outlook-msg-id-1", "subject": "Plain Text Email"},
+        {"id": "outlook-msg-id-2", "subject": "HTML Email Subject"},
+    ],
+    "@odata.deltaLink": f"{DELTA_ROOT}?$deltatoken=abc123",
+}
+MOCK_DELTA_RESPONSE_WITH_REMOVED: dict[str, Any] = {
+    "value": [
+        {"id": "outlook-msg-id-1", "subject": "New Message"},
+        {"id": "outlook-msg-id-deleted", "@removed": {"reason": "deleted"}},
+    ],
+    "@odata.deltaLink": f"{DELTA_ROOT}?$deltatoken=def456",
+}
+MOCK_DELTA_RESPONSE_EMPTY: dict[str, Any] = {
+    "value": [],
+    "@odata.deltaLink": f"{DELTA_ROOT}?$deltatoken=ghi789",
+}
+MOCK_DELTA_RESPONSE_EXPIRED: dict[str, Any] = {
+    "error": {
+        "code": "SyncStateNotFound",
+        "message": "The sync state generation is not found. Please do a full sync.",
+    }
+}
 
 
-#: A pre-authenticated account with all fixture messages in the inbox.
-def make_full_mock_account() -> MockAccount:
-    """Return a fully-populated ``MockAccount`` containing all fixture messages.
-
-    The inbox contains all non-draft messages; drafts folder contains
-    ``MOCK_DRAFT_MESSAGE``.  All messages are indexed by ``object_id`` for
-    ``get_message()`` lookups.
-    """
-    all_inbox_messages = [
+def make_full_tenant() -> FakeOutlookTenant:
+    """Return a tenant seeded with every fixture message (O365 required)."""
+    pytest.importorskip("O365")
+    tenant = FakeOutlookTenant()
+    for msg in (
         MOCK_PLAIN_TEXT_MESSAGE,
         MOCK_HTML_MESSAGE,
-        MOCK_ATTACHMENT_MESSAGE,
-        MOCK_MULTI_ATTACHMENT_MESSAGE,
         MOCK_STARRED_MESSAGE,
         MOCK_UNREAD_MESSAGE,
-        MOCK_THREAD_MESSAGE_1,
         MOCK_THREAD_MESSAGE_2,
-    ]
-    inbox = MockFolder("Inbox", all_inbox_messages)
-    drafts = MockFolder("Drafts", [MOCK_DRAFT_MESSAGE])
-    archive = MockFolder("Archive", [])
+        MOCK_THREAD_MESSAGE_1,
+        MOCK_DRAFT_MESSAGE,
+    ):
+        tenant.add(msg)
+    tenant.add(MOCK_ATTACHMENT_MESSAGE, [MOCK_ATTACHMENT_FILE])
+    tenant.add(MOCK_MULTI_ATTACHMENT_MESSAGE, [MOCK_ATTACHMENT_FILE, MOCK_ATTACHMENT_IMAGE])
+    tenant.categories = copy.deepcopy(MOCK_MASTER_CATEGORIES)
+    return tenant
 
-    all_messages = {m.object_id: m for m in all_inbox_messages}
-    all_messages[MOCK_DRAFT_MESSAGE.object_id] = MOCK_DRAFT_MESSAGE
 
-    mailbox = MockMailbox(
-        inbox=inbox,
-        drafts=drafts,
-        archive=archive,
-        messages_by_id=all_messages,
-    )
-    account = MockAccount(is_authenticated=True, mailbox=mailbox)
+def make_full_mock_account():
+    """Return a real ``O365.Account`` backed by :func:`make_full_tenant`.
+
+    The tenant is reachable as ``account.con.session`` (a :class:`FakeGraph`)
+    and ``account.tenant``.
+    """
+    tenant = make_full_tenant()
+    account = tenant.account()
+    account.tenant = tenant
     return account
+
+
+def make_outlook_provider(tenant: FakeOutlookTenant | None = None, **kwargs: Any):
+    """Return an ``OutlookProvider`` wired to *tenant* (default: full tenant)."""
+    from iobox.providers.o365.email import OutlookProvider
+
+    tenant = tenant or make_full_tenant()
+    provider = OutlookProvider(auth=FakeAuth(tenant.account()), **kwargs)
+    provider.tenant = tenant  # type: ignore[attr-defined]
+    return provider

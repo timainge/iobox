@@ -1,1259 +1,511 @@
 """
 Unit tests for ``OutlookProvider``.
 
-Tests all abstract methods with mocked python-o365 objects from
-``tests.fixtures.mock_outlook_responses``.
+The provider runs on top of the **real** python-o365 objects (``Account``,
+``Connection``, ``MailBox``, ``Message``, ``QueryBuilder``); only HTTP is
+faked, by :class:`tests.fixtures.mock_outlook_responses.FakeOutlookTenant`.
+Assertions are made on the Graph requests that would go over the wire, so a
+call to a method python-o365 does not have (or a malformed URL / query)
+fails here the same way it would against a real tenant.
 """
 
 from __future__ import annotations
 
+import base64
 from datetime import date
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from iobox.providers.base import EmailQuery
-from iobox.providers.o365.email import OutlookProvider
-from tests.fixtures.mock_outlook_responses import (
-    MOCK_ATTACHMENT_MESSAGE,
-    MOCK_HTML_MESSAGE,
-    MOCK_MULTI_ATTACHMENT_MESSAGE,
-    MOCK_PLAIN_TEXT_MESSAGE,
-    MockAccount,
-    MockHttpResponse,
-    make_full_mock_account,
-    make_mock_account,
-    make_mock_message,
-)
+pytest.importorskip("O365")  # whole module needs the outlook extra
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+from iobox.providers.base import EmailQuery  # noqa: E402
+from iobox.providers.o365.auth import IMMUTABLE_ID_PREFER  # noqa: E402
+from iobox.providers.o365.email import OutlookBatchError, OutlookProvider  # noqa: E402
+from tests.fixtures.mock_outlook_responses import (  # noqa: E402
+    ATTACHMENT_PDF_BYTES,
+    ATTACHMENT_PNG_BYTES,
+    FakeAuth,
+    FakeOutlookTenant,
+    graph_message,
+    make_full_tenant,
+    make_outlook_provider,
+    make_real_account,
+)
 
 
 @pytest.fixture
 def provider() -> OutlookProvider:
-    """Return an OutlookProvider pre-wired with a full mock account."""
-    p = OutlookProvider()
-    account = make_full_mock_account()
-    p._account = account
-    p._mailbox = account.mailbox()
-    return p
+    return make_outlook_provider()
 
 
 @pytest.fixture
-def single_msg_provider() -> OutlookProvider:
-    """Provider with a single plain-text message."""
-    p = OutlookProvider()
-    msg = make_mock_message()
-    account = make_mock_account(messages=[msg])
-    p._account = account
-    p._mailbox = account.mailbox()
-    return p
+def tenant(provider: OutlookProvider) -> FakeOutlookTenant:
+    return provider.tenant  # type: ignore[attr-defined,no-any-return]
 
 
 # ---------------------------------------------------------------------------
-# _message_to_email_data
-# ---------------------------------------------------------------------------
-
-
-class TestMessageToEmailData:
-    def test_basic_fields(self, provider):
-        msg = MOCK_PLAIN_TEXT_MESSAGE
-        data = provider._message_to_email_data(msg, include_body=True)
-        assert data["message_id"] == "outlook-msg-id-1"
-        assert data["thread_id"] == "outlook-conv-id-1"
-        assert data["subject"] == "Plain Text Email"
-        assert "Bob Sender" in data["from_"]
-        assert "bob@example.com" in data["from_"]
-        assert data["snippet"] == "This is a plain text email."
-        assert data["labels"] == ["Work"]
-
-    def test_html_content_type(self, provider):
-        data = provider._message_to_email_data(MOCK_HTML_MESSAGE, include_body=True)
-        assert data["content_type"] == "text/html"
-
-    def test_plain_text_content_type(self, provider):
-        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=True)
-        assert data["content_type"] == "text/plain"
-
-    def test_body_included(self, provider):
-        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=True)
-        assert "body" in data
-        assert data["body"] == "This is a plain text email."
-
-    def test_body_excluded(self, provider):
-        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=False)
-        assert "body" not in data
-        assert "content_type" not in data
-        assert "attachments" not in data
-
-    def test_attachments_present(self, provider):
-        data = provider._message_to_email_data(MOCK_ATTACHMENT_MESSAGE, include_body=True)
-        assert len(data["attachments"]) == 1
-        att = data["attachments"][0]
-        assert att["id"] == "outlook-attach-id-1"
-        assert att["filename"] == "document.pdf"
-        assert att["mime_type"] == "application/pdf"
-        assert att["size"] == 1024
-
-    def test_multiple_attachments(self, provider):
-        data = provider._message_to_email_data(MOCK_MULTI_ATTACHMENT_MESSAGE, include_body=True)
-        assert len(data["attachments"]) == 2
-
-    def test_no_attachments(self, provider):
-        data = provider._message_to_email_data(MOCK_HTML_MESSAGE, include_body=True)
-        assert data["attachments"] == []
-
-    def test_date_iso_format(self, provider):
-        data = provider._message_to_email_data(MOCK_PLAIN_TEXT_MESSAGE, include_body=False)
-        assert "2026-03-06" in data["date"]
-
-    def test_sender_with_no_name(self, provider):
-        msg = make_mock_message(sender_name="", sender_address="anon@example.com")
-        data = provider._message_to_email_data(msg, include_body=False)
-        assert data["from_"] == "anon@example.com"
-
-    def test_empty_categories(self, provider):
-        data = provider._message_to_email_data(MOCK_HTML_MESSAGE, include_body=False)
-        assert data["labels"] == []
-
-
-# ---------------------------------------------------------------------------
-# authenticate
+# Authentication / ImmutableId (O365-01)
 # ---------------------------------------------------------------------------
 
 
 class TestAuthenticate:
-    @patch("iobox.providers.o365.auth.get_outlook_account")
-    def test_authenticate_sets_account_and_mailbox(self, mock_get_acct):
-        mock_account = make_mock_account()
-        mock_get_acct.return_value = mock_account
-
-        p = OutlookProvider()
+    def test_auth_path_does_not_touch_session(self) -> None:
+        """Old code did account.con.session.headers.update() → AttributeError
+        on a real account, whose session is None until the first request."""
+        account = make_real_account()
+        account.con.session = None
+        account.con.default_headers = {}
+        p = OutlookProvider(auth=FakeAuth(account))
         p.authenticate()
-
-        mock_get_acct.assert_called_once()
-        assert p._account is mock_account
+        assert account.con.default_headers["Prefer"] == IMMUTABLE_ID_PREFER
         assert p._mailbox is not None
 
-    @patch("iobox.providers.o365.auth.get_outlook_account")
-    def test_authenticate_uses_active_account(self, mock_get_acct):
-        from iobox.accounts import get_active_account, set_active_account
+    def test_every_request_carries_immutable_id(self, provider, tenant) -> None:
+        provider.search_emails(EmailQuery(max_results=5))
+        provider.get_email_content("outlook-msg-id-3")
+        provider.mark_read("outlook-msg-id-1")
+        assert tenant.graph.calls
+        for call in tenant.graph.calls:
+            assert IMMUTABLE_ID_PREFER in call.headers.get("Prefer", ""), call.path
 
-        mock_get_acct.return_value = make_mock_account()
-        previous = get_active_account()
-        set_active_account("corp@company.com")
-        try:
-            OutlookProvider().authenticate()
-        finally:
-            set_active_account(previous)
+    def test_legacy_path_uses_active_account_and_mode(self) -> None:
+        account = make_real_account()
+        with (
+            patch(
+                "iobox.providers.o365.auth.get_outlook_account", return_value=account
+            ) as get_acct,
+            patch("iobox.accounts.get_active_account", return_value="corp@x.com"),
+        ):
+            OutlookProvider(mode="readonly").authenticate()
+        get_acct.assert_called_once_with(account="corp@x.com", mode="readonly")
 
-        mock_get_acct.assert_called_once_with(account="corp@company.com")
-
-    @patch("iobox.providers.o365.auth.get_outlook_account")
-    def test_authenticate_sets_immutable_id_header(self, mock_get_acct):
-        mock_account = make_mock_account()
-        mock_get_acct.return_value = mock_account
-
-        p = OutlookProvider()
-        p.authenticate()
-
-        assert p._account.con.session.headers.get("Prefer") == 'IdType="ImmutableId"'
-
-
-# ---------------------------------------------------------------------------
-# get_profile
-# ---------------------------------------------------------------------------
-
-
-class TestGetProfile:
-    def test_returns_provider_and_auth_status(self, provider):
-        result = provider.get_profile()
-        assert result["provider"] == "outlook"
-        assert result["authenticated"] is True
-
-    def test_unauthenticated_profile(self):
-        p = OutlookProvider()
-        account = MockAccount(is_authenticated=False)
-        p._account = account
-        p._mailbox = account.mailbox()
-        result = p.get_profile()
-        assert result["authenticated"] is False
+    def test_get_profile(self, provider) -> None:
+        profile = provider.get_profile()
+        assert profile["provider"] == "outlook"
+        assert profile["email"] == "user@example.com"
 
 
 # ---------------------------------------------------------------------------
-# search_emails
+# Message conversion
 # ---------------------------------------------------------------------------
 
 
-class TestSearchEmails:
-    def test_search_returns_metadata_only(self, provider):
-        query = EmailQuery(max_results=10)
-        results = provider.search_emails(query)
-        # Should return results without body
-        assert isinstance(results, list)
+class TestMessageToEmailData:
+    def test_basic_fields(self, provider) -> None:
+        data = provider.get_email_content("outlook-msg-id-2")
+        assert data["message_id"] == "outlook-msg-id-2"
+        assert data["thread_id"] == "outlook-conv-id-2"
+        assert data["subject"] == "HTML Email Subject"
+        assert data["from_"] == "Carol Sender <carol@example.com>"
+        assert data["to"] == "Me <me@example.com>"
+        assert data["date"].startswith("2026-03-06T10:00:00")
+        assert data["labels"] == []
+        assert data["snippet"] == "This is the HTML version of the email."
+
+    def test_html_content_type(self, provider) -> None:
+        assert provider.get_email_content("outlook-msg-id-2")["content_type"] == "text/html"
+
+    def test_text_content_type_is_case_insensitive(self, provider) -> None:
+        """O365-14: Graph returns bodyType "text" (lower case); the old code
+        compared against "Text" and labelled every plain-text body as HTML."""
+        data = provider.get_email_content("outlook-msg-id-1")
+        assert data["content_type"] == "text/plain"
+        assert data["body"] == "This is a plain text email."
+
+    def test_metadata_only_in_search(self, provider) -> None:
+        results = provider.search_emails(EmailQuery(max_results=50))
+        assert results
         for r in results:
             assert "body" not in r
+            assert "attachments" not in r
 
-    def test_search_with_raw_query(self, provider):
-        query = EmailQuery(raw_query="from:alice@example.com", max_results=5)
-        results = provider.search_emails(query)
-        assert isinstance(results, list)
+    def test_categories_become_labels(self, provider) -> None:
+        assert provider.get_email_content("outlook-msg-id-1")["labels"] == ["Work"]
 
-    def test_search_with_text_uses_search_path(self, provider):
-        query = EmailQuery(text="important meeting", max_results=5)
-        results = provider.search_emails(query)
-        assert isinstance(results, list)
 
-    def test_search_with_structured_filter(self, provider):
-        query = EmailQuery(from_addr="bob@example.com", max_results=5)
-        results = provider.search_emails(query)
-        assert isinstance(results, list)
+# ---------------------------------------------------------------------------
+# Attachments (O365-07)
+# ---------------------------------------------------------------------------
 
-    def test_search_respects_max_results(self, provider):
-        query = EmailQuery(max_results=2)
-        results = provider.search_emails(query)
-        assert len(results) <= 2
 
-    def test_search_returns_messages_from_all_folders(self, provider):
-        """search_emails must find messages outside the Inbox (all-mail search).
+class TestAttachments:
+    def test_attachment_metadata_is_fetched(self, provider, tenant) -> None:
+        """The old code iterated msg.attachments, which python-o365 leaves
+        empty unless attachments are explicitly downloaded."""
+        data = provider.get_email_content("outlook-msg-id-4")
+        assert [a["filename"] for a in data["attachments"]] == ["document.pdf", "screenshot.png"]
+        pdf, png = data["attachments"]
+        assert pdf["mime_type"] == "application/pdf"
+        assert pdf["size"] == len(ATTACHMENT_PDF_BYTES)
+        assert pdf["inline"] is False
+        assert png["inline"] is True
+        assert png["content_id"] == "logo@cid"
+        tenant.graph.last("GET", r"/me/messages/outlook-msg-id-4/attachments")
 
-        ``MOCK_DRAFT_MESSAGE`` is stored in ``_messages_by_id`` but placed in
-        the Drafts folder — NOT the Inbox.  The old ``inbox_folder()``-based
-        implementation would miss it; the new ``self._mb.get_messages()`` path
-        should return it.
-        """
-        query = EmailQuery(max_results=100)
-        results = provider.search_emails(query)
-        result_ids = {r["message_id"] for r in results}
-        assert "outlook-draft-id-1" in result_ids, (
-            "Draft message (non-inbox) should be found by search_emails"
+    def test_no_attachment_request_without_attachments(self, provider, tenant) -> None:
+        assert provider.get_email_content("outlook-msg-id-2")["attachments"] == []
+        assert not tenant.graph.find("GET", r".*/attachments")
+
+    def test_download_returns_raw_bytes(self, provider, tenant) -> None:
+        """Graph's JSON contentBytes is base64 text; $value is the real file."""
+        data = provider.download_attachment("outlook-msg-id-4", "outlook-attach-id-2")
+        assert data == ATTACHMENT_PNG_BYTES
+        assert data != base64.b64encode(ATTACHMENT_PNG_BYTES)
+        tenant.graph.last(
+            "GET", r"/me/messages/outlook-msg-id-4/attachments/outlook-attach-id-2/\$value"
         )
 
-
-# ---------------------------------------------------------------------------
-# get_email_content
-# ---------------------------------------------------------------------------
-
-
-class TestGetEmailContent:
-    def test_returns_full_email_data(self, provider):
-        data = provider.get_email_content("outlook-msg-id-1")
-        assert data["message_id"] == "outlook-msg-id-1"
-        assert "body" in data
-        assert "content_type" in data
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.get_email_content("nonexistent-id")
+    def test_download_missing_attachment(self, provider) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            provider.download_attachment("outlook-msg-id-3", "nope")
 
 
 # ---------------------------------------------------------------------------
-# batch_get_emails
+# Search (O365-04, O365-05)
 # ---------------------------------------------------------------------------
 
 
-class TestBatchGetEmails:
-    def test_returns_multiple(self, provider):
-        results = provider.batch_get_emails(["outlook-msg-id-1", "outlook-msg-id-2"])
-        assert len(results) == 2
-        ids = {r["message_id"] for r in results}
-        assert "outlook-msg-id-1" in ids
-        assert "outlook-msg-id-2" in ids
-
-    def test_skips_missing_messages(self, provider):
-        results = provider.batch_get_emails(["outlook-msg-id-1", "does-not-exist"])
-        assert len(results) == 1
-
-    def test_empty_list(self, provider):
-        results = provider.batch_get_emails([])
-        assert results == []
-
-
-# ---------------------------------------------------------------------------
-# get_thread
-# ---------------------------------------------------------------------------
-
-
-class TestGetThread:
-    def test_returns_thread_messages(self, provider):
-        results = provider.get_thread("outlook-conv-thread-1")
-        assert isinstance(results, list)
-        for r in results:
-            assert "body" in r
-
-    def test_empty_thread(self, provider):
-        results = provider.get_thread("nonexistent-conv-id")
-        assert isinstance(results, list)
-
-    def test_get_thread_finds_messages_across_all_folders(self, provider):
-        """get_thread must find thread messages outside the Inbox.
-
-        Adds a message with the target ``conversationId`` to ``_messages_by_id``
-        without placing it in the inbox.  The new ``self._mb.get_messages()``
-        implementation should surface it; the old ``inbox_folder()`` path
-        would not.
-        """
-        extra_msg = make_mock_message(
-            object_id="thread-sent-msg",
-            conversation_id="outlook-conv-thread-1",
-            subject="Re: Thread Email (sent copy)",
-        )
-        # Register in the global lookup only — not in the inbox folder.
-        provider._mailbox._messages_by_id["thread-sent-msg"] = extra_msg
-
-        results = provider.get_thread("outlook-conv-thread-1")
-        result_ids = {r["message_id"] for r in results}
-        assert "thread-sent-msg" in result_ids, (
-            "Non-inbox thread message should be returned by get_thread"
-        )
-
-
-# ---------------------------------------------------------------------------
-# download_attachment
-# ---------------------------------------------------------------------------
-
-
-class TestDownloadAttachment:
-    def test_download_returns_bytes(self, provider):
-        content = provider.download_attachment("outlook-msg-id-3", "outlook-attach-id-1")
-        assert isinstance(content, bytes)
-        assert content == b"%PDF-1.4 mock pdf content"
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.download_attachment("nonexistent", "att-id")
-
-    def test_raises_on_missing_attachment(self, provider):
-        with pytest.raises(ValueError, match="Attachment.*not found"):
-            provider.download_attachment("outlook-msg-id-3", "nonexistent-att")
-
-
-# ---------------------------------------------------------------------------
-# send_message
-# ---------------------------------------------------------------------------
-
-
-class TestSendMessage:
-    def test_send_basic(self, provider):
-        result = provider.send_message(
-            to="recipient@example.com",
-            subject="Test",
-            body="Hello",
-        )
-        assert result["status"] == "sent"
-        assert "message_id" in result
-
-    def test_send_with_cc_bcc(self, provider):
-        result = provider.send_message(
-            to="recipient@example.com",
-            subject="Test",
-            body="Hello",
-            cc="cc@example.com",
-            bcc="bcc@example.com",
-        )
-        assert result["status"] == "sent"
-
-    def test_send_html_body(self, provider):
-        result = provider.send_message(
-            to="recipient@example.com",
-            subject="Test",
-            body="<p>Hello</p>",
-            content_type="html",
-        )
-        assert result["status"] == "sent"
-        # Verify the new message had body_type set to HTML
-        new_msg = provider._mailbox._new_messages[-1]
-        assert new_msg.body_type == "HTML"
-
-    def test_send_with_attachments(self, provider):
-        result = provider.send_message(
-            to="recipient@example.com",
-            subject="Test",
-            body="Hello",
-            attachments=["/tmp/file.pdf"],
-        )
-        assert result["status"] == "sent"
-
-    def test_send_marks_message_as_sent(self, provider):
-        provider.send_message(to="recipient@example.com", subject="Test", body="Hello")
-        new_msg = provider._mailbox._new_messages[-1]
-        assert new_msg._sent is True
-
-    def test_send_raises_runtime_error_on_failure(self, provider):
-        """send() returning False must raise RuntimeError."""
-        # Patch new_message() to return a message whose send() returns False.
-        failing_msg = make_mock_message(object_id="fail-send-id")
-        failing_msg.send = lambda: False  # type: ignore[method-assign]
-        provider._mailbox.new_message = lambda: failing_msg  # type: ignore[method-assign]
-
-        with pytest.raises(RuntimeError, match="Failed to send message"):
-            provider.send_message(to="recipient@example.com", subject="Test", body="Hello")
-
-
-# ---------------------------------------------------------------------------
-# forward_message
-# ---------------------------------------------------------------------------
-
-
-class TestForwardMessage:
-    def test_forward_basic(self, provider):
-        result = provider.forward_message("outlook-msg-id-1", to="fwd@example.com")
-        assert result["status"] == "sent"
-        assert "message_id" in result
-
-    def test_forward_with_comment(self, provider):
-        result = provider.forward_message("outlook-msg-id-1", to="fwd@example.com", comment="FYI")
-        assert result["status"] == "sent"
-
-    def test_forward_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.forward_message("nonexistent", to="fwd@example.com")
-
-    def test_forward_raises_runtime_error_on_failure(self, provider):
-        """fwd.send() returning False must raise RuntimeError."""
-        # Make the forwarded stub's send() return False.
-        original_msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
-        fwd_stub = make_mock_message(object_id="fwd-fail-id")
-        fwd_stub.send = lambda: False  # type: ignore[method-assign]
-        original_msg.forward = lambda: fwd_stub  # type: ignore[method-assign]
-
-        with pytest.raises(RuntimeError, match="Failed to forward message"):
-            provider.forward_message("outlook-msg-id-1", to="fwd@example.com")
-
-
-# ---------------------------------------------------------------------------
-# create_draft
-# ---------------------------------------------------------------------------
-
-
-class TestCreateDraft:
-    def test_create_basic_draft(self, provider):
-        result = provider.create_draft(
-            to="recipient@example.com",
-            subject="Draft Test",
-            body="Draft body",
-        )
-        assert result["status"] == "draft"
-        assert "message_id" in result
-
-    def test_create_draft_with_cc_bcc(self, provider):
-        result = provider.create_draft(
-            to="recipient@example.com",
-            subject="Draft",
-            body="body",
-            cc="cc@example.com",
-            bcc="bcc@example.com",
-        )
-        assert result["status"] == "draft"
-
-    def test_create_html_draft(self, provider):
-        provider.create_draft(
-            to="r@example.com",
-            subject="HTML Draft",
-            body="<p>Hi</p>",
-            content_type="html",
-        )
-        new_msg = provider._mailbox._new_messages[-1]
-        assert new_msg.body_type == "HTML"
-
-    def test_draft_saved(self, provider):
-        provider.create_draft(to="r@example.com", subject="Draft", body="body")
-        new_msg = provider._mailbox._new_messages[-1]
-        assert new_msg._draft_saved is True
-
-    def test_create_draft_adds_attachments(self, provider):
-        from unittest.mock import MagicMock
-
-        msg = MagicMock()
-        msg.save_draft.return_value = True
-        msg.object_id = "draft-with-files"
-        provider._mailbox.new_message = lambda: msg  # type: ignore[method-assign]
-
-        provider.create_draft(
-            to="r@example.com",
-            subject="Draft",
-            body="body",
-            attachments=["/tmp/a.pdf", "/tmp/b.png"],
-        )
-
-        assert [c.args[0] for c in msg.attachments.add.call_args_list] == [
-            "/tmp/a.pdf",
-            "/tmp/b.png",
-        ]
-
-    def test_create_draft_raises_runtime_error_on_failure(self, provider):
-        """save_draft() returning False must raise RuntimeError."""
-        failing_msg = make_mock_message(object_id="fail-draft-id")
-        failing_msg.save_draft = lambda: False  # type: ignore[method-assign]
-        provider._mailbox.new_message = lambda: failing_msg  # type: ignore[method-assign]
-
-        with pytest.raises(RuntimeError, match="Failed to save draft"):
-            provider.create_draft(to="r@example.com", subject="Draft", body="body")
-
-
-# ---------------------------------------------------------------------------
-# list_drafts
-# ---------------------------------------------------------------------------
-
-
-class TestListDrafts:
-    def test_list_drafts_returns_summaries(self, provider):
-        # Add a draft to the drafts folder
-        results = provider.list_drafts(max_results=10)
-        assert isinstance(results, list)
-        for d in results:
-            assert "message_id" in d
-            assert "subject" in d
-            assert "snippet" in d
-
-
-# ---------------------------------------------------------------------------
-# send_draft
-# ---------------------------------------------------------------------------
-
-
-class TestSendDraft:
-    def test_send_existing_draft(self, provider):
-        result = provider.send_draft("outlook-draft-id-1")
-        assert result["status"] == "sent"
-        assert result["message_id"] == "outlook-draft-id-1"
-
-    def test_send_draft_raises_on_missing(self, provider):
-        with pytest.raises(ValueError, match="Draft not found"):
-            provider.send_draft("nonexistent-draft")
-
-    def test_send_draft_raises_runtime_error_on_failure(self, provider):
-        """send() returning False on an existing draft must raise RuntimeError."""
-        draft_msg = provider._mailbox.get_message(object_id="outlook-draft-id-1")
-        draft_msg.send = lambda: False  # type: ignore[method-assign]
-
-        with pytest.raises(RuntimeError, match="Failed to send draft"):
-            provider.send_draft("outlook-draft-id-1")
-
-
-# ---------------------------------------------------------------------------
-# delete_draft
-# ---------------------------------------------------------------------------
-
-
-class TestDeleteDraft:
-    def test_delete_existing_draft(self, provider):
-        result = provider.delete_draft("outlook-draft-id-1")
-        assert result["status"] == "deleted"
-        assert result["message_id"] == "outlook-draft-id-1"
-
-    def test_delete_draft_raises_on_missing(self, provider):
-        with pytest.raises(ValueError, match="Draft not found"):
-            provider.delete_draft("nonexistent-draft")
-
-    def test_delete_draft_raises_runtime_error_on_failure(self, provider):
-        """delete() returning False on an existing draft must raise RuntimeError."""
-        draft_msg = provider._mailbox.get_message(object_id="outlook-draft-id-1")
-        draft_msg.delete = lambda: False  # type: ignore[method-assign]
-
-        with pytest.raises(RuntimeError, match="Failed to delete draft"):
-            provider.delete_draft("outlook-draft-id-1")
-
-
-# ---------------------------------------------------------------------------
-# mark_read
-# ---------------------------------------------------------------------------
-
-
-class TestMarkRead:
-    def test_mark_read(self, provider):
-        provider.mark_read("outlook-msg-id-6", read=True)
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-6")
-        assert msg.is_read is True
-        assert msg._read_marked is True
-
-    def test_mark_unread(self, provider):
-        provider.mark_read("outlook-msg-id-1", read=False)
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
-        assert msg.is_read is False
-        assert msg._read_marked is False
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.mark_read("nonexistent", read=True)
-
-
-# ---------------------------------------------------------------------------
-# set_star
-# ---------------------------------------------------------------------------
-
-
-class TestSetStar:
-    def test_star_message(self, provider):
-        provider.set_star("outlook-msg-id-1", starred=True)
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
-        assert msg.flag == {"flagStatus": "flagged"}
-        assert msg._message_saved is True
-
-    def test_unstar_message(self, provider):
-        provider.set_star("outlook-msg-id-5", starred=False)
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-5")
-        assert msg.flag == {"flagStatus": "notFlagged"}
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.set_star("nonexistent", starred=True)
-
-
-# ---------------------------------------------------------------------------
-# archive
-# ---------------------------------------------------------------------------
-
-
-class TestArchive:
-    def test_archive_message(self, provider):
-        provider.archive("outlook-msg-id-1")
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
-        assert msg._moved_to is not None
-        assert msg._moved_to.name == "Archive"
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.archive("nonexistent")
-
-
-# ---------------------------------------------------------------------------
-# trash / untrash
-# ---------------------------------------------------------------------------
-
-
-class TestTrash:
-    def test_trash_message(self, provider):
-        provider.trash("outlook-msg-id-1")
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
-        assert msg._deleted is True
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.trash("nonexistent")
-
-
-class TestUntrash:
-    def test_untrash_message(self, provider):
-        provider.untrash("outlook-msg-id-1")
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
-        assert msg._moved_to is not None
-        assert msg._moved_to.name == "Inbox"
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.untrash("nonexistent")
-
-
-# ---------------------------------------------------------------------------
-# add_tag / remove_tag
-# ---------------------------------------------------------------------------
-
-
-class TestAddTag:
-    def test_add_new_category(self, provider):
-        provider.add_tag("outlook-msg-id-2", "NewTag")
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-2")
-        assert "NewTag" in msg.categories
-        assert msg._message_saved is True
-
-    def test_add_existing_category_is_noop(self, provider):
-        # Use a fresh message to avoid shared state from other tests
-        msg = make_mock_message(object_id="noop-add-tag", categories=["Work"])
-        provider._mailbox._messages_by_id["noop-add-tag"] = msg
-        provider.add_tag("noop-add-tag", "Work")
-        assert msg.categories.count("Work") == 1
-        # save_message should NOT be called for no-op
-        assert msg._message_saved is False
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.add_tag("nonexistent", "Tag")
-
-
-class TestRemoveTag:
-    def test_remove_existing_category(self, provider):
-        provider.remove_tag("outlook-msg-id-1", "Work")
-        msg = provider._mailbox.get_message(object_id="outlook-msg-id-1")
-        assert "Work" not in msg.categories
-        assert msg._message_saved is True
-
-    def test_remove_nonexistent_category_is_noop(self, provider):
-        msg = make_mock_message(object_id="noop-remove-tag", categories=[])
-        provider._mailbox._messages_by_id["noop-remove-tag"] = msg
-        provider.remove_tag("noop-remove-tag", "NonExistent")
-        assert msg._message_saved is False
-
-    def test_raises_on_missing_message(self, provider):
-        with pytest.raises(ValueError, match="Message not found"):
-            provider.remove_tag("nonexistent", "Tag")
-
-
-# ---------------------------------------------------------------------------
-# list_tags
-# ---------------------------------------------------------------------------
-
-
-class TestListTags:
-    def test_list_tags_returns_category_mapping(self, provider):
-        # We need to mock con.get and con.protocol for list_tags
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "value": [
-                {"displayName": "Work", "color": "preset0"},
-                {"displayName": "Personal", "color": "preset1"},
-            ]
-        }
-        provider._account.con.get = MagicMock(return_value=mock_resp)
-        provider._account.con.protocol = MagicMock()
-        provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
-
-        result = provider.list_tags()
-        assert result == {"Work": "Work", "Personal": "Personal"}
-
-    def test_list_tags_empty(self, provider):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"value": []}
-        provider._account.con.get = MagicMock(return_value=mock_resp)
-        provider._account.con.protocol = MagicMock()
-        provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
-
-        result = provider.list_tags()
-        assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# _build_outlook_filter
-# ---------------------------------------------------------------------------
-
-
-class TestBuildOutlookFilter:
-    def test_empty_query(self, provider):
-        q = EmailQuery()
-        result = provider._build_outlook_filter(q)
-        assert result._filters == []
-
-    def test_from_addr(self, provider):
-        q = EmailQuery(from_addr="alice@example.com")
-        result = provider._build_outlook_filter(q)
-        assert any(
-            "from/emailAddress/address" in f[0] and f[2] == "alice@example.com"
-            for f in result._filters
-        )
-
-    def test_to_addr(self, provider):
-        q = EmailQuery(to_addr="bob@example.com")
-        result = provider._build_outlook_filter(q)
-        assert any("toRecipients" in f[0] and f[2] == "bob@example.com" for f in result._filters)
-
-    def test_subject(self, provider):
-        q = EmailQuery(subject="Report")
-        result = provider._build_outlook_filter(q)
-        assert any(
-            f[0] == "subject" and f[1] == "contains" and f[2] == "Report" for f in result._filters
-        )
-
-    def test_after_date(self, provider):
-        q = EmailQuery(after=date(2024, 3, 15))
-        result = provider._build_outlook_filter(q)
-        assert any("receivedDateTime" in f[0] and f[1] == "ge" for f in result._filters)
-
-    def test_before_date(self, provider):
-        q = EmailQuery(before=date(2024, 6, 1))
-        result = provider._build_outlook_filter(q)
-        assert any("receivedDateTime" in f[0] and f[1] == "lt" for f in result._filters)
-
-    def test_has_attachment_true(self, provider):
-        q = EmailQuery(has_attachment=True)
-        result = provider._build_outlook_filter(q)
-        assert any("hasAttachments" in f[0] and f[2] is True for f in result._filters)
-
-    def test_has_attachment_false(self, provider):
-        q = EmailQuery(has_attachment=False)
-        result = provider._build_outlook_filter(q)
-        assert any("hasAttachments" in f[0] and f[2] is False for f in result._filters)
-
-    def test_is_unread_true(self, provider):
-        q = EmailQuery(is_unread=True)
-        result = provider._build_outlook_filter(q)
-        assert any("isRead" in f[0] and f[2] is False for f in result._filters)
-
-    def test_is_unread_false(self, provider):
-        q = EmailQuery(is_unread=False)
-        result = provider._build_outlook_filter(q)
-        assert any("isRead" in f[0] and f[2] is True for f in result._filters)
-
-    def test_label(self, provider):
-        q = EmailQuery(label="Important")
-        result = provider._build_outlook_filter(q)
-        assert any("categories" in f[0] for f in result._filters)
-
-
-# ---------------------------------------------------------------------------
-# _build_outlook_search
-# ---------------------------------------------------------------------------
-
-
-class TestBuildOutlookSearch:
-    def test_empty_query(self, provider):
-        q = EmailQuery()
-        result = provider._build_outlook_search(q)
-        assert result == ""
-
-    def test_from_addr(self, provider):
-        q = EmailQuery(from_addr="alice@example.com")
-        assert "from:alice@example.com" in provider._build_outlook_search(q)
-
-    def test_to_addr(self, provider):
-        q = EmailQuery(to_addr="bob@example.com")
-        assert "to:bob@example.com" in provider._build_outlook_search(q)
-
-    def test_subject(self, provider):
-        q = EmailQuery(subject="Report")
-        assert "subject:Report" in provider._build_outlook_search(q)
-
-    def test_after(self, provider):
-        q = EmailQuery(after=date(2024, 3, 15))
-        assert "received>=2024-03-15" in provider._build_outlook_search(q)
-
-    def test_before(self, provider):
-        q = EmailQuery(before=date(2024, 6, 1))
-        assert "received<2024-06-01" in provider._build_outlook_search(q)
-
-    def test_has_attachment_true(self, provider):
-        q = EmailQuery(has_attachment=True)
-        assert "hasAttachments:true" in provider._build_outlook_search(q)
-
-    def test_has_attachment_false(self, provider):
-        q = EmailQuery(has_attachment=False)
-        assert "hasAttachments:false" in provider._build_outlook_search(q)
-
-    def test_is_unread_true(self, provider):
-        q = EmailQuery(is_unread=True)
-        assert "isRead:false" in provider._build_outlook_search(q)
-
-    def test_is_unread_false(self, provider):
-        q = EmailQuery(is_unread=False)
-        assert "isRead:true" in provider._build_outlook_search(q)
-
-    def test_label(self, provider):
-        q = EmailQuery(label="Work")
-        assert "category:Work" in provider._build_outlook_search(q)
-
-    def test_text(self, provider):
-        q = EmailQuery(text="quarterly report")
-        assert '"quarterly report"' in provider._build_outlook_search(q)
-
-    def test_all_fields_combined(self, provider):
-        q = EmailQuery(
-            text="important",
-            from_addr="cfo@corp.com",
-            to_addr="team@corp.com",
-            subject="Q4",
-            after=date(2024, 1, 1),
-            before=date(2024, 12, 31),
+class TestSearchFilterPath:
+    """Structured queries → $filter built with the real QueryBuilder."""
+
+    def _filter(self, provider, tenant, **kw) -> str:
+        provider.search_emails(EmailQuery(**kw))
+        call = tenant.graph.last("GET", r"/me/messages")
+        assert "$search" not in call.params
+        assert "$orderby" not in call.params
+        return str(call.params.get("$filter", ""))
+
+    def test_no_conditions_no_filter(self, provider, tenant) -> None:
+        assert self._filter(provider, tenant) == ""
+
+    def test_from(self, provider, tenant) -> None:
+        f = self._filter(provider, tenant, from_addr="boss@example.com")
+        assert f == "from/emailAddress/address eq 'boss@example.com'"
+
+    def test_to_uses_any_lambda(self, provider, tenant) -> None:
+        f = self._filter(provider, tenant, to_addr="me@example.com")
+        assert f == "toRecipients/any(r: r/emailAddress/address eq 'me@example.com')"
+
+    def test_label_uses_categories_any(self, provider, tenant) -> None:
+        f = self._filter(provider, tenant, label="Work")
+        assert f == "categories/any(c: c eq 'Work')"
+
+    def test_quotes_are_escaped(self, provider, tenant) -> None:
+        f = self._filter(provider, tenant, from_addr="o'brien@example.com", subject="it's")
+        assert "'o''brien@example.com'" in f
+        assert "contains(subject, 'it''s')" in f
+
+    def test_dates_and_flags(self, provider, tenant) -> None:
+        f = self._filter(
+            provider,
+            tenant,
+            after=date(2026, 1, 1),
+            before=date(2026, 2, 1),
             has_attachment=True,
             is_unread=True,
-            label="finance",
         )
-        result = provider._build_outlook_search(q)
-        assert "from:cfo@corp.com" in result
-        assert "to:team@corp.com" in result
-        assert "subject:Q4" in result
-        assert "received>=2024-01-01" in result
-        assert "received<2024-12-31" in result
-        assert "hasAttachments:true" in result
-        assert "isRead:false" in result
-        assert "category:finance" in result
-        assert '"important"' in result
+        assert "receivedDateTime ge 2026-01-01T00:00:00" in f
+        assert "receivedDateTime lt 2026-02-01T00:00:00" in f
+        assert "hasAttachments eq true" in f
+        assert "isRead eq false" in f
+        assert f.count(" and ") == 3
+
+    def test_is_unread_false(self, provider, tenant) -> None:
+        assert self._filter(provider, tenant, is_unread=False) == "isRead eq true"
+
+    def test_max_results_sent_as_top(self, provider, tenant) -> None:
+        provider.search_emails(EmailQuery(max_results=7))
+        assert tenant.graph.last("GET", r"/me/messages").params["$top"] == 7
+
+    def test_searches_all_folders(self, provider, tenant) -> None:
+        results = provider.search_emails(EmailQuery(max_results=50))
+        ids = {r["message_id"] for r in results}
+        assert "outlook-thread-msg-2" in ids  # lives in Sent Items
+        assert not tenant.graph.find("GET", r"/me/mailFolders/.*")
+
+
+class TestSearchKqlPath:
+    def _search(self, provider, tenant, **kw) -> str:
+        provider.search_emails(EmailQuery(**kw))
+        call = tenant.graph.last("GET", r"/me/messages")
+        assert "$filter" not in call.params
+        assert "$orderby" not in call.params
+        return str(call.params["$search"])
+
+    def test_text_search_is_not_single_quoted(self, provider, tenant) -> None:
+        """O365-05: QueryBuilder.search() produced "'from:x budget'" — one
+        quoted phrase — so field restrictions were never applied."""
+        s = self._search(provider, tenant, text="budget", from_addr="boss@example.com")
+        assert s == '"from:boss@example.com budget"'
+        assert "'" not in s
+
+    def test_values_with_spaces_are_quoted_and_escaped(self, provider, tenant) -> None:
+        s = self._search(provider, tenant, text="report", subject="quarterly results")
+        assert s == '"subject:\\"quarterly results\\" report"'
+
+    def test_dates_and_attachments(self, provider, tenant) -> None:
+        s = self._search(provider, tenant, text="x", after=date(2026, 1, 1), has_attachment=True)
+        assert s == '"received>=2026-01-01 hasAttachments:true x"'
+
+    def test_raw_query_passthrough(self, provider, tenant) -> None:
+        s = self._search(provider, tenant, raw_query='from:a@b.com subject:"hi there"')
+        assert s == '"from:a@b.com subject:\\"hi there\\""'
+
+    def test_unread_and_label_filtered_client_side(self, provider, tenant) -> None:
+        results = provider.search_emails(
+            EmailQuery(text="anything", is_unread=True, max_results=10)
+        )
+        assert {r["message_id"] for r in results} == {"outlook-msg-id-2", "outlook-msg-id-6"}
+        results = provider.search_emails(EmailQuery(text="anything", label="work"))
+        assert [r["message_id"] for r in results] == ["outlook-msg-id-1"]
+        s = str(tenant.graph.last("GET", r"/me/messages").params["$search"])
+        assert "isRead" not in s and "category" not in s
+
+    def test_build_search_helper(self, provider) -> None:
+        q = EmailQuery(from_addr="a@b.com", to_addr="c@d.com", has_attachment=False, text="hi")
+        assert (
+            provider._build_outlook_search(q) == "from:a@b.com to:c@d.com hasAttachments:false hi"
+        )
 
 
 # ---------------------------------------------------------------------------
-# _batch_graph_requests
+# Read
 # ---------------------------------------------------------------------------
 
 
-class TestBatchGraphRequests:
-    def test_batch_posts_to_batch_endpoint(self, provider):
-        provider._account.con.protocol = MagicMock()
-        provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"responses": [{"id": "1", "status": 200, "body": {}}]}
-        provider._account.con.post = MagicMock(return_value=mock_resp)
+class TestRead:
+    def test_get_email_content_missing(self, provider) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            provider.get_email_content("does-not-exist")
 
-        requests = [{"id": "1", "method": "PATCH", "url": "/me/messages/m1"}]
-        results = provider._batch_graph_requests(requests)
-        assert len(results) == 1
+    def test_batch_get_skips_missing(self, provider) -> None:
+        results = provider.batch_get_emails(["outlook-msg-id-1", "nope", "outlook-msg-id-2"])
+        assert [r["message_id"] for r in results] == ["outlook-msg-id-1", "outlook-msg-id-2"]
 
-    def test_batch_chunks_at_20(self, provider):
-        provider._account.con.protocol = MagicMock()
-        provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
+    def test_thread_sorted_client_side_without_orderby(self, provider, tenant) -> None:
+        msgs = provider.get_thread("outlook-conv-thread-1")
+        assert [m["message_id"] for m in msgs] == ["outlook-thread-msg-1", "outlook-thread-msg-2"]
+        call = tenant.graph.last("GET", r"/me/messages")
+        assert call.params["$filter"] == "conversationId eq 'outlook-conv-thread-1'"
+        assert "$orderby" not in call.params
 
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "responses": [{"id": str(i), "status": 200} for i in range(20)]
-        }
-        provider._account.con.post = MagicMock(return_value=mock_resp)
+    def test_empty_thread(self, provider) -> None:
+        assert provider.get_thread("no-such-conversation") == []
 
-        requests = [
-            {"id": str(i), "method": "PATCH", "url": f"/me/messages/m{i}"} for i in range(25)
+
+# ---------------------------------------------------------------------------
+# Send / forward / drafts (O365-14)
+# ---------------------------------------------------------------------------
+
+
+class TestSend:
+    def test_send_returns_real_message_id(self, provider, tenant) -> None:
+        """python-o365's sendMail path sets object_id = 'sent_message'."""
+        result = provider.send_message("a@x.com, b@x.com", "Hi", "Body", cc="c@x.com")
+        assert result["status"] == "sent"
+        assert result["message_id"] != "sent_message"
+        assert result["message_id"] in tenant.messages
+        sent = tenant.sent[-1]
+        assert [r["emailAddress"]["address"] for r in sent["toRecipients"]] == [
+            "a@x.com",
+            "b@x.com",
         ]
-        provider._batch_graph_requests(requests)
-        # Should make 2 POST calls (20 + 5)
-        assert provider._account.con.post.call_count == 2
+        assert sent["ccRecipients"][0]["emailAddress"]["address"] == "c@x.com"
+        assert sent["body"] == {"contentType": "text", "content": "Body"}
+
+    def test_send_html(self, provider, tenant) -> None:
+        provider.send_message("a@x.com", "Hi", "<b>x</b>", content_type="html")
+        assert tenant.sent[-1]["body"]["contentType"] == "html"
+
+    def test_send_with_attachment(self, provider, tenant, tmp_path: Path) -> None:
+        f = tmp_path / "note.txt"
+        f.write_bytes(b"hello")
+        provider.send_message("a@x.com", "Hi", "Body", attachments=[str(f)])
+        att = tenant.sent[-1]["attachments"][0]
+        assert att["name"] == "note.txt"
+        assert base64.b64decode(att["contentBytes"]) == b"hello"
+
+    def test_create_draft(self, provider, tenant) -> None:
+        result = provider.create_draft("a@x.com", "Draft", "Body", bcc="z@x.com")
+        assert result["status"] == "draft"
+        draft = tenant.messages[result["message_id"]]
+        assert draft["isDraft"] is True
+        assert draft["bccRecipients"][0]["emailAddress"]["address"] == "z@x.com"
+        assert not tenant.sent
+
+    def test_forward_prepends_comment_and_keeps_original(self, provider, tenant) -> None:
+        result = provider.forward_message("outlook-msg-id-2", "z@x.com", comment="FYI\nsee below")
+        assert result["status"] == "sent"
+        sent = tenant.sent[-1]
+        body = sent["body"]["content"]
+        assert "FYI<br/>see below" in body
+        assert "<strong>HTML</strong> version" in body  # original quoted
+        assert body.index("FYI") < body.index("HTML</strong>")
+        assert sent["toRecipients"] == [{"emailAddress": {"address": "z@x.com"}}]
+        tenant.graph.last("POST", r"/me/messages/outlook-msg-id-2/createForward")
+
+    def test_forward_missing(self, provider) -> None:
+        with pytest.raises(ValueError):
+            provider.forward_message("nope", "z@x.com")
+
+    def test_list_drafts(self, provider, tenant) -> None:
+        drafts = provider.list_drafts()
+        assert [d["message_id"] for d in drafts] == ["outlook-draft-id-1"]
+        tenant.graph.last("GET", r"/me/mailFolders/Drafts/messages")
+
+    def test_send_draft(self, provider, tenant) -> None:
+        assert provider.send_draft("outlook-draft-id-1") == {
+            "message_id": "outlook-draft-id-1",
+            "status": "sent",
+        }
+        tenant.graph.last("POST", r"/me/messages/outlook-draft-id-1/send")
+
+    def test_send_draft_rejects_non_draft(self, provider) -> None:
+        with pytest.raises(ValueError, match="not a draft"):
+            provider.send_draft("outlook-msg-id-1")
+
+    def test_send_draft_missing(self, provider) -> None:
+        with pytest.raises(ValueError, match="Draft not found"):
+            provider.send_draft("nope")
+
+    def test_delete_draft(self, provider, tenant) -> None:
+        assert provider.delete_draft("outlook-draft-id-1")["status"] == "deleted"
+        tenant.graph.last("DELETE", r"/me/messages/outlook-draft-id-1")
 
 
 # ---------------------------------------------------------------------------
-# Sync: get_sync_state / get_new_messages
+# Organisation ops (O365-08)
 # ---------------------------------------------------------------------------
 
 
-class TestSync:
-    def test_get_sync_state_returns_delta_link(self, provider):
-        provider._account.con.protocol = MagicMock()
-        provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
-        delta_url = provider._get_inbox_delta_url()
-        delta_link = "https://graph.microsoft.com/v1.0/delta?token=xyz"
-        provider._account.con._delta_responses[delta_url] = {
-            "value": [],
-            "@odata.deltaLink": delta_link,
+class TestOrganisation:
+    def test_mark_read_and_unread(self, provider, tenant) -> None:
+        provider.mark_read("outlook-msg-id-2")
+        assert tenant.graph.last("PATCH", r"/me/messages/outlook-msg-id-2").body == {"isRead": True}
+        provider.mark_read("outlook-msg-id-2", read=False)
+        assert tenant.messages["outlook-msg-id-2"]["isRead"] is False
+
+    def test_set_star_uses_message_flag_api(self, provider, tenant) -> None:
+        """O365-08: Message.flag is a read-only property; assigning a dict
+        raised AttributeError against the real library."""
+        provider.set_star("outlook-msg-id-1")
+        body = tenant.graph.last("PATCH", r"/me/messages/outlook-msg-id-1").body
+        assert body["flag"]["flagStatus"] == "flagged"
+
+    def test_unstar(self, provider, tenant) -> None:
+        provider.set_star("outlook-msg-id-5", starred=False)
+        body = tenant.graph.last("PATCH", r"/me/messages/outlook-msg-id-5").body
+        assert body == {"flag": {"flagStatus": "notFlagged"}}
+
+    def test_archive_trash_untrash(self, provider, tenant) -> None:
+        provider.archive("outlook-msg-id-1")
+        assert tenant.graph.last("POST", r"/me/messages/outlook-msg-id-1/move").body == {
+            "destinationId": "Archive"
+        }
+        provider.trash("outlook-msg-id-2")
+        tenant.graph.last("DELETE", r"/me/messages/outlook-msg-id-2")
+        provider.untrash("outlook-msg-id-2")
+        assert tenant.graph.last("POST", r"/me/messages/outlook-msg-id-2/move").body == {
+            "destinationId": "Inbox"
         }
 
-        result = provider.get_sync_state()
-        assert result == delta_link
+    @pytest.mark.parametrize("op", ["mark_read", "set_star", "archive", "trash", "untrash"])
+    def test_missing_message_raises_value_error(self, provider, op: str) -> None:
+        with pytest.raises(ValueError, match="not found"):
+            getattr(provider, op)("does-not-exist")
 
-    def test_get_new_messages_returns_ids(self, provider):
-        delta_link = "https://graph.microsoft.com/v1.0/delta?token=abc"
-        new_delta = "https://graph.microsoft.com/v1.0/delta?token=def"
-        provider._account.con._delta_responses[delta_link] = {
-            "value": [
-                {"id": "msg-1"},
-                {"id": "msg-2"},
-            ],
-            "@odata.deltaLink": new_delta,
+    def test_add_and_remove_tag(self, provider, tenant) -> None:
+        provider.add_tag("outlook-msg-id-2", "Urgent")
+        assert tenant.messages["outlook-msg-id-2"]["categories"] == ["Urgent"]
+        calls = len(tenant.graph.calls)
+        provider.add_tag("outlook-msg-id-2", "Urgent")  # no-op: no PATCH
+        assert not [c for c in tenant.graph.calls[calls:] if c.method == "PATCH"]
+        provider.remove_tag("outlook-msg-id-2", "Urgent")
+        assert tenant.messages["outlook-msg-id-2"]["categories"] == []
+
+    def test_list_tags(self, provider, tenant) -> None:
+        assert provider.list_tags() == {
+            "Work": "Work",
+            "Personal": "Personal",
+            "Important": "Important",
         }
+        tenant.graph.last("GET", r"/me/outlook/masterCategories")
 
-        result = provider.get_new_messages(delta_link)
-        assert result == ["msg-1", "msg-2"]
-
-    def test_get_new_messages_410_gone_returns_none(self, provider):
-        delta_link = "https://graph.microsoft.com/v1.0/delta?token=expired"
-        gone_resp = MockHttpResponse({})
-        gone_resp.status_code = 410
-        provider._account.con.get = MagicMock(return_value=gone_resp)
-
-        result = provider.get_new_messages(delta_link)
-        assert result is None
-
-    def test_get_new_messages_with_token(self, provider):
-        delta_link = "https://graph.microsoft.com/v1.0/delta?token=abc"
-        new_delta = "https://graph.microsoft.com/v1.0/delta?token=def"
-        provider._account.con._delta_responses[delta_link] = {
-            "value": [{"id": "msg-1"}],
-            "@odata.deltaLink": new_delta,
-        }
-
-        result = provider.get_new_messages_with_token(delta_link)
-        assert result is not None
-        ids, new_link = result
-        assert ids == ["msg-1"]
-        assert new_link == new_delta
+    def test_create_tag(self, provider, tenant) -> None:
+        tag = provider.create_tag("Receipts")
+        assert tag["name"] == "Receipts"
+        assert (
+            tenant.graph.last("POST", r"/me/outlook/masterCategories").body["displayName"]
+            == "Receipts"
+        )
 
 
 # ---------------------------------------------------------------------------
-# Lazy initialization
+# $batch (O365-13)
 # ---------------------------------------------------------------------------
 
 
-class TestLazyInit:
-    @patch("iobox.providers.o365.auth.get_outlook_account")
-    def test_acct_lazy_authenticates(self, mock_get_acct):
-        mock_account = make_mock_account()
-        mock_get_acct.return_value = mock_account
+class TestBatch:
+    def test_batch_url_has_no_double_slash(self, provider, tenant) -> None:
+        provider.batch_mark_read(["outlook-msg-id-1"])
+        call = tenant.graph.last("POST", r"/\$batch")
+        assert call.url == "https://graph.microsoft.com/v1.0/$batch"
 
-        p = OutlookProvider()
-        assert p._account is None
-        # Accessing _acct should trigger authenticate
-        acct = p._acct
-        assert acct is mock_account
-        mock_get_acct.assert_called_once()
+    def test_sub_requests_carry_immutable_id(self, provider, tenant) -> None:
+        provider.batch_archive(["outlook-msg-id-1", "outlook-msg-id-2"])
+        reqs = tenant.graph.last("POST", r"/\$batch").body["requests"]
+        assert [r["url"] for r in reqs] == [
+            "/me/messages/outlook-msg-id-1/move",
+            "/me/messages/outlook-msg-id-2/move",
+        ]
+        for r in reqs:
+            assert r["headers"]["Prefer"] == IMMUTABLE_ID_PREFER
+            assert r["body"] == {"destinationId": "archive"}
 
-    @patch("iobox.providers.o365.auth.get_outlook_account")
-    def test_mb_lazy_initializes(self, mock_get_acct):
-        mock_account = make_mock_account()
-        mock_get_acct.return_value = mock_account
+    def test_chunks_of_twenty(self, provider, tenant) -> None:
+        ids = [f"m{i}" for i in range(45)]
+        provider.batch_trash(ids)
+        sizes = [len(c.body["requests"]) for c in tenant.graph.find("POST", r"/\$batch")]
+        assert sizes == [20, 20, 5]
 
-        p = OutlookProvider()
-        assert p._mailbox is None
-        # Accessing _mb should trigger auth + mailbox init
-        mb = p._mb
-        assert mb is not None
+    def test_failed_sub_requests_raise_after_all_chunks(self, provider, tenant) -> None:
+        """Old code ignored per-item statuses, reporting success for 404s."""
+        tenant.batch_status["1"] = 404
+        tenant.batch_status["21"] = 503
+        ids = [f"m{i}" for i in range(25)]
+        with pytest.raises(OutlookBatchError) as exc:
+            provider.batch_trash(ids)
+        assert len(tenant.graph.find("POST", r"/\$batch")) == 2  # both chunks ran
+        assert [f["message_id"] for f in exc.value.failures] == ["m1", "m21"]
+        assert [f["status"] for f in exc.value.failures] == [404, 503]
+        assert exc.value.total == 25
 
+    def test_batch_tags_only_patch_changed_messages(self, provider, tenant) -> None:
+        provider.batch_add_tag(["outlook-msg-id-1", "outlook-msg-id-2", "missing"], "Work")
+        reqs = tenant.graph.last("POST", r"/\$batch").body["requests"]
+        assert reqs == [
+            {
+                "id": "0",
+                "method": "PATCH",
+                "url": "/me/messages/outlook-msg-id-2",
+                "body": {"categories": ["Work"]},
+                "headers": {"Content-Type": "application/json", "Prefer": IMMUTABLE_ID_PREFER},
+            }
+        ]
 
-# ---------------------------------------------------------------------------
-# Batch org operations
-# ---------------------------------------------------------------------------
+    def test_batch_remove_tag(self, provider, tenant) -> None:
+        provider.batch_remove_tag(["outlook-msg-id-1"], "Work")
+        req = tenant.graph.last("POST", r"/\$batch").body["requests"][0]
+        assert req["body"] == {"categories": []}
 
-
-def _setup_batch_mock(provider: OutlookProvider) -> MagicMock:
-    """Wire provider.con.post to return a successful batch response stub.
-
-    Returns the ``MagicMock`` replacing ``provider._account.con.post`` so
-    callers can assert on ``call_count`` and ``call_args``.
-    """
-    provider._account.con.protocol = MagicMock()
-    provider._account.con.protocol.service_url = "https://graph.microsoft.com/v1.0"
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = {"responses": [{"id": "0", "status": 200, "body": {}}]}
-    mock_post = MagicMock(return_value=mock_resp)
-    provider._account.con.post = mock_post
-    return mock_post
-
-
-class TestBatchMarkRead:
-    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg1 = make_mock_message(object_id="batch-read-id-1")
-        msg2 = make_mock_message(object_id="batch-read-id-2")
-        provider._mailbox._messages_by_id["batch-read-id-1"] = msg1
-        provider._mailbox._messages_by_id["batch-read-id-2"] = msg2
-        provider.batch_mark_read(["batch-read-id-1", "batch-read-id-2"], read=True)
-        assert mock_post.call_count == 1
-
-    def test_uses_relative_url_and_patch_method(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-read-id-3")
-        provider._mailbox._messages_by_id["batch-read-id-3"] = msg
-        provider.batch_mark_read(["batch-read-id-3"], read=False)
-        payload = mock_post.call_args[1]["data"]
-        sub_req = payload["requests"][0]
-        assert sub_req["url"] == "/me/messages/batch-read-id-3"
-        assert sub_req["method"] == "PATCH"
-        assert sub_req["body"]["isRead"] is False
-
-    def test_read_true_sets_is_read_true(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-read-id-4")
-        provider._mailbox._messages_by_id["batch-read-id-4"] = msg
-        provider.batch_mark_read(["batch-read-id-4"], read=True)
-        payload = mock_post.call_args[1]["data"]
-        assert payload["requests"][0]["body"]["isRead"] is True
-
-    def test_empty_list_does_not_call_batch(self, provider):
-        mock_post = _setup_batch_mock(provider)
+    def test_empty_batch_makes_no_request(self, provider, tenant) -> None:
         provider.batch_mark_read([])
-        assert mock_post.call_count == 0
-
-    def test_chunks_at_20(self, provider):
-        """21 messages should result in 2 batch POST calls (20 + 1)."""
-        mock_post = _setup_batch_mock(provider)
-        msg_ids = [f"fake-read-id-{i}" for i in range(21)]
-        provider.batch_mark_read(msg_ids, read=True)
-        assert mock_post.call_count == 2
+        assert not tenant.graph.find("POST", r"/\$batch")
 
 
-class TestBatchArchive:
-    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg1 = make_mock_message(object_id="batch-arch-id-1")
-        msg2 = make_mock_message(object_id="batch-arch-id-2")
-        provider._mailbox._messages_by_id["batch-arch-id-1"] = msg1
-        provider._mailbox._messages_by_id["batch-arch-id-2"] = msg2
-        provider.batch_archive(["batch-arch-id-1", "batch-arch-id-2"])
-        assert mock_post.call_count == 1
-
-    def test_uses_move_url_with_archive_destination(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-arch-id-3")
-        provider._mailbox._messages_by_id["batch-arch-id-3"] = msg
-        provider.batch_archive(["batch-arch-id-3"])
-        payload = mock_post.call_args[1]["data"]
-        sub_req = payload["requests"][0]
-        assert sub_req["url"] == "/me/messages/batch-arch-id-3/move"
-        assert sub_req["method"] == "POST"
-        assert sub_req["body"]["destinationId"] == "archive"
-
-    def test_url_is_relative_not_absolute(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-arch-id-4")
-        provider._mailbox._messages_by_id["batch-arch-id-4"] = msg
-        provider.batch_archive(["batch-arch-id-4"])
-        payload = mock_post.call_args[1]["data"]
-        url = payload["requests"][0]["url"]
-        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
-
-    def test_empty_list_does_not_call_batch(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        provider.batch_archive([])
-        assert mock_post.call_count == 0
-
-    def test_chunks_at_20(self, provider):
-        """21 messages → 2 POST calls (20 + 1)."""
-        mock_post = _setup_batch_mock(provider)
-        msg_ids = [f"fake-arch-id-{i}" for i in range(21)]
-        provider.batch_archive(msg_ids)
-        assert mock_post.call_count == 2
-
-
-class TestBatchTrash:
-    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg1 = make_mock_message(object_id="batch-trash-id-1")
-        msg2 = make_mock_message(object_id="batch-trash-id-2")
-        provider._mailbox._messages_by_id["batch-trash-id-1"] = msg1
-        provider._mailbox._messages_by_id["batch-trash-id-2"] = msg2
-        provider.batch_trash(["batch-trash-id-1", "batch-trash-id-2"])
-        assert mock_post.call_count == 1
-
-    def test_uses_move_url_with_deleteditems_destination(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-trash-id-3")
-        provider._mailbox._messages_by_id["batch-trash-id-3"] = msg
-        provider.batch_trash(["batch-trash-id-3"])
-        payload = mock_post.call_args[1]["data"]
-        sub_req = payload["requests"][0]
-        assert sub_req["url"] == "/me/messages/batch-trash-id-3/move"
-        assert sub_req["method"] == "POST"
-        assert sub_req["body"]["destinationId"] == "deleteditems"
-
-    def test_url_is_relative_not_absolute(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-trash-id-4")
-        provider._mailbox._messages_by_id["batch-trash-id-4"] = msg
-        provider.batch_trash(["batch-trash-id-4"])
-        payload = mock_post.call_args[1]["data"]
-        url = payload["requests"][0]["url"]
-        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
-
-    def test_empty_list_does_not_call_batch(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        provider.batch_trash([])
-        assert mock_post.call_count == 0
-
-
-class TestBatchAddTag:
-    def test_calls_batch_endpoint_once_for_two_messages(self, provider):
-        """Two messages without the tag → one $batch call with two sub-requests."""
-        mock_post = _setup_batch_mock(provider)
-        msg1 = make_mock_message(object_id="batch-addtag-id-1", categories=["Work"])
-        msg2 = make_mock_message(object_id="batch-addtag-id-2", categories=[])
-        provider._mailbox._messages_by_id["batch-addtag-id-1"] = msg1
-        provider._mailbox._messages_by_id["batch-addtag-id-2"] = msg2
-        provider.batch_add_tag(["batch-addtag-id-1", "batch-addtag-id-2"], "ProjectX")
-        assert mock_post.call_count == 1
-
-    def test_includes_new_tag_and_preserves_existing(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-addtag-id-3", categories=["Work"])
-        provider._mailbox._messages_by_id["batch-addtag-id-3"] = msg
-        provider.batch_add_tag(["batch-addtag-id-3"], "ProjectX")
-        payload = mock_post.call_args[1]["data"]
-        cats = payload["requests"][0]["body"]["categories"]
-        assert "ProjectX" in cats
-        assert "Work" in cats  # existing tag preserved
-
-    def test_skips_already_tagged_message(self, provider):
-        """If tag already present the message is excluded from the batch."""
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-addtag-id-4", categories=["Work"])
-        provider._mailbox._messages_by_id["batch-addtag-id-4"] = msg
-        provider.batch_add_tag(["batch-addtag-id-4"], "Work")
-        assert mock_post.call_count == 0
-
-    def test_skips_missing_message(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        provider.batch_add_tag(["nonexistent-batch-add-id"], "Tag")
-        assert mock_post.call_count == 0
-
-    def test_uses_relative_url(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-addtag-id-5", categories=[])
-        provider._mailbox._messages_by_id["batch-addtag-id-5"] = msg
-        provider.batch_add_tag(["batch-addtag-id-5"], "NewTag")
-        payload = mock_post.call_args[1]["data"]
-        url = payload["requests"][0]["url"]
-        assert url == "/me/messages/batch-addtag-id-5"
-        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
-
-
-class TestBatchRemoveTag:
-    def test_calls_batch_endpoint_once_for_tagged_messages(self, provider):
-        """Two messages with the tag → one $batch call."""
-        mock_post = _setup_batch_mock(provider)
-        msg1 = make_mock_message(object_id="batch-rmtag-id-1", categories=["Work"])
-        msg2 = make_mock_message(object_id="batch-rmtag-id-2", categories=["Work", "Important"])
-        provider._mailbox._messages_by_id["batch-rmtag-id-1"] = msg1
-        provider._mailbox._messages_by_id["batch-rmtag-id-2"] = msg2
-        provider.batch_remove_tag(["batch-rmtag-id-1", "batch-rmtag-id-2"], "Work")
-        assert mock_post.call_count == 1
-
-    def test_removes_tag_from_categories(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-rmtag-id-3", categories=["Work", "Important"])
-        provider._mailbox._messages_by_id["batch-rmtag-id-3"] = msg
-        provider.batch_remove_tag(["batch-rmtag-id-3"], "Work")
-        payload = mock_post.call_args[1]["data"]
-        cats = payload["requests"][0]["body"]["categories"]
-        assert "Work" not in cats
-        assert "Important" in cats  # unrelated tag preserved
-
-    def test_skips_message_without_tag(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-rmtag-id-4", categories=[])
-        provider._mailbox._messages_by_id["batch-rmtag-id-4"] = msg
-        provider.batch_remove_tag(["batch-rmtag-id-4"], "Work")
-        assert mock_post.call_count == 0
-
-    def test_skips_missing_message(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        provider.batch_remove_tag(["nonexistent-batch-rm-id"], "Tag")
-        assert mock_post.call_count == 0
-
-    def test_uses_relative_url(self, provider):
-        mock_post = _setup_batch_mock(provider)
-        msg = make_mock_message(object_id="batch-rmtag-id-5", categories=["Work"])
-        provider._mailbox._messages_by_id["batch-rmtag-id-5"] = msg
-        provider.batch_remove_tag(["batch-rmtag-id-5"], "Work")
-        payload = mock_post.call_args[1]["data"]
-        url = payload["requests"][0]["url"]
-        assert url == "/me/messages/batch-rmtag-id-5"
-        assert not url.startswith("http"), f"URL must be relative, got: {url!r}"
-
-
-class TestBatchOrgDefaultLoop:
-    """Verify that the ABC's default batch methods loop over single-message calls."""
-
-    def test_base_batch_mark_read_loops(self, provider):
-        """Default batch_mark_read in ABC must call mark_read for each ID."""
-        called: list[tuple[str, bool]] = []
-        original = provider.mark_read
-
-        def recording_mark_read(message_id: str, read: bool = True) -> None:
-            called.append((message_id, read))
-            original(message_id, read=read)
-
-        provider.mark_read = recording_mark_read  # type: ignore[method-assign]
-
-        # Call the ABC's default (non-overridden) loop via the base class directly.
-        from iobox.providers.base import EmailProvider
-
-        ids = ["outlook-msg-id-1", "outlook-msg-id-2"]
-        EmailProvider.batch_mark_read(provider, ids, read=False)
-        assert called == [("outlook-msg-id-1", False), ("outlook-msg-id-2", False)]
-
-    def test_base_batch_archive_loops(self, provider):
-        called: list[str] = []
-        original = provider.archive
-
-        def recording_archive(message_id: str) -> None:
-            called.append(message_id)
-            original(message_id)
-
-        provider.archive = recording_archive  # type: ignore[method-assign]
-
-        from iobox.providers.base import EmailProvider
-
-        EmailProvider.batch_archive(provider, ["outlook-msg-id-1", "outlook-msg-id-2"])
-        assert called == ["outlook-msg-id-1", "outlook-msg-id-2"]
+def test_fixture_tenant_is_isolated() -> None:
+    a = make_full_tenant()
+    a.add(graph_message("extra"))
+    assert "extra" not in make_full_tenant().messages
