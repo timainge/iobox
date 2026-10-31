@@ -51,7 +51,7 @@ iobox save --thread-id 18e4a2b3c1d5f6a7 -o ./emails
 
 ### Batch Mode
 
-Save all emails matching a query. Re-running into the same directory does not skip emails saved earlier: a second copy is written with a numeric suffix (`..._1.md`). Use `--sync` to fetch only new emails.
+Save all emails matching a query. Re-running into the same directory skips emails already saved there (matched by the `message_id` in each file's frontmatter). Use `--sync` to avoid even searching for messages that were seen before.
 
 ```bash
 iobox save -q "from:newsletter@example.com" -d 14 --max 50 -o ./emails

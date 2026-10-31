@@ -35,7 +35,7 @@ Here's what happened this week…
 
 HTML bodies are converted to Markdown; plain-text bodies are kept as-is.
 
-**Filenames:** `YYYY-MM-DD-subject-slug.md`. If the name exists, a numeric suffix is added (`…_1.md`).
+**Filenames:** `YYYY-MM-DD-subject-slug.md`. If the name exists, a numeric suffix is added (`…_1.md`). Batch saves skip messages whose `message_id` already appears in a file in the output directory.
 
 **Threads** (`save_thread`, `iobox save --thread-id`) are written as a single file containing every message in order.
 

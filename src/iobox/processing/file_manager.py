@@ -98,9 +98,29 @@ def save_email_to_markdown(
         raise
 
 
+def _read_frontmatter_message_id(filepath: str) -> str | None:
+    """Return the ``message_id`` from a saved email's YAML frontmatter, if any."""
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            if f.readline().strip() != "---":
+                return None
+            for line in f:
+                if line.strip() == "---":
+                    break
+                if line.startswith("message_id:"):
+                    value = line.split(":", 1)[1].strip().strip("'\"")
+                    return value or None
+    except OSError:
+        return None
+    return None
+
+
 def check_for_duplicates(email_ids: list[str], output_dir: str) -> list[str]:
     """
     Check which email IDs have already been processed and saved as markdown.
+
+    Saved files are named by date and subject, so the message ID is read from
+    each file's frontmatter. Files named after the message ID also match.
 
     Args:
         email_ids: List of email IDs to check
@@ -114,10 +134,15 @@ def check_for_duplicates(email_ids: list[str], output_dir: str) -> list[str]:
 
     try:
         files = [f for f in os.listdir(output_dir) if f.endswith(".md")]
-        processed_ids = [os.path.splitext(f)[0] for f in files]
     except Exception as e:
         logging.error(f"Error listing processed emails: {e}")
         return []
+
+    processed_ids = {os.path.splitext(f)[0] for f in files}
+    for f in files:
+        msg_id = _read_frontmatter_message_id(os.path.join(output_dir, f))
+        if msg_id:
+            processed_ids.add(msg_id)
 
     duplicates = [email_id for email_id in email_ids if email_id in processed_ids]
 

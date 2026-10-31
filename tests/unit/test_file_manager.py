@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, mock_open, patch
 from iobox.processing.file_manager import (
     SyncState,
     check_file_exists,
+    check_for_duplicates,
     create_attachments_directory,
     create_output_directory,
     download_email_attachments,
@@ -325,6 +326,35 @@ This is the test email body.
             with open(original_path, "rb") as f:
                 original_content = f.read()
                 assert original_content == b"Original content"
+
+
+class TestCheckForDuplicates:
+    def test_detects_ids_saved_by_save_email_to_markdown(self, tmp_path):
+        from iobox.processing.markdown_converter import convert_email_to_markdown
+
+        email = {
+            "message_id": "18e4a2b3c1d5f6a7",
+            "subject": "Weekly Digest",
+            "from": "news@example.com",
+            "date": "Mon, 05 Jan 2026 09:00:00 +0000",
+            "body": "Hello",
+        }
+        save_email_to_markdown(email, convert_email_to_markdown(email), str(tmp_path))
+
+        assert check_for_duplicates(["18e4a2b3c1d5f6a7", "other"], str(tmp_path)) == [
+            "18e4a2b3c1d5f6a7"
+        ]
+
+    def test_matches_legacy_filename_stem(self, tmp_path):
+        (tmp_path / "abc123.md").write_text("no frontmatter")
+        assert check_for_duplicates(["abc123"], str(tmp_path)) == ["abc123"]
+
+    def test_ignores_message_id_outside_frontmatter(self, tmp_path):
+        (tmp_path / "note.md").write_text("---\ntitle: x\n---\n\nmessage_id: abc123\n")
+        assert check_for_duplicates(["abc123"], str(tmp_path)) == []
+
+    def test_missing_directory_returns_empty(self, tmp_path):
+        assert check_for_duplicates(["abc"], str(tmp_path / "nope")) == []
 
 
 class TestSyncState:
