@@ -225,10 +225,13 @@ class TestActiveSpace:
         assert get_active_space() is None
 
     def test_set_and_get_roundtrip(self) -> None:
+        save_space(SpaceConfig(name="personal"))
         set_active_space("personal")
         assert get_active_space() == "personal"
 
     def test_set_overwrites_previous(self) -> None:
+        save_space(SpaceConfig(name="personal"))
+        save_space(SpaceConfig(name="work"))
         set_active_space("personal")
         set_active_space("work")
         assert get_active_space() == "work"
@@ -237,6 +240,114 @@ class TestActiveSpace:
         assert not sc.IOBOX_HOME.exists()
         set_active_space("personal")
         assert sc.ACTIVE_SPACE_FILE.exists()
+
+    def test_returns_none_when_active_space_deleted(self, caplog: pytest.LogCaptureFixture) -> None:
+        save_space(SpaceConfig(name="gone"))
+        set_active_space("gone")
+        (sc.WORKSPACES_DIR / "gone.toml").unlink()
+        with caplog.at_level("WARNING"):
+            assert get_active_space() is None
+        assert "no longer exists" in caplog.text
+
+    def test_returns_none_when_active_file_has_invalid_name(self) -> None:
+        sc.IOBOX_HOME.mkdir(parents=True, exist_ok=True)
+        sc.ACTIVE_SPACE_FILE.write_text("../../etc/passwd")
+        assert get_active_space() is None
+
+
+# ── File name is authoritative (WS-05) ────────────────────────────────────────
+
+
+class TestLoadUsesFileName:
+    def test_copied_file_saves_back_to_itself(self) -> None:
+        save_space(SpaceConfig(name="original"))
+        original = (sc.WORKSPACES_DIR / "original.toml").read_text()
+        # User copies the file; [workspace] name inside still says "original".
+        (sc.WORKSPACES_DIR / "copy.toml").write_text(original)
+
+        cfg = load_space("copy")
+        assert cfg.name == "copy"
+        cfg.services.append(
+            ServiceEntry(number=1, service="google", account="a@b.com", scopes=["email"])
+        )
+        save_space(cfg)
+
+        assert load_space("original").services == []
+        assert len(load_space("copy").services) == 1
+
+
+# ── Malformed files and atomic writes (WS-09) ─────────────────────────────────
+
+
+class TestMalformedConfig:
+    def _write(self, body: str) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+        (sc.WORKSPACES_DIR / "personal.toml").write_text(body)
+
+    def test_missing_workspace_table(self) -> None:
+        self._write("[[services]]\nnumber = 1\n")
+        with pytest.raises(ValueError, match=r"personal\.toml.*missing required key 'workspace'"):
+            load_space("personal")
+
+    @pytest.mark.parametrize("key", ["number", "service", "account", "scopes"])
+    def test_missing_service_key(self, key: str) -> None:
+        fields = {
+            "number": "1",
+            "service": '"google"',
+            "account": '"a@b.com"',
+            "scopes": '["email"]',
+        }
+        del fields[key]
+        body = "\n".join(f"{k} = {v}" for k, v in fields.items())
+        self._write(f'[workspace]\nname = "personal"\n\n[[services]]\n{body}\n')
+        with pytest.raises(
+            ValueError, match=rf"personal\.toml.*missing required key '{key}'.*entry #1"
+        ):
+            load_space("personal")
+
+    def test_invalid_toml_raises_value_error_with_path(self) -> None:
+        self._write("this is = = not toml")
+        with pytest.raises(ValueError, match=r"personal\.toml.*invalid TOML"):
+            load_space("personal")
+
+    def test_corrupt_session_file_returns_empty_session(self) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+        (sc.WORKSPACES_DIR / "personal.session.json").write_text("{not json")
+        assert load_session("personal").services == {}
+
+
+class TestAtomicWrites:
+    def test_failed_write_leaves_existing_file_intact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        save_space(SpaceConfig(name="personal"))
+        before = (sc.WORKSPACES_DIR / "personal.toml").read_text()
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sc.os, "replace", boom)
+        cfg = SpaceConfig(
+            name="personal",
+            services=[ServiceEntry(number=1, service="google", account="a@b.com", scopes=[])],
+        )
+        with pytest.raises(OSError):
+            save_space(cfg)
+        assert (sc.WORKSPACES_DIR / "personal.toml").read_text() == before
+        # No temp files left behind
+        assert sorted(p.name for p in sc.WORKSPACES_DIR.iterdir()) == ["personal.toml"]
+
+    def test_set_active_space_is_atomic(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[tuple[str, str]] = []
+        real_replace = sc.os.replace
+
+        def spy(src: str, dst: object) -> None:
+            calls.append((str(src), str(dst)))
+            real_replace(src, dst)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(sc.os, "replace", spy)
+        set_active_space("personal")
+        assert calls and calls[0][1] == str(sc.ACTIVE_SPACE_FILE)
 
 
 # ── load_session / save_session roundtrip ────────────────────────────────────

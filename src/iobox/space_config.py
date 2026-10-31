@@ -9,10 +9,13 @@ JSON session-state schema, but knows nothing about providers or OAuth.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 # tomllib is stdlib on Python 3.11+; fall back to tomli on 3.10.
 try:
@@ -24,6 +27,8 @@ except ImportError:
         raise ImportError("Python < 3.11 requires the 'tomli' package: pip install tomli") from exc
 
 import tomli_w  # for writing TOML
+
+logger = logging.getLogger(__name__)
 
 # ── Path constants (module-level so tests can monkeypatch) ────────────────────
 
@@ -172,9 +177,16 @@ def load_space(name: str) -> SpaceConfig:
     path = WORKSPACES_DIR / f"{name}.toml"
     if not path.exists():
         raise FileNotFoundError(f"Space '{name}' not found at {path}")
-    with open(path, "rb") as fh:
-        data = tomllib.load(fh)
-    return _parse_space_config(data, source=str(path))
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"{path}: invalid TOML: {exc}") from exc
+    config = _parse_space_config(data, source=str(path))
+    # The file name is authoritative: a copied or renamed file must save back
+    # to itself, not to whatever ``[workspace] name`` it still contains.
+    config.name = name
+    return config
 
 
 def save_space(config: SpaceConfig) -> None:
@@ -182,7 +194,7 @@ def save_space(config: SpaceConfig) -> None:
     validate_space_name(config.name)
     ensure_iobox_home()
     path = WORKSPACES_DIR / f"{config.name}.toml"
-    path.write_text(_serialize_space_config(config))
+    _atomic_write_text(path, _serialize_space_config(config))
 
 
 def list_spaces() -> list[str]:
@@ -196,18 +208,34 @@ def list_spaces() -> list[str]:
 
 
 def get_active_space() -> str | None:
-    """Return the active space name, or None if not set."""
+    """Return the active space name, or None if not set.
+
+    Also returns None (and logs a warning) when the active-space file names a
+    space that is invalid or no longer exists, so callers can prompt the user
+    instead of crashing on ``load_space``.
+    """
     if not ACTIVE_SPACE_FILE.exists():
         return None
     name = ACTIVE_SPACE_FILE.read_text().strip()
-    return name or None
+    if not name:
+        return None
+    if not _SPACE_NAME_RE.fullmatch(name):
+        logger.warning("Ignoring invalid active space name %r in %s", name, ACTIVE_SPACE_FILE)
+        return None
+    if not (WORKSPACES_DIR / f"{name}.toml").exists():
+        logger.warning(
+            "Active space '%s' no longer exists; run `iobox space use NAME` to pick another.",
+            name,
+        )
+        return None
+    return name
 
 
 def set_active_space(name: str) -> None:
     """Persist the active space name to ~/.iobox/active_space."""
     validate_space_name(name)
     ensure_iobox_home()
-    ACTIVE_SPACE_FILE.write_text(name)
+    _atomic_write_text(ACTIVE_SPACE_FILE, name)
 
 
 # ── Token-file probes ─────────────────────────────────────────────────────────
@@ -258,8 +286,12 @@ def load_session(name: str) -> SpaceSession:
     path = WORKSPACES_DIR / f"{name}.session.json"
     if not path.exists():
         return SpaceSession(workspace=name)
-    with open(path) as fh:
-        data = json.load(fh)
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as exc:
+        logger.warning("Ignoring corrupt session file %s: %s", path, exc)
+        return SpaceSession(workspace=name)
     return _parse_session(data)
 
 
@@ -268,10 +300,35 @@ def save_session(session: SpaceSession) -> None:
     validate_space_name(session.workspace)
     ensure_iobox_home()
     path = WORKSPACES_DIR / f"{session.workspace}.session.json"
-    path.write_text(json.dumps(_serialize_session(session), indent=2))
+    _atomic_write_text(path, json.dumps(_serialize_session(session), indent=2))
 
 
 # ── Internal parse/serialize ──────────────────────────────────────────────────
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* atomically (temp file in the same dir + ``os.replace``)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _require(table: Any, key: str, source: str, where: str) -> Any:
+    """Return ``table[key]`` or raise ValueError naming the missing key and file."""
+    if not isinstance(table, dict) or key not in table:
+        raise ValueError(f"{source}: missing required key '{key}' in {where}")
+    return table[key]
 
 
 _SERVICE_MIGRATION = {"gmail": "google", "outlook": "o365"}
@@ -279,16 +336,22 @@ _SERVICE_MIGRATION = {"gmail": "google", "outlook": "o365"}
 
 def _parse_space_config(data: dict, source: str = "<config>") -> SpaceConfig:  # type: ignore[type-arg]
     """Build a SpaceConfig from parsed TOML, validating service and mode values."""
-    name = data["workspace"]["name"]
+    workspace = _require(data, "workspace", source, "the file")
+    name = str(_require(workspace, "name", source, "[workspace]"))
     services = []
-    for s in data.get("services", []):
+    for i, s in enumerate(data.get("services", []), start=1):
+        where = f"[[services]] entry #{i}"
+        raw_scopes = _require(s, "scopes", source, where)
+        raw_service = str(_require(s, "service", source, where))
+        account = _require(s, "account", source, where)
+        number = _require(s, "number", source, where)
         # Migrate legacy scope value "messages" → "email"
-        scopes = ["email" if sc == "messages" else sc for sc in s["scopes"]]
+        scopes = ["email" if sc == "messages" else sc for sc in raw_scopes]
         # Migrate legacy service type names: "gmail" → "google", "outlook" → "o365"
-        service_type = _SERVICE_MIGRATION.get(s["service"], s["service"])
+        service_type = _SERVICE_MIGRATION.get(raw_service, raw_service)
         if service_type not in VALID_SERVICES:
             raise ValueError(
-                f"{source}: invalid service {s['service']!r} "
+                f"{source}: invalid service {raw_service!r} "
                 f"(expected one of: {', '.join(sorted(VALID_SERVICES))})"
             )
         mode = s.get("mode", "standard")
@@ -299,11 +362,11 @@ def _parse_space_config(data: dict, source: str = "<config>") -> SpaceConfig:  #
             )
         try:
             entry = ServiceEntry(
-                number=s["number"],
-                service=service_type,
-                account=s["account"],
+                number=number,
+                service=service_type,  # type: ignore[arg-type]
+                account=account,
                 scopes=scopes,
-                mode=mode,
+                mode=mode,  # type: ignore[arg-type]
                 slug=s.get("slug", ""),
                 id=s.get("id", ""),
             )
