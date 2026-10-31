@@ -954,6 +954,23 @@ class TestModeGating:
         result = runner.invoke(app, ["--mode", "readonly", "version"])
         assert result.exit_code == 0
 
+    def test_mode_error_suggests_lowest_sufficient_mode(self):
+        """A standard-tier command blocked in readonly suggests --mode standard."""
+        result = runner.invoke(
+            app,
+            ["--mode", "readonly", "label", "--message-id", "m1", "--mark-read"],
+        )
+        assert result.exit_code == 1
+        assert "Use --mode standard" in result.stderr
+
+    def test_mode_error_suggests_dangerous_for_send(self):
+        result = runner.invoke(
+            app,
+            ["--mode", "standard", "send", "--to", "a@b.com", "--subject", "x", "--body", "y"],
+        )
+        assert result.exit_code == 1
+        assert "Use --mode dangerous" in result.stderr
+
     def test_standard_blocks_trash(self):
         """trash is blocked in standard mode."""
         result = runner.invoke(
@@ -1108,7 +1125,7 @@ class TestProviderFlag:
         """Default provider is gmail."""
         provider = _mock_provider()
         with patch("iobox.cli.get_provider", return_value=provider) as mock_gp:
-            result = runner.invoke(app, ["version"])
+            result = runner.invoke(app, ["draft-list"])
         assert result.exit_code == 0
         mock_gp.assert_called_once_with("gmail")
 
@@ -1116,7 +1133,7 @@ class TestProviderFlag:
         """--provider outlook is passed to get_provider."""
         provider = _mock_provider()
         with patch("iobox.cli.get_provider", return_value=provider) as mock_gp:
-            result = runner.invoke(app, ["--provider", "outlook", "version"])
+            result = runner.invoke(app, ["--provider", "outlook", "draft-list"])
         assert result.exit_code == 0
         mock_gp.assert_called_once_with("outlook")
 
@@ -1125,14 +1142,14 @@ class TestProviderFlag:
         monkeypatch.setenv("IOBOX_PROVIDER", "outlook")
         provider = _mock_provider()
         with patch("iobox.cli.get_provider", return_value=provider) as mock_gp:
-            result = runner.invoke(app, ["version"])
+            result = runner.invoke(app, ["draft-list"])
         assert result.exit_code == 0
         mock_gp.assert_called_once_with("outlook")
 
     def test_invalid_provider(self):
         """Invalid provider name exits with an error."""
         with patch("iobox.cli.get_provider", side_effect=ValueError("Unknown provider 'bogus'")):
-            result = runner.invoke(app, ["--provider", "bogus", "version"])
+            result = runner.invoke(app, ["--provider", "bogus", "draft-list"])
         assert result.exit_code == 1
         assert "Unknown provider" in result.stderr
 
@@ -1142,9 +1159,16 @@ class TestProviderFlag:
             "iobox.cli.get_provider",
             side_effect=ImportError("Install them with: pip install 'iobox[outlook]'"),
         ):
-            result = runner.invoke(app, ["--provider", "outlook", "version"])
+            result = runner.invoke(app, ["--provider", "outlook", "draft-list"])
         assert result.exit_code == 1
         assert "iobox[outlook]" in result.stderr
+
+    def test_provider_not_created_for_non_email_commands(self):
+        """Workspace/utility commands don't instantiate the global email provider."""
+        with patch("iobox.cli.get_provider", side_effect=ImportError("no O365")) as mock_gp:
+            result = runner.invoke(app, ["--provider", "outlook", "version"])
+        assert result.exit_code == 0
+        mock_gp.assert_not_called()
 
     def test_auth_status_shows_provider(self):
         """auth-status displays the current provider name."""

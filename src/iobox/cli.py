@@ -91,6 +91,24 @@ def _parse_dates(
     return after, before
 
 
+# Top-level commands that act on the single mailbox chosen by --provider/--account.
+# Only these need the global email provider; workspace commands must not fail
+# because of it (e.g. --provider outlook without the extra installed).
+_EMAIL_COMMANDS = {
+    "search",
+    "save",
+    "send",
+    "forward",
+    "draft-create",
+    "draft-list",
+    "draft-send",
+    "draft-delete",
+    "label",
+    "trash",
+    "auth-status",
+}
+
+
 def _get_provider(ctx: typer.Context) -> EmailProvider:
     """Return the provider stored on the Typer context."""
     return ctx.obj["provider"]
@@ -1814,22 +1832,25 @@ def main(
     ctx.obj["account"] = resolved_account
     ctx.obj["provider_name"] = provider.lower().strip()
 
-    # Instantiate the provider (lazy auth — no browser/prompt in callback).
-    try:
-        ctx.obj["provider"] = get_provider(ctx.obj["provider_name"])
-    except (ValueError, ImportError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
     # Gate the invoked subcommand against the allowed set for this mode.
     cmd = ctx.invoked_subcommand
     if cmd is not None and cmd not in CLI_COMMANDS_BY_MODE[resolved_mode]:
+        required = next((m for m in AccessMode if cmd in CLI_COMMANDS_BY_MODE[m]), None)
+        hint = f" Use --mode {required.value} to enable it." if required else ""
         typer.echo(
-            f"Error: Command '{cmd}' is not allowed in '{resolved_mode.value}' mode. "
-            f"Use --mode dangerous to enable it.",
+            f"Error: Command '{cmd}' is not allowed in '{resolved_mode.value}' mode.{hint}",
             err=True,
         )
         raise typer.Exit(code=1)
+
+    # Instantiate the email provider only for commands that use it
+    # (lazy auth — no browser/prompt in callback).
+    if cmd in _EMAIL_COMMANDS:
+        try:
+            ctx.obj["provider"] = get_provider(ctx.obj["provider_name"])
+        except (ValueError, ImportError) as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from None
 
 
 def run():
