@@ -50,7 +50,7 @@ A browser sign-in opens. The token is stored at `~/.iobox/tokens/you@company.com
 
 ## Differences from Google
 
-- **Outlook searches every folder**, including Deleted Items and Junk (spam/trash filtering isn't applied for Outlook yet).
+- **Outlook searches every folder** except Deleted Items and Junk (unless `--include-spam-trash`), the same as Gmail.
 - **Message IDs are ImmutableIds**, so they stay stable when a message is moved between folders.
 - **OneDrive deletion goes to the recycle bin**; `--permanent` deletes permanently (OneDrive for Business / SharePoint only).
 

@@ -84,7 +84,7 @@ Common query operators:
 | `has:attachment` | `has:attachment` | Only emails with attachments |
 | `is:unread` | `is:unread` | Only unread emails |
 
-Both providers search all mail. For Outlook this currently includes Deleted Items and Junk.
+Both providers search all mail; spam and trash (Outlook: Junk and Deleted Items) are excluded unless `--include-spam-trash` is given.
 
 ## Related Commands
 

@@ -158,12 +158,12 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 | FU-08 | low | `workspace.search` | Event results in cross-type search sorted by `created_at`, not start time | fixed (9ce10ba) |
 | FU-09 | med | — | No CLI/MCP command builds the semantic index (`embed_resources` is SDK-only) | deferred (feature) |
 | FU-10 | med | `pyproject.toml`, CI | O365/MCP tests skipped without the libraries; CI installed only `.[dev]` | fixed (a16dd98) |
-| FU-11 | med | `o365/email.py` search | `include_spam_trash` ignored for Outlook → Deleted Items and Junk always included | open |
-| FU-12 | low | `o365/email.py` attachments | Listing attachments also downloads their content (slow for large files) | open |
-| FU-13 | low | `o365/email.py` drafts | New drafts > ~3 MB with attachments fail (library chunks uploads only for existing drafts) | open |
-| FU-14 | low | `o365/email.py` `$batch` | Throttled (429) batch items reported as failures, not retried | open |
+| FU-11 | med | `o365/email.py` search | `include_spam_trash` ignored for Outlook → Deleted Items and Junk always included | fixed (51478cc) — needs live-tenant verification |
+| FU-12 | low | `o365/email.py` attachments | Listing attachments also downloads their content (slow for large files) | fixed (8f66dbe) — needs live-tenant verification |
+| FU-13 | low | `o365/email.py` drafts | New drafts > ~3 MB with attachments fail (library chunks uploads only for existing drafts) | fixed (25fb27d) — needs live-tenant verification |
+| FU-14 | low | `o365/email.py` `$batch` | Throttled (429) batch items reported as failures, not retried | fixed (71d1a13) — needs live-tenant verification |
 | FU-16 | low | `google/_retrieval.get_thread_content` | Thread fetches never resolve label IDs to names (raw `Label_123`) | fixed (82b3036) |
-| FU-15 | med | O365 providers | Live-tenant checks: KQL quoting/`hasAttachments:`, `any()` filters vs InefficientFilter, draft ImmutableId after send, public-client app setup, granted-scope format, calendarView `$orderby`, `permanentDelete` | open (needs M365 dev tenant) |
+| FU-15 | med | O365 providers | Live-tenant checks: KQL quoting/`hasAttachments:`, `any()` filters vs InefficientFilter, draft ImmutableId after send, public-client app setup, granted-scope format, calendarView `$orderby`, `permanentDelete`; `parentFolderId ne` filters, `$select` with `$search`, attachment-list `$select`, upload sessions, `Retry-After` in `$batch` sub-responses | open (needs M365 dev tenant) |
 
 ## Previously fixed (2026-10-31, branch `docs-restructure-and-fixes`)
 
