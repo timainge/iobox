@@ -352,3 +352,97 @@ class TestTokenFileProbes:
         legacy = token_file_for(self._entry("o365")).parent / "o365_token.txt"
         self._touch(legacy)
         assert is_authenticated(self._entry("o365")) is True
+
+
+# ── Validation (SEC-09 / SEC-11) ──────────────────────────────────────────────
+
+
+class TestSpaceNameValidation:
+    @pytest.mark.parametrize(
+        "name", ["../../x", "a/b", "a\\b", "", "x" * 65, "has space", "dot.name", "nl\n"]
+    )
+    def test_invalid_names_rejected_everywhere(self, name: str) -> None:
+        with pytest.raises(ValueError, match="Invalid workspace name"):
+            sc.validate_space_name(name)
+        with pytest.raises(ValueError):
+            load_space(name)
+        with pytest.raises(ValueError):
+            save_space(SpaceConfig(name=name))
+        with pytest.raises(ValueError):
+            set_active_space(name)
+        with pytest.raises(ValueError):
+            load_session(name)
+        with pytest.raises(ValueError):
+            save_session(SpaceSession(workspace=name))
+
+    @pytest.mark.parametrize("name", ["personal", "Work_2", "a-b", "x" * 64])
+    def test_valid_names_accepted(self, name: str) -> None:
+        assert sc.validate_space_name(name) == name
+
+    def test_traversal_does_not_write_outside_workspaces(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
+            save_space(SpaceConfig(name="../../escape"))
+        assert not list(tmp_path.rglob("escape.toml"))
+
+    def test_list_spaces_skips_invalid_stems(self) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True)
+        (sc.WORKSPACES_DIR / "bad name.toml").write_text('[workspace]\nname = "x"\n')
+        save_space(SpaceConfig(name="good"))
+        assert list_spaces() == ["good"]
+
+
+class TestAccountValidation:
+    @pytest.mark.parametrize(
+        "account", ["../evil", "a/b@x.com", "a\\b@x.com", ".hidden@x.com", "a\x00b", "", "  "]
+    )
+    def test_invalid_accounts_rejected(self, account: str) -> None:
+        with pytest.raises(ValueError, match="Invalid account"):
+            sc.validate_account(account)
+        with pytest.raises(ValueError):
+            ServiceEntry(number=1, service="google", account=account, scopes=["email"])
+
+    @pytest.mark.parametrize("account", ["tim@gmail.com", "Tim.Ainge@Example.COM", "default"])
+    def test_valid_accounts_preserved(self, account: str) -> None:
+        # Case is preserved so existing token directories keep working.
+        assert sc.validate_account(account) == account
+
+
+class TestTomlValueValidation:
+    def _write(self, body: str) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+        (sc.WORKSPACES_DIR / "personal.toml").write_text(body)
+
+    def _svc(self, **overrides: str) -> str:
+        fields = {
+            "number": "1",
+            "service": '"google"',
+            "account": '"tim@gmail.com"',
+            "scopes": '["email"]',
+            "mode": '"standard"',
+        }
+        fields.update(overrides)
+        lines = "\n".join(f"{k} = {v}" for k, v in fields.items())
+        return f'[workspace]\nname = "personal"\n\n[[services]]\n{lines}\n'
+
+    def test_invalid_mode_rejected_with_file_name(self) -> None:
+        self._write(self._svc(mode='"read-only"'))
+        with pytest.raises(ValueError, match=r"personal\.toml.*invalid mode 'read-only'"):
+            load_space("personal")
+
+    def test_invalid_service_rejected(self) -> None:
+        self._write(self._svc(service='"yahoo"'))
+        with pytest.raises(ValueError, match=r"personal\.toml.*invalid service 'yahoo'"):
+            load_space("personal")
+
+    def test_legacy_service_names_still_migrate(self) -> None:
+        self._write(self._svc(service='"gmail"'))
+        assert load_space("personal").services[0].service == "google"
+
+    def test_invalid_account_rejected_with_file_name(self) -> None:
+        self._write(self._svc(account='"../../etc"'))
+        with pytest.raises(ValueError, match=r"personal\.toml.*Invalid account"):
+            load_space("personal")
+
+    def test_missing_mode_defaults_to_standard(self) -> None:
+        self._write(self._svc().replace('mode = "standard"\n', ""))
+        assert load_space("personal").services[0].mode == "standard"
