@@ -23,7 +23,7 @@ iobox --mode dangerous [--provider gmail|outlook] [--account NAME] forward [OPTI
 | `--max` | | INT | `10` | Maximum number of emails in batch mode |
 | `--days` | `-d` | INT | `7` | Number of days back to search (batch mode) |
 | `--start-date` | `-s` | TEXT | `None` | Start date `YYYY/MM/DD`; overrides `--days` (batch mode) |
-| `--end-date` | `-e` | TEXT | `None` | End date `YYYY/MM/DD` (batch mode) |
+| `--end-date` | `-e` | TEXT | `None` | End date `YYYY/MM/DD`, inclusive (batch mode) |
 | `--note` | `-n` | TEXT | `None` | Note to prepend to the forwarded email |
 | `--yes` | `-y` | FLAG | `False` | Skip the batch-mode confirmation prompt |
 

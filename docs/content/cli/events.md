@@ -33,7 +33,7 @@ iobox events list [OPTIONS]
 | Option | Short | Type | Default | Description |
 |---|---|---|---|---|
 | `--after` | | TEXT | 30 days ago | Start date (`YYYY-MM-DD`) |
-| `--before` | | TEXT | `None` | End date (`YYYY-MM-DD`); no upper bound if omitted |
+| `--before` | | TEXT | `None` | End date (`YYYY-MM-DD`), inclusive; no upper bound if omitted |
 | `--provider` | | TEXT | `None` | Only query this calendar slot (e.g. `you-gmail-cal`) |
 | `--max` | `-m` | INT | `25` | Maximum results |
 | `--workspace` | `-w` | TEXT | `None` | Use this workspace instead of the active one |

@@ -21,12 +21,12 @@ iobox [--provider gmail|outlook] [--account NAME] search [OPTIONS]
 | `--max-results` | `-m` | INT | `10` | Maximum number of results to return |
 | `--days` | `-d` | INT | `7` | Number of days back to search |
 | `--start-date` | `-s` | TEXT | `None` | Start date `YYYY/MM/DD` (or `YYYY-MM-DD`); overrides `--days` |
-| `--end-date` | `-e` | TEXT | `None` | End date `YYYY/MM/DD` (or `YYYY-MM-DD`) |
+| `--end-date` | `-e` | TEXT | `None` | End date `YYYY/MM/DD` (or `YYYY-MM-DD`), inclusive |
 | `--verbose` | `-v` | FLAG | `False` | Also show labels for each result |
 | `--debug` | | FLAG | `False` | Show the raw fields of the first result |
 | `--include-spam-trash` | | FLAG | `False` | Include messages from SPAM and TRASH |
 
-The `--days` window always applies unless `--start-date` is given, so a query alone only searches the last 7 days.
+The `--days` window always applies unless `--start-date` is given, so a query alone only searches the last 7 days. `--end-date` is inclusive: `-s 2026/03/01 -e 2026/03/31` covers all of March.
 
 ## Examples
 

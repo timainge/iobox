@@ -23,7 +23,7 @@ iobox [--provider gmail|outlook] [--account NAME] save [OPTIONS]
 | `--max` | | INT | `10` | Maximum number of emails in batch mode |
 | `--days` | `-d` | INT | `7` | Number of days back to search (batch mode) |
 | `--start-date` | `-s` | TEXT | `None` | Start date `YYYY/MM/DD`; overrides `--days` (batch mode) |
-| `--end-date` | `-e` | TEXT | `None` | End date `YYYY/MM/DD` (batch mode) |
+| `--end-date` | `-e` | TEXT | `None` | End date `YYYY/MM/DD`, inclusive (batch mode) |
 | `--output-dir` | `-o` | TEXT | `.` | Directory to save Markdown files to (created if missing) |
 | `--html-preferred` | | FLAG | `True` | Prefer the HTML body when available. Always on; there is no `--no-html-preferred` |
 | `--download-attachments` | | FLAG | `False` | Download attachments (single and batch modes; not thread mode) |

@@ -75,7 +75,7 @@ iobox save -q "from:digest@example.com" -d 365 -o ./newsletters
 iobox save -q "from:digest@example.com" --sync -o ./newsletters
 
 # This week's events across every calendar
-iobox events list --after 2026-11-02 --before 2026-11-09
+iobox events list --after 2026-11-02 --before 2026-11-08
 
 # Save a calendar event as Markdown
 iobox events save EVENT_ID -o ./meetings

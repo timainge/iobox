@@ -73,6 +73,8 @@ def _parse_dates(
 
     * When ``start_date`` is given it takes precedence over ``days``.
     * ``days`` is relative to today.
+    * ``end_date`` is **inclusive** for the user; providers treat ``before`` as
+      exclusive, so the returned ``before`` is the day *after* ``end_date``.
     * Returns ``(None, None)`` when no date constraints are provided.
     """
     after: date | None = None
@@ -87,7 +89,7 @@ def _parse_dates(
 
     if end_date:
         parts = end_date.replace("-", "/").split("/")
-        before = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        before = date(int(parts[0]), int(parts[1]), int(parts[2])) + timedelta(days=1)
 
     return after, before
 
@@ -312,7 +314,7 @@ def search(
         help="Start date in YYYY/MM/DD format (overrides days parameter if provided)",
     ),
     end_date: str = typer.Option(
-        None, "--end-date", "-e", help="End date in YYYY/MM/DD format (requires start-date)"
+        None, "--end-date", "-e", help="End date in YYYY/MM/DD format (inclusive)"
     ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Show detailed information for each result"
@@ -430,7 +432,7 @@ def save(
         help="Start date in YYYY/MM/DD format (overrides days parameter if provided)",
     ),
     end_date: str = typer.Option(
-        None, "--end-date", "-e", help="End date in YYYY/MM/DD format (requires start-date)"
+        None, "--end-date", "-e", help="End date in YYYY/MM/DD format (inclusive)"
     ),
     output_dir: str = typer.Option(
         ".", "--output-dir", "-o", help="Directory to save markdown files to"
@@ -667,7 +669,9 @@ def forward(
     start_date: str = typer.Option(
         None, "--start-date", "-s", help="Start date in YYYY/MM/DD format"
     ),
-    end_date: str = typer.Option(None, "--end-date", "-e", help="End date in YYYY/MM/DD format"),
+    end_date: str = typer.Option(
+        None, "--end-date", "-e", help="End date in YYYY/MM/DD format (inclusive)"
+    ),
     note: str = typer.Option(
         None, "--note", "-n", help="Optional note to prepend to forwarded email"
     ),
@@ -1642,7 +1646,9 @@ def events_list(
     after: str | None = typer.Option(
         None, "--after", help="Start date (YYYY-MM-DD); defaults to 30 days ago"
     ),
-    before: str | None = typer.Option(None, "--before", help="End date (YYYY-MM-DD)"),
+    before: str | None = typer.Option(
+        None, "--before", help="End date (YYYY-MM-DD, inclusive)"
+    ),
     provider: str | None = typer.Option(None, "--provider", help="Provider slot name"),
     max_results: int = typer.Option(25, "--max", "-m", help="Maximum results"),
     workspace_name: str | None = typer.Option(None, "--workspace", "-w"),

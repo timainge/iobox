@@ -1514,3 +1514,59 @@ class TestAuthStatusNoInteractiveFlow:
         ):
             result = runner.invoke(app, ["--provider", "outlook", "auth-status"])
         assert "Could not fetch Outlook profile: graph down" in result.stderr
+
+
+class TestInclusiveEndDate:
+    """--end-date is inclusive: providers get the following day as 'before' (TIME-01)."""
+
+    def test_parse_dates_end_date_plus_one_day(self):
+        from datetime import date
+
+        from iobox.cli import _parse_dates
+
+        after, before = _parse_dates(None, "2026/03/01", "2026/03/31")
+        assert after == date(2026, 3, 1)
+        assert before == date(2026, 4, 1)
+
+    def test_parse_dates_dash_format_and_year_rollover(self):
+        from datetime import date
+
+        from iobox.cli import _parse_dates
+
+        _, before = _parse_dates(None, None, "2026-12-31")
+        assert before == date(2027, 1, 1)
+
+    def test_parse_dates_no_end_date(self):
+        from iobox.cli import _parse_dates
+
+        _, before = _parse_dates(7, None, None)
+        assert before is None
+
+    def test_search_passes_next_day_to_provider(self):
+        from datetime import date
+
+        provider = _mock_provider()
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(
+                app, ["search", "-q", "x", "-s", "2026/03/01", "-e", "2026/03/15"]
+            )
+        assert result.exit_code == 0
+        eq = provider.search_emails.call_args[0][0]
+        assert eq.after == date(2026, 3, 1)
+        assert eq.before == date(2026, 3, 16)
+
+    def test_save_batch_passes_next_day_to_provider(self, tmp_path):
+        from datetime import date
+
+        provider = _mock_provider()
+        with (
+            patch("iobox.cli.get_provider", return_value=provider),
+            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
+        ):
+            result = runner.invoke(
+                app,
+                ["save", "-q", "x", "-s", "2026/03/01", "-e", "2026/03/15", "-o", str(tmp_path)],
+            )
+        assert result.exit_code == 0, result.output
+        eq = provider.search_emails.call_args[0][0]
+        assert eq.before == date(2026, 3, 16)
