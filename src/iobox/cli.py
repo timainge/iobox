@@ -4,6 +4,7 @@ Command-line interface for the iobox application.
 This module provides a user-friendly CLI for interacting with iobox functionality.
 """
 
+import hashlib
 import logging
 import os
 import re
@@ -1501,6 +1502,30 @@ def _get_workspace(workspace_name: str | None = None) -> Any:
     return Workspace.from_config(config, credentials_dir=str(IOBOX_HOME))
 
 
+def _short_id(resource_id: str) -> str:
+    """Return a short, filename-safe token that identifies *resource_id*.
+
+    Short ids made of safe characters are used as-is; anything else (long or
+    punctuation-heavy ids such as Outlook ImmutableIds, which share long
+    prefixes) is reduced to a stable 10-character hash.
+    """
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,16}", resource_id):
+        return resource_id
+    return hashlib.sha1(resource_id.encode("utf-8")).hexdigest()[:10]
+
+
+def _resource_filename(title: str | None, resource_id: str, kind: str) -> str:
+    """Build a Markdown filename ``{slug}_{short-id}.md`` for an event or file.
+
+    The id suffix keeps resources with the same title from overwriting each
+    other; an empty or unsluggable title falls back to ``{kind}_{short-id}.md``.
+    """
+    from iobox.utils import slugify_text
+
+    slug = slugify_text(title or "").strip("-_")
+    return f"{slug or kind}_{_short_id(resource_id)}.md"
+
+
 def _format_datetime(iso_str: str | None) -> str:
     """Format an ISO 8601 datetime string for display."""
     if not iso_str:
@@ -1625,7 +1650,6 @@ def events_save(
 ) -> None:
     """Save a calendar event as a Markdown file."""
     from iobox.processing.markdown import convert_event_to_markdown
-    from iobox.utils import slugify_text
 
     ws = _get_workspace(workspace_name)
     slot = _find_calendar_slot(ws, provider)
@@ -1634,8 +1658,8 @@ def events_save(
 
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
-    filename = slugify_text(event["title"]) + ".md"
-    (out_dir / filename).write_text(md)
+    filename = _resource_filename(event.get("title"), event.get("id") or event_id, "event")
+    (out_dir / filename).write_text(md, encoding="utf-8")
     typer.echo(f"Saved to {out_dir / filename}")
 
 
@@ -1774,7 +1798,6 @@ def files_save(
 ) -> None:
     """Save file metadata as a Markdown file."""
     from iobox.processing.markdown import convert_file_to_markdown
-    from iobox.utils import slugify_text
 
     ws = _get_workspace(workspace_name)
     slot = _find_file_slot(ws, provider)
@@ -1783,8 +1806,8 @@ def files_save(
 
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
-    filename = slugify_text(file["name"]) + ".md"
-    (out_dir / filename).write_text(md)
+    filename = _resource_filename(file.get("name"), file.get("id") or file_id, "file")
+    (out_dir / filename).write_text(md, encoding="utf-8")
     typer.echo(f"Saved to {out_dir / filename}")
 
 

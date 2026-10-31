@@ -71,7 +71,7 @@ iobox files get 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms
 
 ## save
 
-Save file **metadata** (not the file's content) as a Markdown file named `{slugified-name}.md`. An existing file with the same name is overwritten.
+Save file **metadata** (not the file's content) as a Markdown file named `{slugified-name}_{short-id}.md`. The id suffix (the file id if short, otherwise a 10-character hash of it) keeps files with the same name apart; saving the same file again overwrites its own Markdown file. A file whose name has no usable characters is saved as `file_{short-id}.md`.
 
 ```
 iobox files save FILE_ID [OPTIONS]

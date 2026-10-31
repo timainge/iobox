@@ -425,3 +425,55 @@ class TestEventsFilesModeGating:
         with patch("iobox.space_config.get_active_space", return_value=None):
             result = runner.invoke(app, ["--mode", "readonly", "workspace", "status"])
         assert "not allowed" not in result.output
+
+
+# ── TestSaveFilenames (CLI-04) ────────────────────────────────────────────────
+
+
+class TestSaveFilenames:
+    """events/files save never silently overwrite a different resource."""
+
+    def _save_event(self, ev: Event, tmp_path: Path):
+        ws = _make_ws(events=[ev])
+        with patch("iobox.cli._get_workspace", return_value=ws):
+            return runner.invoke(app, ["events", "save", ev["id"], "-o", str(tmp_path)])
+
+    def _save_file(self, f: File, tmp_path: Path):
+        ws = _make_ws(files=[f])
+        with patch("iobox.cli._get_workspace", return_value=ws):
+            return runner.invoke(app, ["files", "save", f["id"], "-o", str(tmp_path)])
+
+    def test_same_title_events_get_distinct_files(self, tmp_path: Path) -> None:
+        assert self._save_event(_mock_event("evtA", "Standup"), tmp_path).exit_code == 0
+        assert self._save_event(_mock_event("evtB", "Standup"), tmp_path).exit_code == 0
+        names = sorted(p.name for p in tmp_path.glob("*.md"))
+        assert names == ["standup_evtA.md", "standup_evtB.md"]
+
+    def test_same_event_saved_twice_reuses_file(self, tmp_path: Path) -> None:
+        self._save_event(_mock_event("evtA", "Standup"), tmp_path)
+        self._save_event(_mock_event("evtA", "Standup"), tmp_path)
+        assert len(list(tmp_path.glob("*.md"))) == 1
+
+    def test_empty_event_title_uses_id(self, tmp_path: Path) -> None:
+        result = self._save_event(_mock_event("evtA", ""), tmp_path)
+        assert result.exit_code == 0
+        assert [p.name for p in tmp_path.glob("*.md")] == ["event_evtA.md"]
+
+    def test_long_ids_with_shared_prefix_do_not_collide(self, tmp_path: Path) -> None:
+        prefix = "AAMkADAwATM0MDAAMS1iNTcwLWI2NTEtMDACLTAwCgBGAAAD" * 2
+        self._save_event(_mock_event(prefix + "x1==", "Sync"), tmp_path)
+        self._save_event(_mock_event(prefix + "x2==", "Sync"), tmp_path)
+        names = [p.name for p in tmp_path.glob("*.md")]
+        assert len(names) == 2
+        for n in names:
+            assert n.startswith("sync_")
+            assert "=" not in n and "/" not in n
+
+    def test_same_name_files_get_distinct_files(self, tmp_path: Path) -> None:
+        self._save_file(_mock_file("f1", "report.pdf"), tmp_path)
+        self._save_file(_mock_file("f2", "report.pdf"), tmp_path)
+        assert len(list(tmp_path.glob("*.md"))) == 2
+
+    def test_unsluggable_file_name_uses_id(self, tmp_path: Path) -> None:
+        self._save_file(_mock_file("f1", "!!!"), tmp_path)
+        assert [p.name for p in tmp_path.glob("*.md")] == ["file_f1.md"]

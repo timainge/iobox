@@ -76,7 +76,7 @@ iobox events get abc123xyz --provider you-gmail-cal
 
 ## save
 
-Save a calendar event as a Markdown file named `{slugified-title}.md`. An existing file with the same name is overwritten.
+Save a calendar event as a Markdown file named `{slugified-title}_{short-id}.md`. The id suffix (the event id if short, otherwise a 10-character hash of it) keeps events with the same title apart; saving the same event again overwrites its own file. An event with no title is saved as `event_{short-id}.md`.
 
 ```
 iobox events save EVENT_ID [OPTIONS]
