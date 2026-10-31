@@ -13,7 +13,7 @@ md = convert_event_to_markdown(event)   # YAML frontmatter + description
 md = convert_file_to_markdown(file)     # YAML frontmatter + content (if fetched)
 ```
 
-`convert_resource_to_markdown(resource)` dispatches on `resource["resource_type"]`.
+`convert_resource_to_markdown(resource)` dispatches on `resource["resource_type"]`. Email resources from `Workspace.search()` are accepted too: `title`, `from_`, `created_at` and list recipients are mapped to the email converter's `subject`, `from`, `date` and comma-joined `to`/`cc`.
 
 ### Email
 
@@ -34,7 +34,7 @@ Formats are described in [Output format](../reference/output-format.md).
 
 ### Incremental sync
 
-`iobox.processing.file_manager.SyncState` stores the provider sync token for an output directory, so repeated exports fetch only new messages — the mechanism behind `iobox save --sync`.
+`iobox.processing.file_manager.SyncState` stores the provider sync token for an output directory, so repeated exports fetch only new messages — the mechanism behind `iobox save --sync`. The state file (`.iobox-sync.json`) is written atomically; if it is ever unreadable, `load()` logs a warning and returns `False`, so the next run does a full sync instead of failing.
 
 ## Summaries
 
@@ -73,7 +73,15 @@ hits = semantic_search("plans for the kitchen renovation", workspace="personal",
 | Backend | Model | Dimensions | Needs |
 |---|---|---|---|
 | `openai` *(default)* | `text-embedding-3-small` | 1536 | `OPENAI_API_KEY` |
-| `voyage` | `voyage-3-lite` | 1024 | `VOYAGE_API_KEY` |
+| `voyage` | `voyage-3-lite` | 512 | `VOYAGE_API_KEY` |
 | `local` | `all-MiniLM-L6-v2` | 384 | `sentence-transformers`, offline |
 
-Query with the same backend you indexed with. Results are stubs (`id`, `resource_type`, `provider_id`, `score`) — fetch the full resource from its provider. The MCP tool `semantic_search_workspace` queries the same index.
+Results are stubs (`id`, `resource_type`, `provider_id`, `score`) — fetch the full resource from its provider. `score` is cosine similarity clamped to 0–1 (higher is closer), and is the same whether or not `sqlite-vec` is installed. The MCP tool `semantic_search_workspace` queries the same index.
+
+**One backend per index.** Each index records the backend, model and vector size it was built with (the size is taken from the first embedding stored, not the table above). Using a different backend or model — for indexing or querying — raises `IndexMismatchError` rather than mixing incomparable vectors. To switch, rebuild explicitly:
+
+```python
+embed_resources(resources, workspace="personal", backend=get_backend("local"), rebuild=True)
+```
+
+`rebuild=True` discards every existing entry, so pass the full set of resources you want indexed. Indexes created by older iobox versions are upgraded in place on first open; their entries are re-embedded the next time you run `embed_resources`.
