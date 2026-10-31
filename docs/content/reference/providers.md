@@ -7,7 +7,6 @@ iobox normalises results across providers, but the underlying services differ. T
 - **Searches all mail**, not just the inbox. Use `in:inbox` to narrow.
 - **Query syntax** is native [Gmail search](https://support.google.com/mail/answer/7190) (`from:`, `has:attachment`, `newer_than:7d`, `label:`, …).
 - **Labels** map to iobox tags. Nested labels use `/` (`Clients/Acme`).
-- **Incremental sync** uses the Gmail history API (`iobox save --sync`).
 - Rate-limited batch fetches are retried automatically.
 
 | Mode | Scopes |

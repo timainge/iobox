@@ -6,7 +6,7 @@ Contains filename generation and text sanitization helpers.
 
 import hashlib
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -107,3 +107,34 @@ def create_markdown_filename(email_data: dict[str, Any], use_subject: bool = Tru
 
     slug = slugify_text(subject) or safe_id
     return f"{date_prefix}-{slug}.md"
+
+
+def _parse_ymd(value: str) -> date:
+    """Parse ``YYYY/MM/DD`` or ``YYYY-MM-DD``."""
+    parts = value.replace("-", "/").split("/")
+    if len(parts) != 3:
+        raise ValueError(f"Invalid date {value!r}; expected YYYY/MM/DD or YYYY-MM-DD.")
+    return date(int(parts[0]), int(parts[1]), int(parts[2]))
+
+
+def parse_date_range(
+    days: int | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[date | None, date | None]:
+    """Convert user date options into ``(after, before)`` dates for an ``EmailQuery``.
+
+    * ``start_date`` takes precedence over ``days``; ``days`` is relative to today.
+    * ``end_date`` is **inclusive** for the user; providers treat ``before`` as
+      exclusive, so the returned ``before`` is the day *after* ``end_date``.
+    * Returns ``(None, None)`` when no date constraints are given.
+    """
+    after: date | None = None
+    before: date | None = None
+    if start_date:
+        after = _parse_ymd(start_date)
+    elif days is not None:
+        after = date.today() - timedelta(days=days)
+    if end_date:
+        before = _parse_ymd(end_date) + timedelta(days=1)
+    return after, before

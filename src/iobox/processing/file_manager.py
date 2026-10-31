@@ -9,7 +9,7 @@ import logging
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import yaml
@@ -345,6 +345,13 @@ class SyncState:
 
     The ``provider`` field (``"gmail"`` or ``"outlook"``) is persisted so
     that consumers know which token fields are relevant.
+
+    ``iobox save --sync`` and the ``save_emails_by_query`` MCP tool use a
+    provider-neutral scheme instead: :meth:`incremental_after` re-runs the
+    same query over a window starting the day before the last *complete* run,
+    and :meth:`record_run` stores the query, the run's start time and the IDs
+    that were saved. The overlap covers mail that arrived while the previous
+    run was in progress; already-saved messages are skipped by ID.
     """
 
     FILENAME = ".iobox-sync.json"
@@ -356,6 +363,7 @@ class SyncState:
         self.delta_links: dict[str, str] = {}
         self.last_sync_time: str | None = None
         self.synced_message_ids: list[str] = []
+        self.query: str | None = None
 
     def load(self) -> bool:
         """Load sync state from file. Returns True if usable state exists.
@@ -386,6 +394,8 @@ class SyncState:
         self.last_sync_time = data.get("last_sync_time")
         synced = data.get("synced_message_ids")
         self.synced_message_ids = synced if isinstance(synced, list) else []
+        query = data.get("query")
+        self.query = query if isinstance(query, str) else None
         return True
 
     def save(self) -> None:
@@ -395,13 +405,13 @@ class SyncState:
         moved into place with :func:`os.replace`, so an interrupted write never
         leaves a truncated state file behind.
         """
-        self.last_sync_time = datetime.now(timezone.utc).isoformat()
         data = {
             "provider": self.provider,
             "last_history_id": self.last_history_id,
             "delta_links": self.delta_links,
             "last_sync_time": self.last_sync_time,
             "synced_message_ids": self.synced_message_ids,
+            "query": self.query,
         }
         directory = os.path.dirname(self.filepath) or "."
         fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=f"{self.FILENAME}.", suffix=".tmp")
@@ -422,6 +432,7 @@ class SyncState:
         """Update state with new sync results (Gmail convenience method)."""
         self.last_history_id = history_id
         self.synced_message_ids = list(set(self.synced_message_ids + new_message_ids))
+        self.last_sync_time = datetime.now(timezone.utc).isoformat()
         self.save()
 
     def update_delta(self, folder: str, delta_link: str, new_message_ids: list[str]) -> None:
@@ -437,6 +448,55 @@ class SyncState:
         self.provider = "outlook"
         self.delta_links[folder] = delta_link
         self.synced_message_ids = list(set(self.synced_message_ids + new_message_ids))
+        self.last_sync_time = datetime.now(timezone.utc).isoformat()
+        self.save()
+
+    def incremental_after(self, query: str, after: date | None) -> date | None:
+        """Return the ``after`` date to use for an incremental run of ``query``.
+
+        When the loaded state belongs to the same query and records a previous
+        complete run, the window starts the day before that run (UTC date) so
+        mail that arrived mid-run is not missed. Otherwise ``after`` is
+        returned unchanged and the run is a full sync.
+        """
+        if self.query != query or not self.last_sync_time:
+            return after
+        try:
+            last = datetime.fromisoformat(self.last_sync_time.replace("Z", "+00:00"))
+        except ValueError:
+            return after
+        if last.tzinfo is not None:
+            last = last.astimezone(timezone.utc)
+        return last.date() - timedelta(days=1)
+
+    def is_synced(self, message_id: str) -> bool:
+        """Whether ``message_id`` was saved by a previous run."""
+        return message_id in self.synced_message_ids
+
+    def record_run(
+        self,
+        *,
+        query: str,
+        started_at: datetime,
+        saved_ids: list[str],
+        complete: bool,
+    ) -> None:
+        """Persist the outcome of a query-based incremental run.
+
+        ``saved_ids`` are merged into ``synced_message_ids``. The window only
+        moves forward (``last_sync_time = started_at``) when ``complete`` is
+        true — i.e. every match was fetched and saved — so failed or truncated
+        runs are retried from the same point next time.
+        """
+        if self.query != query:
+            # A different query starts a fresh window.
+            self.last_sync_time = None
+        self.query = query
+        self.synced_message_ids = list(set(self.synced_message_ids) | set(saved_ids))
+        if complete:
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            self.last_sync_time = started_at.astimezone(timezone.utc).isoformat()
         self.save()
 
 

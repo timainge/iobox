@@ -1827,7 +1827,6 @@ class TestNoInteractiveAuth:
         provider = _make_provider()
         provider.search_emails.return_value = [{"message_id": "m1"}]
         provider.batch_get_emails.return_value = [{"message_id": "m1", "from_": "x"}]
-        provider.get_sync_state.return_value = "12345"
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.check_for_duplicates", return_value=[]),
@@ -1837,36 +1836,47 @@ class TestNoInteractiveAuth:
         ):
             result = save_emails_by_query("in:inbox", output_dir="sync", sync=True)
         assert result["saved_count"] == 1
-        provider.get_sync_state.assert_called_once()
         legacy.assert_not_called()
 
         from iobox.processing.file_manager import SyncState
 
         state = SyncState(str(mcp_root / "sync"))
         assert state.load()
-        assert state.last_history_id == "12345"
+        assert state.query == "in:inbox"
+        assert state.synced_message_ids == ["m1"]
+        assert state.last_sync_time is not None
 
-    def test_sync_no_new_messages_uses_provider(self, mcp_root):
+    def test_incremental_sync_reuses_query_window_and_skips_synced(self, mcp_root):
+        from datetime import date
+
         from iobox.processing.file_manager import SyncState
 
         out = mcp_root / "sync"
         out.mkdir()
         seeded = SyncState(str(out))
-        seeded.update("100", [])
+        seeded.query = "in:inbox"
+        seeded.last_sync_time = "2026-10-20T08:00:00+00:00"
+        seeded.synced_message_ids = ["m-old"]
+        seeded.save()
 
         provider = _make_provider()
-        provider.get_new_messages.return_value = []
-        provider.get_sync_state.return_value = "200"
+        provider.search_emails.return_value = [{"message_id": "m-old"}, {"message_id": "m-new"}]
+        provider.batch_get_emails.return_value = [{"message_id": "m-new", "from_": "x"}]
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch("iobox.providers.google.auth.get_gmail_service") as legacy,
+            patch(f"{MODULE}.check_for_duplicates", return_value=[]),
+            patch(f"{MODULE}.convert_email_to_markdown", return_value="# E"),
+            patch(f"{MODULE}.save_email_to_markdown", return_value="e.md"),
         ):
             result = save_emails_by_query("in:inbox", output_dir="sync", sync=True)
-        assert result["saved_count"] == 0
-        legacy.assert_not_called()
-        state = SyncState(str(out))
-        state.load()
-        assert state.last_history_id == "200"
+
+        assert result["saved_count"] == 1
+        assert result["skipped_count"] == 1
+        query = provider.search_emails.call_args.args[0]
+        assert query.text == "in:inbox"
+        assert query.after == date(2026, 10, 19)
+        assert provider.batch_get_emails.call_args.args[0] == ["m-new"]
+        provider.get_new_messages.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

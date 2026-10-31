@@ -641,11 +641,9 @@ class TestSyncFlag:
             "thread_id": "thread-1",
         }
 
-    def test_save_with_sync_first_run(self, tmp_path):
-        """First --sync run: no history state, does full search, saves state."""
-        mock_email = self._mock_email_data("m1")
-
-        _e = {
+    def _search_hit(self, msg_id):
+        return {
+            "message_id": msg_id,
             "from_": "",
             "date": "",
             "snippet": "",
@@ -653,134 +651,122 @@ class TestSyncFlag:
             "labels": [],
             "thread_id": "",
         }
+
+    def _run_save(self, provider, out, *extra):
+        import logging
+
+        # These tests run the real file manager, which logs at INFO. With the
+        # project's `log_cli = true`, pytest's live-log handler suspends/resumes
+        # capture mid-invoke and closes CliRunner's output stream, so silence
+        # INFO logging for the duration of the invocation.
+        logging.disable(logging.INFO)
+        try:
+            with patch("iobox.cli.get_provider", return_value=provider):
+                args = ["save", "--query", "from:boss@x.com", "--output-dir", str(out)]
+                return runner.invoke(app, [*args, "--sync", *extra])
+        finally:
+            logging.disable(logging.NOTSET)
+
+    def test_first_run_records_query_and_saved_ids(self, tmp_path):
+        from iobox.processing.file_manager import SyncState
+
         provider = _mock_provider(
-            search_emails=[{"message_id": "m1", **_e}],
-            batch_get_emails=[mock_email],
-            get_sync_state="hist-100",
+            search_emails=[self._search_hit("m1")],
+            batch_get_emails=[self._mock_email_data("m1")],
         )
+        result = self._run_save(provider, tmp_path)
 
-        with (
-            patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.cli.SyncState") as MockSyncState,
-            patch("iobox.cli.convert_email_to_markdown", return_value="# md"),
-            patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m1.md")),
-            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
-            patch("iobox.cli.check_for_duplicates", return_value=[]),
-        ):
-            mock_state = MagicMock()
-            mock_state.load.return_value = False
-            mock_state.last_history_id = None
-            MockSyncState.return_value = mock_state
-
-            result = runner.invoke(
-                app,
-                [
-                    "save",
-                    "--query",
-                    "from:test@example.com",
-                    "--output-dir",
-                    str(tmp_path),
-                    "--sync",
-                ],
-            )
-
-        assert result.exit_code == 0
-        # Should NOT call get_new_messages on first run (no history)
+        assert result.exit_code == 0, result.output
+        state = SyncState(str(tmp_path))
+        assert state.load()
+        assert state.query == "from:boss@x.com"
+        assert state.synced_message_ids == ["m1"]
+        assert state.last_sync_time is not None
         provider.get_new_messages.assert_not_called()
-        # Should save state after completion
-        mock_state.update.assert_called_once()
 
-    def test_save_with_sync_incremental(self, tmp_path):
-        """Subsequent --sync run: uses history to get only new message IDs."""
-        mock_email = self._mock_email_data("m-new")
+    def test_incremental_run_reuses_query_with_window_and_skips_synced(self, tmp_path):
+        from datetime import date
+
+        from iobox.processing.file_manager import SyncState
+
+        state = SyncState(str(tmp_path))
+        state.query = "from:boss@x.com"
+        state.last_sync_time = "2026-10-20T08:00:00+00:00"
+        state.synced_message_ids = ["m-old"]
+        state.save()
 
         provider = _mock_provider(
-            get_new_messages=["m-new"],
-            batch_get_emails=[mock_email],
-            get_sync_state="hist-200",
+            search_emails=[self._search_hit("m-old"), self._search_hit("m-new")],
+            batch_get_emails=[self._mock_email_data("m-new")],
         )
+        result = self._run_save(provider, tmp_path)
 
-        with (
-            patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.cli.SyncState") as MockSyncState,
-            patch("iobox.cli.convert_email_to_markdown", return_value="# md"),
-            patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-new.md")),
-            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
-            patch("iobox.cli.check_for_duplicates", return_value=[]),
-        ):
-            mock_state = MagicMock()
-            mock_state.load.return_value = True
-            mock_state.last_history_id = "hist-100"
-            MockSyncState.return_value = mock_state
+        assert result.exit_code == 0, result.output
+        query = provider.search_emails.call_args.args[0]
+        assert query.raw_query == "from:boss@x.com"  # SYNC-01: query is honoured
+        assert query.after == date(2026, 10, 19)  # day before last complete run
+        provider.batch_get_emails.assert_called_once()
+        assert provider.batch_get_emails.call_args.args[0] == ["m-new"]
+        reloaded = SyncState(str(tmp_path))
+        reloaded.load()
+        assert set(reloaded.synced_message_ids) == {"m-old", "m-new"}
+        assert reloaded.last_sync_time > "2026-10-20T08:00:00+00:00"
 
-            result = runner.invoke(
-                app,
-                [
-                    "save",
-                    "--query",
-                    "from:test@example.com",
-                    "--output-dir",
-                    str(tmp_path),
-                    "--sync",
-                ],
-            )
+    def test_changed_query_runs_full_sync(self, tmp_path):
+        from iobox.processing.file_manager import SyncState
 
-        assert result.exit_code == 0
-        # Incremental: get_new_messages should be called with the saved history ID
-        provider.get_new_messages.assert_called_once_with("hist-100")
-        # search_emails should NOT be called (we got IDs from history)
-        provider.search_emails.assert_not_called()
-        # State should be updated
-        mock_state.update.assert_called_once()
+        state = SyncState(str(tmp_path))
+        state.query = "from:someone-else@x.com"
+        state.last_sync_time = "2026-10-20T08:00:00+00:00"
+        state.save()
 
-    def test_save_with_sync_history_expired_falls_back(self, tmp_path):
-        """When get_new_messages returns None, falls back to full search."""
-        mock_email = self._mock_email_data("m-full")
+        provider = _mock_provider(search_emails=[])
+        result = self._run_save(provider, tmp_path, "-d", "30")
 
-        _e = {
-            "from_": "",
-            "date": "",
-            "snippet": "",
-            "subject": "Test",
-            "labels": [],
-            "thread_id": "",
-        }
+        assert result.exit_code == 0, result.output
+        assert "Query changed" in result.output
+        query = provider.search_emails.call_args.args[0]
+        assert query.after != date_type_day_before("2026-10-20")
+
+    def test_failed_message_does_not_advance_window(self, tmp_path):
+        from iobox.processing.file_manager import SyncState
+
         provider = _mock_provider(
-            get_new_messages=None,
-            search_emails=[{"message_id": "m-full", **_e}],
-            batch_get_emails=[mock_email],
-            get_sync_state="hist-300",
+            search_emails=[self._search_hit("m1"), self._search_hit("m2")],
+            batch_get_emails=[
+                self._mock_email_data("m1"),
+                {"message_id": "m2", "error": "boom"},
+            ],
         )
+        result = self._run_save(provider, tmp_path)
 
-        with (
-            patch("iobox.cli.get_provider", return_value=provider),
-            patch("iobox.cli.SyncState") as MockSyncState,
-            patch("iobox.cli.convert_email_to_markdown", return_value="# md"),
-            patch("iobox.cli.save_email_to_markdown", return_value=str(tmp_path / "m-full.md")),
-            patch("iobox.cli.create_output_directory", return_value=str(tmp_path)),
-            patch("iobox.cli.check_for_duplicates", return_value=[]),
-        ):
-            mock_state = MagicMock()
-            mock_state.load.return_value = True
-            mock_state.last_history_id = "hist-old"
-            MockSyncState.return_value = mock_state
+        assert result.exit_code == 0, result.output
+        state = SyncState(str(tmp_path))
+        state.load()
+        assert state.synced_message_ids == ["m1"]
+        assert state.last_sync_time is None
+        assert "will be retried" in result.output
 
-            result = runner.invoke(
-                app,
-                [
-                    "save",
-                    "--query",
-                    "from:test@example.com",
-                    "--output-dir",
-                    str(tmp_path),
-                    "--sync",
-                ],
-            )
+    def test_truncated_results_do_not_advance_window(self, tmp_path):
+        from iobox.processing.file_manager import SyncState
 
-        assert result.exit_code == 0
-        # Falls back to full search
-        provider.search_emails.assert_called_once()
-        assert "Falling back" in result.stdout or result.exit_code == 0
+        provider = _mock_provider(
+            search_emails=[self._search_hit("m1")],
+            batch_get_emails=[self._mock_email_data("m1")],
+        )
+        result = self._run_save(provider, tmp_path, "--max", "1")
+
+        assert result.exit_code == 0, result.output
+        state = SyncState(str(tmp_path))
+        state.load()
+        assert state.last_sync_time is None
+        assert "not advanced" in result.output
+
+
+def date_type_day_before(iso_day: str):
+    from datetime import date, timedelta
+
+    return date.fromisoformat(iso_day) - timedelta(days=1)
 
 
 class TestDraftCommands:

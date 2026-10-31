@@ -33,7 +33,7 @@ from iobox.providers.google.auth import (
     check_auth_status,
     set_active_mode,
 )
-from iobox.utils import slugify_text
+from iobox.utils import parse_date_range, slugify_text
 
 mcp = FastMCP("iobox")
 
@@ -770,20 +770,6 @@ def save_thread(
     return filepath
 
 
-def _refresh_sync_state(p: Any, sync_state: Any, ids: list[str], fallback: str = "") -> None:
-    """Record the provider's current sync token (e.g. Gmail historyId).
-
-    Asks the *selected* provider rather than the legacy module-level Gmail
-    service, so the token belongs to the account that was searched and no
-    separate (possibly interactive) auth path is triggered.
-    """
-    try:
-        token = p.get_sync_state()
-    except Exception:
-        return  # sync only meaningful where the provider supports it.
-    sync_state.update(str(token or fallback), ids)
-
-
 @_tool
 def save_emails_by_query(
     query: str,
@@ -825,7 +811,10 @@ def save_emails_by_query(
         include_inline: Include inline parts (signature logos, cid images) when
             downloading attachments (default False — skip inline cruft).
         include_spam_trash: Include SPAM and TRASH (default False).
-        sync: Enable incremental sync — Gmail only (default False).
+        sync: Incremental sync (default False). Later runs re-run the same
+            query from the day before the last complete run and skip messages
+            already saved; the window only advances when every match was
+            saved and fewer than ``max_results`` matched.
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
@@ -833,7 +822,7 @@ def save_emails_by_query(
         Summary dict with saved_count, skipped_count, attachment_count, and
         ``failed`` (``{message_id, error}`` for messages that could not be saved).
     """
-    from datetime import date, timedelta
+    from datetime import datetime, timezone
 
     from iobox.providers.base import EmailQuery
 
@@ -844,62 +833,41 @@ def save_emails_by_query(
     )
     p = _resolve_email_provider(provider=provider, workspace=workspace)
 
-    # Incremental sync
+    # Incremental sync: same query over a window from the day before the last
+    # complete run; already-saved IDs are skipped (see SyncState).
     sync_state = SyncState(out)
-    message_ids_to_fetch: list[str] | None = None
+    run_started = datetime.now(timezone.utc)
+    after, before = parse_date_range(days, start_date, end_date)
+    if sync and sync_state.load():
+        after = sync_state.incremental_after(query, after)
 
-    if sync:
-        state_exists = sync_state.load()
-        if state_exists and sync_state.last_history_id:
-            new_ids = p.get_new_messages(sync_state.last_history_id)
-            if new_ids is not None:
-                message_ids_to_fetch = new_ids
-
-    if message_ids_to_fetch is not None:
-        if not message_ids_to_fetch:
-            _refresh_sync_state(p, sync_state, [], fallback=sync_state.last_history_id or "")
-            return {
-                "saved_count": 0,
-                "skipped_count": 0,
-                "attachment_count": 0,
-                "detail": "No new emails since last sync.",
-            }
-    else:
-        # Build EmailQuery
-        after: date | None = None
-        before: date | None = None
-        if start_date:
-            parts = start_date.replace("-", "/").split("/")
-            after = date(int(parts[0]), int(parts[1]), int(parts[2]))
-        elif days:
-            after = date.today() - timedelta(days=days)
-        if end_date:
-            parts = end_date.replace("-", "/").split("/")
-            before = date(int(parts[0]), int(parts[1]), int(parts[2]))
-
-        search_results = p.search_emails(
-            EmailQuery(
-                text=query,
-                max_results=max_results,
-                after=after,
-                before=before,
-                include_spam_trash=include_spam_trash,
-            )
+    search_results = p.search_emails(
+        EmailQuery(
+            text=query,
+            max_results=max_results,
+            after=after,
+            before=before,
+            include_spam_trash=include_spam_trash,
         )
-        if not search_results:
-            if sync:
-                _refresh_sync_state(p, sync_state, [])
-            return {
-                "saved_count": 0,
-                "skipped_count": 0,
-                "attachment_count": 0,
-                "detail": "No emails found.",
-            }
-        message_ids_to_fetch = [r["message_id"] for r in search_results]
+    )
+    if not search_results:
+        if sync:
+            sync_state.record_run(query=query, started_at=run_started, saved_ids=[], complete=True)
+        return {
+            "saved_count": 0,
+            "skipped_count": 0,
+            "attachment_count": 0,
+            "detail": "No emails found.",
+        }
+    message_ids_to_fetch = [r["message_id"] for r in search_results]
+    truncated = len(search_results) >= max_results
 
     all_ids = list(message_ids_to_fetch)
-    duplicates = check_for_duplicates(all_ids, out)
+    duplicates = set(check_for_duplicates(all_ids, out))
+    if sync:
+        duplicates |= {mid for mid in all_ids if sync_state.is_synced(mid)}
     ids_to_process = [mid for mid in all_ids if mid not in duplicates]
+    saved_ids: list[str] = []
 
     saved_count = 0
     attachment_count = 0
@@ -918,6 +886,7 @@ def save_emails_by_query(
                 md = convert_email_to_markdown(email_data)
                 save_email_to_markdown(email_data, md, out)
                 saved_count += 1
+                saved_ids.append(email_data.get("message_id", ""))
                 if download_attachments and email_data.get("attachments"):
                     res = download_email_attachments(
                         download_fn=p.download_attachment,
@@ -931,7 +900,12 @@ def save_emails_by_query(
                 failed.append({"message_id": email_data.get("message_id", ""), "error": str(exc)})
 
     if sync:
-        _refresh_sync_state(p, sync_state, ids_to_process)
+        sync_state.record_run(
+            query=query,
+            started_at=run_started,
+            saved_ids=saved_ids,
+            complete=not failed and not truncated,
+        )
 
     return {
         "saved_count": saved_count,

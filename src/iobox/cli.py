@@ -8,7 +8,7 @@ import hashlib
 import logging
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,7 @@ from iobox.processing.markdown_converter import (
 )
 from iobox.providers import EmailData, EmailProvider, EmailQuery, get_provider
 from iobox.providers.google.auth import set_active_mode
+from iobox.utils import parse_date_range
 
 logger = logging.getLogger(__name__)
 
@@ -69,29 +70,8 @@ def _parse_dates(
     start_date: str | None,
     end_date: str | None,
 ) -> tuple[date | None, date | None]:
-    """Convert CLI date parameters into ``(after, before)`` date objects.
-
-    * When ``start_date`` is given it takes precedence over ``days``.
-    * ``days`` is relative to today.
-    * ``end_date`` is **inclusive** for the user; providers treat ``before`` as
-      exclusive, so the returned ``before`` is the day *after* ``end_date``.
-    * Returns ``(None, None)`` when no date constraints are provided.
-    """
-    after: date | None = None
-    before: date | None = None
-
-    if start_date:
-        # Accept YYYY/MM/DD format
-        parts = start_date.replace("-", "/").split("/")
-        after = date(int(parts[0]), int(parts[1]), int(parts[2]))
-    elif days is not None:
-        after = date.today() - timedelta(days=days)
-
-    if end_date:
-        parts = end_date.replace("-", "/").split("/")
-        before = date(int(parts[0]), int(parts[1]), int(parts[2])) + timedelta(days=1)
-
-    return after, before
+    """Convert CLI date options into ``(after, before)``; ``end_date`` is inclusive."""
+    return parse_date_range(days, start_date, end_date)
 
 
 # Top-level commands that act on the single mailbox chosen by --provider/--account.
@@ -529,66 +509,56 @@ def save(
 
         # Batch mode
         else:
-            # Incremental sync: try to use history if --sync is set
+            # Incremental sync re-runs the same query over a window starting the
+            # day before the last complete run; already-saved IDs are skipped.
             sync_state = SyncState(output_dir)
-            message_ids_to_fetch: list[str] | None = None
+            run_started = datetime.now(timezone.utc)
+            after, before = _parse_dates(days, start_date, end_date)
+            if sync and sync_state.load():
+                window_after = sync_state.incremental_after(query, after)
+                if window_after != after:
+                    typer.echo(f"Incremental sync: searching from {window_after} onwards.")
+                    after = window_after
+                elif sync_state.query and sync_state.query != query:
+                    typer.echo("Query changed since the last sync; running a full sync.")
 
-            if sync:
-                state_exists = sync_state.load()
-                if state_exists and sync_state.last_history_id:
-                    hid = sync_state.last_history_id
-                    typer.echo(
-                        f"Incremental sync: checking for new emails since historyId {hid}..."
+            eq = EmailQuery(
+                raw_query=query,
+                max_results=max_results,
+                after=after,
+                before=before,
+                include_spam_trash=include_spam_trash,
+            )
+            typer.echo(f"Searching for emails matching: {query}")
+            search_results = provider.search_emails(eq)
+            if not search_results:
+                typer.echo("No emails found matching the query.")
+                if sync:
+                    sync_state.record_run(
+                        query=query, started_at=run_started, saved_ids=[], complete=True
                     )
-                    new_ids = provider.get_new_messages(sync_state.last_history_id)
-                    if new_ids is not None:
-                        typer.echo(f"Found {len(new_ids)} new email(s) since last sync.")
-                        message_ids_to_fetch = new_ids
-                    else:
-                        typer.echo("Sync history expired. Falling back to full query.")
-
-            if message_ids_to_fetch is not None:
-                # Use pre-fetched IDs from incremental sync
-                if not message_ids_to_fetch:
-                    typer.echo("No new emails since last sync.")
-                    # Still update the history ID
-                    current_sync = provider.get_sync_state()
-                    sync_state.update(current_sync, [])
-                    return
-                results_for_batch = [{"message_id": mid} for mid in message_ids_to_fetch]
-            else:
-                # Full search
-                after, before = _parse_dates(days, start_date, end_date)
-                eq = EmailQuery(
-                    raw_query=query,
-                    max_results=max_results,
-                    after=after,
-                    before=before,
-                    include_spam_trash=include_spam_trash,
-                )
-                typer.echo(f"Searching for emails matching: {query}")
-                search_results = provider.search_emails(eq)
-                if not search_results:
-                    typer.echo("No emails found matching the query.")
-                    if sync:
-                        current_sync = provider.get_sync_state()
-                        sync_state.update(current_sync, [])
-                    return
-                results_for_batch = [_email_data_to_dict(r) for r in search_results]
+                return
+            results_for_batch = [_email_data_to_dict(r) for r in search_results]
+            truncated = len(search_results) >= max_results
 
             total_emails = len(results_for_batch)
             typer.echo(f"\nFound {total_emails} emails to process.")
 
             # Check for already processed emails
             all_message_ids = [r["message_id"] for r in results_for_batch]
-            duplicates = check_for_duplicates(all_message_ids, output_dir)
+            duplicates = set(check_for_duplicates(all_message_ids, output_dir))
+            if sync:
+                duplicates |= {mid for mid in all_message_ids if sync_state.is_synced(mid)}
             ids_to_process = [mid for mid in all_message_ids if mid not in duplicates]
 
-            for mid in duplicates:
-                typer.echo(f"Skipping already processed email: {mid}")
+            for mid in all_message_ids:
+                if mid in duplicates:
+                    typer.echo(f"Skipping already processed email: {mid}")
 
             saved_count = 0
             attachment_count = 0
+            saved_ids: list[str] = []
+            failed_count = 0
 
             # Batch-fetch full content for all non-duplicate emails
             if ids_to_process:
@@ -601,6 +571,7 @@ def save(
                 for idx, raw_email_data in enumerate(email_batch, 1):
                     email_dict = _email_data_to_dict(raw_email_data)
                     if "error" in email_dict:
+                        failed_count += 1
                         typer.echo(
                             f"  Skipping email {email_dict['message_id']}: {email_dict['error']}"
                         )
@@ -620,6 +591,7 @@ def save(
                     )
 
                     saved_count += 1
+                    saved_ids.append(email_dict["message_id"])
 
                     # Download attachments if requested
                     if download_attachments and email_dict.get("attachments"):
@@ -633,11 +605,20 @@ def save(
                         for err in result_dict["errors"]:
                             typer.echo(f"  Warning: {err}")
 
-            # Update sync state after successful save
             if sync:
-                current_sync = provider.get_sync_state()
-                sync_state.update(current_sync, ids_to_process)
-                typer.echo(f"Sync state updated (historyId: {current_sync})")
+                complete = failed_count == 0 and not truncated
+                sync_state.record_run(
+                    query=query, started_at=run_started, saved_ids=saved_ids, complete=complete
+                )
+                if complete:
+                    typer.echo("Sync state updated.")
+                elif truncated:
+                    typer.echo(
+                        f"Sync window not advanced: {max_results} or more matches — "
+                        "run again (or raise --max) to fetch the rest."
+                    )
+                else:
+                    typer.echo("Sync window not advanced: some emails failed and will be retried.")
 
             # Summary message
             typer.echo(f"\nCompleted processing {total_emails} emails:")
@@ -1677,7 +1658,6 @@ def events_list(
 ) -> None:
     """List calendar events from the active workspace."""
     from datetime import date as _date
-    from datetime import timedelta
 
     from iobox.providers.base import EventQuery
 

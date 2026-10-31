@@ -500,13 +500,73 @@ class TestSyncState:
         assert dst == state.filepath
         assert os.path.dirname(src) == str(tmp_path)
 
-    def test_save_sets_timezone_aware_sync_time(self, tmp_path):
+    def test_update_sets_timezone_aware_sync_time(self, tmp_path):
         state = SyncState(str(tmp_path))
-        state.save()
+        state.update("hist-1", [])
         state2 = SyncState(str(tmp_path))
         state2.load()
         assert state2.last_sync_time is not None
         assert state2.last_sync_time.endswith("+00:00")
+
+    def test_save_does_not_move_sync_window(self, tmp_path):
+        state = SyncState(str(tmp_path))
+        state.last_sync_time = "2026-01-01T00:00:00+00:00"
+        state.save()
+        state2 = SyncState(str(tmp_path))
+        state2.load()
+        assert state2.last_sync_time == "2026-01-01T00:00:00+00:00"
+
+    def test_incremental_after_uses_day_before_last_run_for_same_query(self, tmp_path):
+        from datetime import date
+
+        state = SyncState(str(tmp_path))
+        state.query = "from:x"
+        state.last_sync_time = "2026-10-20T23:30:00+00:00"
+        assert state.incremental_after("from:x", date(2026, 1, 1)) == date(2026, 10, 19)
+        assert state.incremental_after("from:y", date(2026, 1, 1)) == date(2026, 1, 1)
+
+    def test_incremental_after_without_previous_run_returns_after(self, tmp_path):
+        from datetime import date
+
+        state = SyncState(str(tmp_path))
+        state.query = "from:x"
+        assert state.incremental_after("from:x", date(2026, 1, 1)) == date(2026, 1, 1)
+
+    def test_record_run_complete_advances_window(self, tmp_path):
+        from datetime import datetime, timezone
+
+        state = SyncState(str(tmp_path))
+        started = datetime(2026, 10, 31, 9, 0, tzinfo=timezone.utc)
+        state.record_run(query="q", started_at=started, saved_ids=["a"], complete=True)
+        state2 = SyncState(str(tmp_path))
+        state2.load()
+        assert state2.query == "q"
+        assert state2.last_sync_time == started.isoformat()
+        assert state2.synced_message_ids == ["a"]
+
+    def test_record_run_incomplete_keeps_window_but_records_ids(self, tmp_path):
+        from datetime import datetime, timezone
+
+        state = SyncState(str(tmp_path))
+        state.query = "q"
+        state.last_sync_time = "2026-10-01T00:00:00+00:00"
+        state.record_run(
+            query="q", started_at=datetime.now(timezone.utc), saved_ids=["a"], complete=False
+        )
+        assert state.last_sync_time == "2026-10-01T00:00:00+00:00"
+        assert state.is_synced("a")
+
+    def test_record_run_new_query_resets_window(self, tmp_path):
+        from datetime import datetime, timezone
+
+        state = SyncState(str(tmp_path))
+        state.query = "old"
+        state.last_sync_time = "2026-10-01T00:00:00+00:00"
+        state.record_run(
+            query="new", started_at=datetime.now(timezone.utc), saved_ids=[], complete=False
+        )
+        assert state.query == "new"
+        assert state.last_sync_time is None
 
     def test_sync_state_update_without_prior_load(self, tmp_path):
         """update() can be called on a fresh SyncState without prior load()."""

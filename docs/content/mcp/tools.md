@@ -27,7 +27,7 @@ Every tool below is registered only in the [access mode](configuration.md#access
 | `get_emails` | readonly | Fetch many messages in one call — the fast path for triage | `message_ids`, `body="none"`, `max_body_chars` |
 | `save_email` | readonly | Save one message as Markdown; returns a manifest of written files | `message_id`, `output_dir="."`, `download_attachments`, `attachment_types`, `include_inline` |
 | `save_thread` | readonly | Save a whole thread as one Markdown file | `thread_id`, `output_dir="."` |
-| `save_emails_by_query` | readonly | Search and save every match; optional incremental sync | `query`, `output_dir`, `max_results=10`, `days=7`, `download_attachments`, `sync` |
+| `save_emails_by_query` | readonly | Search and save every match; `sync=True` re-runs the same query from the last complete run and skips saved IDs | `query`, `output_dir`, `max_results=10`, `days=7`, `download_attachments`, `sync` |
 | `download_email_attachment` | readonly | Download one attachment to disk or return it as base64 | `message_id`, `attachment_id`, `output_path`, `return_base64` |
 | `list_gmail_drafts` | readonly | List drafts | `max_results=10` |
 | `list_labels` | readonly | List labels (Gmail) or categories (Outlook) | — |

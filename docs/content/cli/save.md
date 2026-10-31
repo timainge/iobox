@@ -29,7 +29,7 @@ iobox [--provider gmail|outlook] [--account NAME] save [OPTIONS]
 | `--download-attachments` | | FLAG | `False` | Download attachments (single and batch modes; not thread mode) |
 | `--attachment-types` | | TEXT | `None` | Only download these extensions, comma-separated (e.g. `pdf,docx`) |
 | `--include-spam-trash` | | FLAG | `False` | Include messages from SPAM and TRASH (batch mode) |
-| `--sync` | | FLAG | `False` | Incremental sync: only fetch emails new since the last `--sync` run (batch mode) |
+| `--sync` | | FLAG | `False` | Incremental sync: later runs only search from the last complete `--sync` run (batch mode) |
 
 One of `--message-id`, `--thread-id`, or `--query` is required. If more than one is given, `--thread-id` wins, then `--message-id`.
 
@@ -51,13 +51,13 @@ iobox save --thread-id 18e4a2b3c1d5f6a7 -o ./emails
 
 ### Batch Mode
 
-Save all emails matching a query. Re-running into the same directory skips emails already saved there (matched by the `message_id` in each file's frontmatter). Use `--sync` to avoid even searching for messages that were seen before.
+Save all emails matching a query. Re-running into the same directory skips emails already saved there (matched by the `message_id` in each file's frontmatter). Use `--sync` to keep a folder up to date cheaply (below).
 
 ```bash
 iobox save -q "from:newsletter@example.com" -d 14 --max 50 -o ./emails
 ```
 
-With `--sync`, the sync position is stored in `.iobox-sync.json` in the output directory. On later runs only messages added since then are fetched (the query and date options are ignored for that run); if the stored position has expired, iobox falls back to the full query.
+With `--sync`, iobox records the query, the start time of the last complete run, and the IDs it saved in `.iobox-sync.json` in the output directory. Later runs with the **same query** search from the day before that run (instead of `-d`/`--start-date`) and skip messages already saved, so mail that arrived while the previous run was in progress isn't missed. The window only moves forward when a run is complete — every match saved and fewer than `--max` matches — otherwise the next run retries from the same point. Changing the query starts a fresh full sync. This works the same for Gmail and Outlook.
 
 ## Examples
 
