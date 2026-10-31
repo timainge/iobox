@@ -70,6 +70,8 @@ from iobox.providers import get_provider
 gmail = get_provider("gmail")   # gmail | outlook | google_calendar | google_drive | outlook_calendar | onedrive
 ```
 
+The return type follows the name for type checkers: `"gmail"`/`"outlook"` → `EmailProvider`, `"google_calendar"`/`"outlook_calendar"` → `CalendarProvider`, `"google_drive"`/`"onedrive"` → `FileProvider`. A name only known at runtime (a plain `str`) gives the union of the three.
+
 ## EmailProvider
 
 | Group | Methods |

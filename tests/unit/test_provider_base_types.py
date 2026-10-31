@@ -7,6 +7,7 @@ be instantiated directly.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import get_type_hints
 
 import pytest
@@ -89,6 +90,60 @@ class TestResourceTypeDict:
             "url": None,
         }
         assert r["resource_type"] == "email"
+
+    def test_slot_is_optional_key(self) -> None:
+        assert "slot" in Resource.__optional_keys__
+        assert "id" in Resource.__required_keys__
+        assert "slot" in Email.__optional_keys__
+
+    def test_email_data_has_optional_slot_and_provider_id(self) -> None:
+        assert {"slot", "provider_id"} <= EmailData.__optional_keys__
+
+
+# ── get_provider typing (WS-10) ───────────────────────────────────────────────
+
+
+class TestGetProviderTyping:
+    def test_overloads_narrow_return_type(self, tmp_path: Path) -> None:
+        mypy_api = pytest.importorskip("mypy.api")
+        snippet = tmp_path / "snippet.py"
+        snippet.write_text(
+            "from iobox.providers import get_provider\n"
+            "reveal_type(get_provider())\n"
+            "reveal_type(get_provider('outlook'))\n"
+            "reveal_type(get_provider('google_calendar'))\n"
+            "reveal_type(get_provider('onedrive'))\n"
+            "name: str = 'gmail'\n"
+            "reveal_type(get_provider(name))\n"
+        )
+        out, _err, _status = mypy_api.run(
+            [str(snippet), "--no-incremental", "--follow-imports=silent", "--no-error-summary"]
+        )
+        revealed = [
+            line.split("Revealed type is ")[1] for line in out.splitlines() if "Revealed" in line
+        ]
+        assert revealed[0] == revealed[1] == '"iobox.providers.base.EmailProvider"'
+        assert revealed[2] == '"iobox.providers.base.CalendarProvider"'
+        assert revealed[3] == '"iobox.providers.base.FileProvider"'
+        assert "CalendarProvider" in revealed[4] and "FileProvider" in revealed[4]
+
+    def test_runtime_returns_requested_class(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from iobox.providers import get_provider
+
+        fake_cls = MagicMock()
+        fake_module = MagicMock(GoogleCalendarProvider=fake_cls)
+        with patch("importlib.import_module", return_value=fake_module):
+            result = get_provider("google_calendar", mode="readonly")
+        fake_cls.assert_called_once_with(mode="readonly")
+        assert result is fake_cls.return_value
+
+    def test_unknown_name_raises(self) -> None:
+        from iobox.providers import get_provider
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            get_provider("nope")
 
 
 # ── AttendeeInfo TypedDict ────────────────────────────────────────────────────

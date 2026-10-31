@@ -104,6 +104,67 @@ class TestServiceEntry:
         assert entry.mode == "standard"
 
 
+# ── Slug uniqueness / duplicate detection (WS-04) ─────────────────────────────
+
+
+def _entry(account: str, service: str = "google", slug: str = "") -> ServiceEntry:
+    return ServiceEntry(
+        number=1,
+        service=service,  # type: ignore[arg-type]
+        account=account,
+        scopes=["email"],
+        slug=slug,
+    )
+
+
+class TestUniqueSlug:
+    def test_no_collision_returns_derived_slug(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("work@company.com")])
+        assert sc.unique_slug(cfg, "tim@gmail.com") == "tim-gmail"
+
+    def test_collision_appends_suffix(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("tim@gmail.com")])
+        assert sc.unique_slug(cfg, "tim@gmail.co.uk") == "tim-gmail-2"
+
+    def test_multiple_collisions_increment(self) -> None:
+        cfg = SpaceConfig(
+            name="p",
+            services=[_entry("tim@gmail.com"), _entry("tim@gmail.co.uk", slug="tim-gmail-2")],
+        )
+        assert sc.unique_slug(cfg, "tim@gmail.de") == "tim-gmail-3"
+
+    def test_same_account_other_service_gets_distinct_slug(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("tim@company.com", "google")])
+        assert sc.unique_slug(cfg, "tim@company.com") == "tim-company-2"
+
+    def test_existing_stored_slugs_unchanged_on_load(self) -> None:
+        cfg = SpaceConfig(
+            name="personal",
+            services=[_entry("tim@gmail.com"), _entry("tim@gmail.co.uk", slug="tim-gmail")],
+        )
+        save_space(cfg)
+        assert [s.slug for s in load_space("personal").services] == ["tim-gmail", "tim-gmail"]
+
+
+class TestFindService:
+    def test_finds_existing_entry_case_insensitive(self) -> None:
+        e = _entry("Tim@Gmail.com")
+        cfg = SpaceConfig(name="p", services=[e])
+        assert sc.find_service(cfg, "google", "tim@gmail.com") is e
+
+    def test_different_service_not_matched(self) -> None:
+        cfg = SpaceConfig(name="p", services=[_entry("tim@gmail.com", "google")])
+        assert sc.find_service(cfg, "o365", "tim@gmail.com") is None
+
+    def test_legacy_service_name_normalised(self) -> None:
+        e = _entry("corp@megacorp.com", "o365")
+        cfg = SpaceConfig(name="p", services=[e])
+        assert sc.find_service(cfg, "outlook", "corp@megacorp.com") is e
+
+    def test_missing_returns_none(self) -> None:
+        assert sc.find_service(SpaceConfig(name="p"), "google", "x@y.com") is None
+
+
 # ── ensure_iobox_home ─────────────────────────────────────────────────────────
 
 
@@ -225,10 +286,13 @@ class TestActiveSpace:
         assert get_active_space() is None
 
     def test_set_and_get_roundtrip(self) -> None:
+        save_space(SpaceConfig(name="personal"))
         set_active_space("personal")
         assert get_active_space() == "personal"
 
     def test_set_overwrites_previous(self) -> None:
+        save_space(SpaceConfig(name="personal"))
+        save_space(SpaceConfig(name="work"))
         set_active_space("personal")
         set_active_space("work")
         assert get_active_space() == "work"
@@ -237,6 +301,114 @@ class TestActiveSpace:
         assert not sc.IOBOX_HOME.exists()
         set_active_space("personal")
         assert sc.ACTIVE_SPACE_FILE.exists()
+
+    def test_returns_none_when_active_space_deleted(self, caplog: pytest.LogCaptureFixture) -> None:
+        save_space(SpaceConfig(name="gone"))
+        set_active_space("gone")
+        (sc.WORKSPACES_DIR / "gone.toml").unlink()
+        with caplog.at_level("WARNING"):
+            assert get_active_space() is None
+        assert "no longer exists" in caplog.text
+
+    def test_returns_none_when_active_file_has_invalid_name(self) -> None:
+        sc.IOBOX_HOME.mkdir(parents=True, exist_ok=True)
+        sc.ACTIVE_SPACE_FILE.write_text("../../etc/passwd")
+        assert get_active_space() is None
+
+
+# ── File name is authoritative (WS-05) ────────────────────────────────────────
+
+
+class TestLoadUsesFileName:
+    def test_copied_file_saves_back_to_itself(self) -> None:
+        save_space(SpaceConfig(name="original"))
+        original = (sc.WORKSPACES_DIR / "original.toml").read_text()
+        # User copies the file; [workspace] name inside still says "original".
+        (sc.WORKSPACES_DIR / "copy.toml").write_text(original)
+
+        cfg = load_space("copy")
+        assert cfg.name == "copy"
+        cfg.services.append(
+            ServiceEntry(number=1, service="google", account="a@b.com", scopes=["email"])
+        )
+        save_space(cfg)
+
+        assert load_space("original").services == []
+        assert len(load_space("copy").services) == 1
+
+
+# ── Malformed files and atomic writes (WS-09) ─────────────────────────────────
+
+
+class TestMalformedConfig:
+    def _write(self, body: str) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+        (sc.WORKSPACES_DIR / "personal.toml").write_text(body)
+
+    def test_missing_workspace_table(self) -> None:
+        self._write("[[services]]\nnumber = 1\n")
+        with pytest.raises(ValueError, match=r"personal\.toml.*missing required key 'workspace'"):
+            load_space("personal")
+
+    @pytest.mark.parametrize("key", ["number", "service", "account", "scopes"])
+    def test_missing_service_key(self, key: str) -> None:
+        fields = {
+            "number": "1",
+            "service": '"google"',
+            "account": '"a@b.com"',
+            "scopes": '["email"]',
+        }
+        del fields[key]
+        body = "\n".join(f"{k} = {v}" for k, v in fields.items())
+        self._write(f'[workspace]\nname = "personal"\n\n[[services]]\n{body}\n')
+        with pytest.raises(
+            ValueError, match=rf"personal\.toml.*missing required key '{key}'.*entry #1"
+        ):
+            load_space("personal")
+
+    def test_invalid_toml_raises_value_error_with_path(self) -> None:
+        self._write("this is = = not toml")
+        with pytest.raises(ValueError, match=r"personal\.toml.*invalid TOML"):
+            load_space("personal")
+
+    def test_corrupt_session_file_returns_empty_session(self) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+        (sc.WORKSPACES_DIR / "personal.session.json").write_text("{not json")
+        assert load_session("personal").services == {}
+
+
+class TestAtomicWrites:
+    def test_failed_write_leaves_existing_file_intact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        save_space(SpaceConfig(name="personal"))
+        before = (sc.WORKSPACES_DIR / "personal.toml").read_text()
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sc.os, "replace", boom)
+        cfg = SpaceConfig(
+            name="personal",
+            services=[ServiceEntry(number=1, service="google", account="a@b.com", scopes=[])],
+        )
+        with pytest.raises(OSError):
+            save_space(cfg)
+        assert (sc.WORKSPACES_DIR / "personal.toml").read_text() == before
+        # No temp files left behind
+        assert sorted(p.name for p in sc.WORKSPACES_DIR.iterdir()) == ["personal.toml"]
+
+    def test_set_active_space_is_atomic(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[tuple[str, str]] = []
+        real_replace = sc.os.replace
+
+        def spy(src: str, dst: object) -> None:
+            calls.append((str(src), str(dst)))
+            real_replace(src, dst)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(sc.os, "replace", spy)
+        set_active_space("personal")
+        assert calls and calls[0][1] == str(sc.ACTIVE_SPACE_FILE)
 
 
 # ── load_session / save_session roundtrip ────────────────────────────────────
@@ -352,3 +524,97 @@ class TestTokenFileProbes:
         legacy = token_file_for(self._entry("o365")).parent / "o365_token.txt"
         self._touch(legacy)
         assert is_authenticated(self._entry("o365")) is True
+
+
+# ── Validation (SEC-09 / SEC-11) ──────────────────────────────────────────────
+
+
+class TestSpaceNameValidation:
+    @pytest.mark.parametrize(
+        "name", ["../../x", "a/b", "a\\b", "", "x" * 65, "has space", "dot.name", "nl\n"]
+    )
+    def test_invalid_names_rejected_everywhere(self, name: str) -> None:
+        with pytest.raises(ValueError, match="Invalid workspace name"):
+            sc.validate_space_name(name)
+        with pytest.raises(ValueError):
+            load_space(name)
+        with pytest.raises(ValueError):
+            save_space(SpaceConfig(name=name))
+        with pytest.raises(ValueError):
+            set_active_space(name)
+        with pytest.raises(ValueError):
+            load_session(name)
+        with pytest.raises(ValueError):
+            save_session(SpaceSession(workspace=name))
+
+    @pytest.mark.parametrize("name", ["personal", "Work_2", "a-b", "x" * 64])
+    def test_valid_names_accepted(self, name: str) -> None:
+        assert sc.validate_space_name(name) == name
+
+    def test_traversal_does_not_write_outside_workspaces(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
+            save_space(SpaceConfig(name="../../escape"))
+        assert not list(tmp_path.rglob("escape.toml"))
+
+    def test_list_spaces_skips_invalid_stems(self) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True)
+        (sc.WORKSPACES_DIR / "bad name.toml").write_text('[workspace]\nname = "x"\n')
+        save_space(SpaceConfig(name="good"))
+        assert list_spaces() == ["good"]
+
+
+class TestAccountValidation:
+    @pytest.mark.parametrize(
+        "account", ["../evil", "a/b@x.com", "a\\b@x.com", ".hidden@x.com", "a\x00b", "", "  "]
+    )
+    def test_invalid_accounts_rejected(self, account: str) -> None:
+        with pytest.raises(ValueError, match="Invalid account"):
+            sc.validate_account(account)
+        with pytest.raises(ValueError):
+            ServiceEntry(number=1, service="google", account=account, scopes=["email"])
+
+    @pytest.mark.parametrize("account", ["tim@gmail.com", "Tim.Ainge@Example.COM", "default"])
+    def test_valid_accounts_preserved(self, account: str) -> None:
+        # Case is preserved so existing token directories keep working.
+        assert sc.validate_account(account) == account
+
+
+class TestTomlValueValidation:
+    def _write(self, body: str) -> None:
+        sc.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+        (sc.WORKSPACES_DIR / "personal.toml").write_text(body)
+
+    def _svc(self, **overrides: str) -> str:
+        fields = {
+            "number": "1",
+            "service": '"google"',
+            "account": '"tim@gmail.com"',
+            "scopes": '["email"]',
+            "mode": '"standard"',
+        }
+        fields.update(overrides)
+        lines = "\n".join(f"{k} = {v}" for k, v in fields.items())
+        return f'[workspace]\nname = "personal"\n\n[[services]]\n{lines}\n'
+
+    def test_invalid_mode_rejected_with_file_name(self) -> None:
+        self._write(self._svc(mode='"read-only"'))
+        with pytest.raises(ValueError, match=r"personal\.toml.*invalid mode 'read-only'"):
+            load_space("personal")
+
+    def test_invalid_service_rejected(self) -> None:
+        self._write(self._svc(service='"yahoo"'))
+        with pytest.raises(ValueError, match=r"personal\.toml.*invalid service 'yahoo'"):
+            load_space("personal")
+
+    def test_legacy_service_names_still_migrate(self) -> None:
+        self._write(self._svc(service='"gmail"'))
+        assert load_space("personal").services[0].service == "google"
+
+    def test_invalid_account_rejected_with_file_name(self) -> None:
+        self._write(self._svc(account='"../../etc"'))
+        with pytest.raises(ValueError, match=r"personal\.toml.*Invalid account"):
+            load_space("personal")
+
+    def test_missing_mode_defaults_to_standard(self) -> None:
+        self._write(self._svc().replace('mode = "standard"\n', ""))
+        assert load_space("personal").services[0].mode == "standard"
