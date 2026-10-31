@@ -241,9 +241,13 @@ class TestForwardPreservesAttachments:
         result = compose_forward_message(original, to="bob@example.com")
         raw_bytes = base64.urlsafe_b64decode(result["raw"])
         msg = message_from_bytes(raw_bytes)
-        # HTML-only forward (no attachments) stays a single html part.
-        assert msg.get_content_type() == "text/html"
-        assert "Forwarded message" in msg.get_payload()
+        # HTML-only forward (no attachments): plain + html alternatives.
+        assert msg.get_content_type() == "multipart/alternative"
+        plain, html_part = msg.get_payload()
+        assert plain.get_content_type() == "text/plain"
+        assert html_part.get_content_type() == "text/html"
+        assert "Forwarded message" in html_part.get_payload()
+        assert "Forwarded message" in plain.get_payload()
 
     @patch("iobox.providers.google._sender.send_message")
     @patch("iobox.providers.google._sender.download_attachment")
@@ -311,13 +315,93 @@ class TestComposeHtmlMessage:
 
         assert msg["to"] == "bob@example.com"
         assert msg["subject"] == "Hello HTML"
-        assert msg.get_content_type() == "text/html"
+        assert msg.get_content_type() == "multipart/alternative"
 
     def test_compose_plain_is_default(self):
         result = compose_message(to="bob@example.com", subject="Test", body="plain body")
         raw_bytes = base64.urlsafe_b64decode(result["raw"])
         msg = message_from_bytes(raw_bytes)
         assert msg.get_content_type() == "text/plain"
+
+
+_HTML_BODY = '<p>Hello <b>Bob</b>,</p><p>See <a href="https://x.example">the link</a>.</p>'
+
+
+def _alternative_parts(msg) -> tuple[str, str]:
+    """Return decoded (text/plain, text/html) bodies of the multipart/alternative."""
+    alt = next(p for p in msg.walk() if p.get_content_type() == "multipart/alternative")
+    plain, html_part = alt.get_payload()
+    assert plain.get_content_type() == "text/plain"
+    assert html_part.get_content_type() == "text/html"
+    return (
+        plain.get_payload(decode=True).decode(plain.get_content_charset() or "utf-8"),
+        html_part.get_payload(decode=True).decode(html_part.get_content_charset() or "utf-8"),
+    )
+
+
+class TestHtmlPlainAlternative:
+    """FU-05: the text/plain alternative of an HTML email is text, not raw HTML."""
+
+    def _assert_alternatives(self, msg) -> None:
+        plain, html_body = _alternative_parts(msg)
+        assert "<" not in plain and ">" not in plain
+        assert "Hello Bob" in plain
+        assert "See the link" in plain
+        assert html_body == _HTML_BODY
+
+    def test_html_with_attachment(self, tmp_path):
+        attach_file = tmp_path / "report.pdf"
+        attach_file.write_bytes(b"%PDF-fake")
+        result = compose_message(
+            to="bob@example.com",
+            subject="s",
+            body=_HTML_BODY,
+            content_type="html",
+            attachments=[str(attach_file)],
+        )
+        msg = message_from_bytes(base64.urlsafe_b64decode(result["raw"]))
+        assert msg.get_content_type() == "multipart/mixed"
+        self._assert_alternatives(msg)
+
+    def test_html_without_attachment(self):
+        result = compose_message(
+            to="bob@example.com", subject="s", body=_HTML_BODY, content_type="html"
+        )
+        msg = message_from_bytes(base64.urlsafe_b64decode(result["raw"]))
+        assert msg.get_content_type() == "multipart/alternative"
+        self._assert_alternatives(msg)
+
+    def test_html_with_inline_related_image(self):
+        blobs = [
+            {
+                "filename": "logo.png",
+                "mime_type": "image/png",
+                "data": b"\x89PNG",
+                "inline": True,
+                "content_id": "logo1",
+            }
+        ]
+        result = compose_message(
+            to="bob@example.com",
+            subject="s",
+            body=_HTML_BODY,
+            content_type="html",
+            attachment_blobs=blobs,
+        )
+        msg = message_from_bytes(base64.urlsafe_b64decode(result["raw"]))
+        assert msg.get_content_type() == "multipart/alternative"
+        alt_children = [p.get_content_type() for p in msg.get_payload()]
+        assert alt_children == ["text/plain", "multipart/related"]
+        plain = msg.get_payload()[0].get_payload(decode=True).decode()
+        assert "<" not in plain
+        related_html = msg.get_payload()[1].get_payload()[0]
+        assert related_html.get_payload(decode=True).decode() == _HTML_BODY
+
+    def test_plain_body_unchanged(self):
+        result = compose_message(to="bob@example.com", subject="s", body="a <b> c")
+        msg = message_from_bytes(base64.urlsafe_b64decode(result["raw"]))
+        assert msg.get_content_type() == "text/plain"
+        assert msg.get_payload(decode=True).decode() == "a <b> c"
 
 
 class TestComposeWithAttachment:

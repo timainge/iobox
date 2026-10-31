@@ -533,6 +533,108 @@ class TestLabelCacheScoping:
         assert svc.users().labels().list.return_value.execute.call_count == 1
 
 
+class TestReadPathLabelRefresh:
+    """FU-04: read paths refetch the label map once per batch on an unknown ID."""
+
+    def _svc(self, labels: list[dict[str, str]], messages: dict[str, dict]) -> MagicMock:
+        svc = MagicMock()
+        svc.users().labels().list.return_value.execute.return_value = {"labels": labels}
+        svc.users().messages().get.return_value.execute.side_effect = lambda: next(
+            iter(messages.values())
+        )
+        batch = MagicMock()
+        svc.new_batch_http_request.return_value = batch
+
+        def fake_execute():
+            callback = svc.new_batch_http_request.call_args[1]["callback"]
+            for req_id, resp in messages.items():
+                callback(req_id, resp, None)
+
+        batch.execute.side_effect = fake_execute
+        return svc
+
+    def _list_calls(self, svc: MagicMock) -> int:
+        return svc.users().labels().list.return_value.execute.call_count
+
+    def _messages(self, n: int, label_ids: list[str]) -> dict[str, dict]:
+        msgs = {}
+        for i in range(n):
+            m = _make_full_message(f"m{i}")
+            m["labelIds"] = list(label_ids)
+            msgs[f"m{i}"] = m
+        return msgs
+
+    def _prime_then_add_label(self, svc: MagicMock) -> dict[str, str]:
+        label_map = get_label_map(svc)  # cache filled before the label exists
+        svc.users().labels().list.return_value.execute.return_value = {
+            "labels": [{"id": "INBOX", "name": "INBOX"}, {"id": "Label_123", "name": "Fresh"}]
+        }
+        return label_map
+
+    def test_batch_get_emails_refetches_once_for_unknown_label(self) -> None:
+        msgs = self._messages(5, ["INBOX", "Label_123"])
+        svc = self._svc([{"id": "INBOX", "name": "INBOX"}], msgs)
+        label_map = self._prime_then_add_label(svc)
+
+        result = batch_get_emails(svc, list(msgs), label_map=label_map)
+
+        assert all(r["labels"] == ["INBOX", "Fresh"] for r in result)
+        assert self._list_calls(svc) == 2  # prime + exactly one refetch for 5 messages
+        # The per-service cache now knows the new label for later lookups.
+        assert get_label_map(svc)["Label_123"] == "Fresh"
+        assert self._list_calls(svc) == 2
+
+    def test_batch_get_emails_known_labels_do_not_refetch(self) -> None:
+        msgs = self._messages(3, ["INBOX"])
+        svc = self._svc([{"id": "INBOX", "name": "INBOX"}], msgs)
+        label_map = get_label_map(svc)
+
+        batch_get_emails(svc, list(msgs), label_map=label_map)
+
+        assert self._list_calls(svc) == 1
+
+    def test_unresolvable_label_falls_back_to_raw_id(self) -> None:
+        msgs = self._messages(3, ["INBOX", "Label_gone"])
+        svc = self._svc([{"id": "INBOX", "name": "INBOX"}], msgs)
+        label_map = get_label_map(svc)
+
+        result = batch_get_emails(svc, list(msgs), label_map=label_map)
+
+        assert all(r["labels"] == ["INBOX", "Label_gone"] for r in result)
+        assert self._list_calls(svc) == 2  # one refetch, not one per message
+
+    def test_get_email_content_refetches_for_unknown_label(self) -> None:
+        msgs = self._messages(1, ["INBOX", "Label_123"])
+        svc = self._svc([{"id": "INBOX", "name": "INBOX"}], msgs)
+        label_map = self._prime_then_add_label(svc)
+
+        data = get_email_content(svc, message_id="m0", label_map=label_map)
+
+        assert data["labels"] == ["INBOX", "Fresh"]
+        assert self._list_calls(svc) == 2
+
+    def test_batch_get_metadata_refetches_once_for_unknown_label(self) -> None:
+        from iobox.providers.google._search import batch_get_metadata
+
+        msgs = self._messages(4, ["Label_123"])
+        svc = self._svc([{"id": "INBOX", "name": "INBOX"}], msgs)
+        label_map = self._prime_then_add_label(svc)
+
+        result = batch_get_metadata(svc, list(msgs), label_map=label_map)
+
+        assert all(r["labels"] == ["Fresh"] for r in result)
+        assert self._list_calls(svc) == 2
+
+    def test_no_label_map_means_no_refetch(self) -> None:
+        msgs = self._messages(2, ["Label_123"])
+        svc = self._svc([], msgs)
+
+        result = batch_get_emails(svc, list(msgs))
+
+        assert all(r["labels"] == ["Label_123"] for r in result)
+        assert self._list_calls(svc) == 0
+
+
 class TestBatchModifyLabels:
     """Tests for batch_modify_labels()."""
 

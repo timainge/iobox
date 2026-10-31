@@ -11,6 +11,7 @@ import re
 import threading
 import time
 import weakref
+from collections.abc import Iterable
 from typing import Any
 
 from googleapiclient.errors import HttpError
@@ -147,6 +148,29 @@ def get_label_map(service: Any, refresh: bool = False) -> dict[str, str]:
         return dict(cache)
 
 
+def refresh_label_map_for_messages(
+    service: Any, label_map: dict[str, str] | None, messages: Iterable[dict[str, Any]]
+) -> None:
+    """Refetch ``label_map`` in place if any message carries an unknown label ID.
+
+    The per-service label cache lives as long as the process (e.g. the MCP
+    server), so a label created after it was filled would otherwise show as
+    its raw ID forever. Unknown IDs are collected across the whole batch and
+    the label list is refetched at most once; IDs still unknown afterwards
+    fall back to the raw ID at resolution time. No-op when ``label_map`` is
+    ``None`` (the caller asked for raw IDs).
+    """
+    if label_map is None:
+        return
+    unknown = {
+        lid for message in messages for lid in message.get("labelIds") or [] if lid not in label_map
+    }
+    if not unknown:
+        return
+    logger.info(f"Refreshing label map for {len(unknown)} unknown label ID(s)")
+    label_map.update(get_label_map(service, refresh=True))
+
+
 def _process_message_response(
     message: dict[str, Any],
     preferred_content_type: str = "text/plain",
@@ -244,6 +268,7 @@ def get_email_content(
 
     try:
         message = service.users().messages().get(userId="me", id=email_id, format="full").execute()
+        refresh_label_map_for_messages(service, label_map, [message])
 
         email_data = _process_message_response(message, preferred_content_type, label_map)
         logger.info(f"Successfully retrieved email content for {email_id}")
@@ -279,6 +304,7 @@ def batch_get_emails(
         Failed fetches are returned as dicts with 'error' key.
     """
     results, errors = batch_get_messages(service, message_ids, format=format)
+    refresh_label_map_for_messages(service, label_map, results.values())
 
     email_list = []
     for msg_id in message_ids:
