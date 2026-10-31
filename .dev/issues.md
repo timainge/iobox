@@ -150,12 +150,12 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 |---|---|---|---|---|
 | FU-01 | med | `pyproject.toml` pytest config | `log_cli = true` closed click CliRunner's output for any CLI test that logs | fixed (16f2b86) |
 | FU-02 | med | `modes.py` `_STANDARD_CLI` | CLI `draft-send` allowed in standard mode (sends mail) — aligned with MCP | fixed (8287896) |
-| FU-03 | low | `cli.py` `space status` | Reads `load_session()` error column, but nothing ever writes a session file | open |
+| FU-03 | low | `cli.py` `space status` | Reads `load_session()` error column, but nothing ever writes a session file | fixed (e762cc9) |
 | FU-04 | low | `google/_retrieval.py` | Read paths don't refetch labels for unknown label IDs (new labels show as raw IDs in long-lived MCP) | open |
 | FU-05 | low | `google/_sender.py` | HTML email with attachments sends raw HTML as the text/plain alternative | open |
 | FU-06 | low | `cli.py` mode gate | `--help` on a blocked subcommand prints the mode error instead of help | open |
-| FU-07 | low | `space_config.validate_account` | Rejects any account containing `..`, so `a..b@x.com` can't be added | open |
-| FU-08 | low | `workspace.search` | Event results in cross-type search sorted by `created_at`, not start time | open |
+| FU-07 | low | `space_config.validate_account` | Rejects any account containing `..`, so `a..b@x.com` can't be added | fixed (e97955e) |
+| FU-08 | low | `workspace.search` | Event results in cross-type search sorted by `created_at`, not start time | fixed (9ce10ba) |
 | FU-09 | med | — | No CLI/MCP command builds the semantic index (`embed_resources` is SDK-only) | deferred (feature) |
 | FU-10 | med | `pyproject.toml`, CI | O365/MCP tests skipped without the libraries; CI installed only `.[dev]` | fixed (a16dd98) |
 | FU-11 | med | `o365/email.py` search | `include_spam_trash` ignored for Outlook → Deleted Items and Junk always included | open |
