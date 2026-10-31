@@ -153,7 +153,7 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 | FU-03 | low | `cli.py` `space status` | Reads `load_session()` error column, but nothing ever writes a session file | fixed (e762cc9) |
 | FU-04 | low | `google/_retrieval.py` | Read paths don't refetch labels for unknown label IDs (new labels show as raw IDs in long-lived MCP) | open |
 | FU-05 | low | `google/_sender.py` | HTML email with attachments sends raw HTML as the text/plain alternative | open |
-| FU-06 | low | `cli.py` mode gate | `--help` on a blocked subcommand prints the mode error instead of help | open |
+| FU-06 | low | `cli.py` mode gate | `--help` on a blocked subcommand prints the mode error instead of help | fixed (301e808) |
 | FU-07 | low | `space_config.validate_account` | Rejects any account containing `..`, so `a..b@x.com` can't be added | fixed (e97955e) |
 | FU-08 | low | `workspace.search` | Event results in cross-type search sorted by `created_at`, not start time | fixed (9ce10ba) |
 | FU-09 | med | — | No CLI/MCP command builds the semantic index (`embed_resources` is SDK-only) | deferred (feature) |
