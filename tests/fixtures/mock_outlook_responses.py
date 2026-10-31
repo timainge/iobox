@@ -352,6 +352,7 @@ class FakeOutlookTenant:
         g.route("DELETE", rf"/me/messages/{_ID}", self._delete)
         g.route("POST", rf"/me/messages/{_ID}/move", self._move)
         g.route("GET", rf"/me/messages/{_ID}/attachments", self._list_attachments)
+        g.route("GET", rf"/me/messages/{_ID}/attachments/(?P<aid>[^/]+)", self._get_attachment)
         g.route("GET", rf"/me/messages/{_ID}/attachments/(?P<aid>[^/]+)/\$value", self._att_value)
         g.route("POST", r"/me/mailFolders/(?P<folder>[^/]+)/messages", self._create_draft)
         g.route("POST", rf"/me/messages/{_ID}/send", self._send_draft)
@@ -445,8 +446,34 @@ class FakeOutlookTenant:
         self.messages[mid]["parentFolderId"] = WELL_KNOWN_FOLDER_IDS.get(dest.lower(), dest)
         return 201, self.messages[mid]
 
+    # Properties of the base ``microsoft.graph.attachment`` type. ``contentId``
+    # and ``contentBytes`` exist only on the derived ``fileAttachment`` type,
+    # so selecting them on the collection is rejected (as Graph does).
+    ATTACHMENT_BASE_PROPS = frozenset(
+        {"id", "name", "contentType", "size", "isInline", "lastModifiedDateTime"}
+    )
+
     def _list_attachments(self, call: GraphCall) -> Any:
-        return {"value": self.attachments.get(self._m(call), [])}
+        items = self.attachments.get(self._m(call), [])
+        select = call.params.get("$select")
+        if select:
+            unknown = {k.strip() for k in str(select).split(",")} - self.ATTACHMENT_BASE_PROPS
+            if unknown:
+                return 400, {
+                    "error": {
+                        "code": "RequestBroker--ParseUri",
+                        "message": f"Could not find a property named '{sorted(unknown)[0]}'",
+                    }
+                }
+        return {"value": self._project(call, items)}
+
+    def _get_attachment(self, call: GraphCall) -> Any:
+        mid = self._m(call)
+        aid = call.path.split("/")[-1]
+        for a in self.attachments.get(mid, []):
+            if a["id"] == aid:
+                return a
+        return 404, {"error": {"code": "ErrorItemNotFound", "message": "no attachment"}}
 
     def _att_value(self, call: GraphCall) -> Any:
         mid = self._m(call)

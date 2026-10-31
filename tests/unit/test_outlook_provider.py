@@ -145,6 +145,18 @@ class TestAttachments:
         assert png["content_id"] == "logo@cid"
         tenant.graph.last("GET", r"/me/messages/outlook-msg-id-4/attachments")
 
+    def test_listing_does_not_download_content(self, provider, tenant) -> None:
+        """FU-12: listing attachments returned contentBytes for every file."""
+        provider.get_email_content("outlook-msg-id-4")
+        listing = tenant.graph.last("GET", r"/me/messages/outlook-msg-id-4/attachments")
+        selected = set(listing.params["$select"].split(","))
+        assert "contentBytes" not in selected
+        assert {"id", "name", "contentType", "size", "isInline"} <= selected
+        # The non-inline PDF is never fetched individually; the small inline
+        # image is (contentId lives only on fileAttachment).
+        singles = tenant.graph.find("GET", r"/me/messages/outlook-msg-id-4/attachments/[^/]+")
+        assert [c.path.rsplit("/", 1)[-1] for c in singles] == ["outlook-attach-id-2"]
+
     def test_no_attachment_request_without_attachments(self, provider, tenant) -> None:
         assert provider.get_email_content("outlook-msg-id-2")["attachments"] == []
         assert not tenant.graph.find("GET", r".*/attachments")

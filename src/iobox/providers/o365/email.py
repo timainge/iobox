@@ -57,6 +57,8 @@ _BATCH_LIMIT = 20
 # When $search results are filtered client-side, examine at least this many
 # candidates (or 5 x max_results, whichever is larger) before giving up.
 _CLIENT_FILTER_FETCH = 250
+# Attachment metadata (base ``attachment`` type properties; no contentBytes).
+_ATTACHMENT_SELECT = "id,name,contentType,size,isInline"
 # Well-known folders excluded from search unless include_spam_trash is set.
 _SPAM_TRASH_FOLDERS = ("deleteditems", "junkemail")
 # Message properties needed for metadata-only search results (and for
@@ -232,9 +234,18 @@ class OutlookProvider(EmailProvider):
         python-o365 only populates ``Message.attachments`` when asked to
         download them, and its attachment objects drop ``contentType``, so
         the attachment list is read straight from Graph.
+
+        Only metadata is requested (``$select`` of base ``attachment``
+        properties), so file content is not downloaded — that happens in
+        :meth:`download_attachment`. ``contentId`` exists only on the derived
+        ``fileAttachment`` type and cannot be selected on the collection, so
+        it is fetched per *inline* attachment (typically small images).
         """
         con = self._acct.con
-        resp = con.get(self._mb.build_url(f"/messages/{message_id}/attachments"))
+        resp = con.get(
+            self._mb.build_url(f"/messages/{message_id}/attachments"),
+            params={"$select": _ATTACHMENT_SELECT},
+        )
         infos: list[AttachmentInfo] = []
         for a in resp.json().get("value", []) if resp else []:
             name = a.get("name") or ""
@@ -242,6 +253,8 @@ class OutlookProvider(EmailProvider):
                 mimetypes.guess_type(name)[0] or "application/octet-stream"
             )
             content_id = a.get("contentId")
+            if a.get("isInline") and not content_id and a.get("id"):
+                content_id = self._attachment_content_id(message_id, a["id"])
             if content_id:
                 content_id = content_id.strip().strip("<>")
             infos.append(
@@ -255,6 +268,17 @@ class OutlookProvider(EmailProvider):
                 )
             )
         return infos
+
+    def _attachment_content_id(self, message_id: str, attachment_id: str) -> str | None:
+        """Return the ``contentId`` of one attachment (``None`` if unavailable)."""
+        try:
+            resp = self._acct.con.get(
+                self._mb.build_url(f"/messages/{message_id}/attachments/{attachment_id}")
+            )
+            return (resp.json().get("contentId") if resp else None) or None
+        except Exception as exc:
+            logger.warning("Could not read contentId of attachment %r: %s", attachment_id, exc)
+            return None
 
     def _message_to_email_data(
         self,
