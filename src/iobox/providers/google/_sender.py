@@ -20,6 +20,7 @@ from typing import Any
 
 from googleapiclient.errors import HttpError
 
+from iobox.processing.markdown_converter import convert_html_to_text
 from iobox.providers.google._retrieval import download_attachment, get_email_content
 
 logger = logging.getLogger(__name__)
@@ -139,18 +140,19 @@ def compose_message(
             rel.attach(_blob_part(blob))
         body_part = rel
 
+    if content_type == "html":
+        # HTML always ships with a text/plain alternative generated from it,
+        # so text-only clients never see raw markup.
+        alternative = MIMEMultipart("alternative")
+        alternative.attach(MIMEText(convert_html_to_text(body), "plain"))
+        alternative.attach(body_part)
+        body_part = alternative
+
     message: MIMEMultipart | MIMEText
 
     if attachments or regular:
         outer = MIMEMultipart("mixed")
-        if content_type == "html":
-            # nested multipart: mixed outer, alternative inner
-            inner = MIMEMultipart("alternative")
-            inner.attach(MIMEText(body, "plain"))
-            inner.attach(body_part)
-            outer.attach(inner)
-        else:
-            outer.attach(body_part)
+        outer.attach(body_part)
 
         for file_path in attachments or []:
             mime_type, _ = mimetypes.guess_type(file_path)
