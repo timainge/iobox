@@ -156,6 +156,7 @@ class EmailProvider(ABC):
         cc: str | None = None,
         bcc: str | None = None,
         content_type: str = "plain",
+        attachments: list[str] | None = None,
     ) -> dict[str, Any]: ...
 
     @abstractmethod

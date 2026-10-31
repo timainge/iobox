@@ -423,6 +423,7 @@ class TestSendForwardDrafts:
             cc="c@d.com",
             bcc=None,
             content_type="plain",
+            attachments=None,
         )
         mock_create.assert_called_once_with(provider._service, {"raw": "encoded"})
         assert result == {"id": "draft1"}

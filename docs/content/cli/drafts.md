@@ -39,7 +39,7 @@ iobox draft-create [OPTIONS]
 | `--cc` | | TEXT | `None` | CC recipients (comma-separated) |
 | `--bcc` | | TEXT | `None` | BCC recipients (comma-separated) |
 | `--html` | | FLAG | `False` | Use HTML content type |
-| `--attach` | | TEXT | `None` | File path to attach (repeatable). Currently only checked for existence; attachments are **not** added to the draft |
+| `--attach` | | TEXT | `None` | File path to attach (repeatable). Each path must exist |
 
 One of `--body` or `--body-file` is required.
 

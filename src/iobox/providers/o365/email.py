@@ -533,6 +533,7 @@ class OutlookProvider(EmailProvider):
         cc: str | None = None,
         bcc: str | None = None,
         content_type: str = "plain",
+        attachments: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create a new draft message and save it in the Drafts folder.
 
@@ -543,6 +544,7 @@ class OutlookProvider(EmailProvider):
             cc: Optional CC recipient address.
             bcc: Optional BCC recipient address.
             content_type: ``"plain"`` (default) or ``"html"``.
+            attachments: Optional list of local file paths to attach.
 
         Returns:
             Dict with ``message_id`` and ``status`` keys.
@@ -559,6 +561,8 @@ class OutlookProvider(EmailProvider):
             msg.body_type = "HTML"
         else:
             msg.body_type = "Text"
+        for path in attachments or []:
+            msg.attachments.add(path)
         if not msg.save_draft():
             raise RuntimeError(f"Failed to save draft: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "draft"}

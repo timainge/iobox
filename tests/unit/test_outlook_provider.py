@@ -449,6 +449,26 @@ class TestCreateDraft:
         new_msg = provider._mailbox._new_messages[-1]
         assert new_msg._draft_saved is True
 
+    def test_create_draft_adds_attachments(self, provider):
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.save_draft.return_value = True
+        msg.object_id = "draft-with-files"
+        provider._mailbox.new_message = lambda: msg  # type: ignore[method-assign]
+
+        provider.create_draft(
+            to="r@example.com",
+            subject="Draft",
+            body="body",
+            attachments=["/tmp/a.pdf", "/tmp/b.png"],
+        )
+
+        assert [c.args[0] for c in msg.attachments.add.call_args_list] == [
+            "/tmp/a.pdf",
+            "/tmp/b.png",
+        ]
+
     def test_create_draft_raises_runtime_error_on_failure(self, provider):
         """save_draft() returning False must raise RuntimeError."""
         failing_msg = make_mock_message(object_id="fail-draft-id")

@@ -728,6 +728,7 @@ def draft_create(
             cc=cc,
             bcc=bcc,
             content_type=content_type,
+            attachments=attach or None,
         )
 
         typer.echo(f"Draft created successfully. Draft ID: {result.get('message_id', 'unknown')}")

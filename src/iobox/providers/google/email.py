@@ -286,6 +286,7 @@ class GmailProvider(EmailProvider):
         cc: str | None = None,
         bcc: str | None = None,
         content_type: str = "plain",
+        attachments: list[str] | None = None,
     ) -> dict[str, Any]:
         """Compose a message and save it as a draft."""
         message = _sender.compose_message(
@@ -295,6 +296,7 @@ class GmailProvider(EmailProvider):
             cc=cc,
             bcc=bcc,
             content_type=content_type,
+            attachments=attachments,
         )
         return _sender.create_draft(self._svc, message)
 

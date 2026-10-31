@@ -786,6 +786,30 @@ class TestDraftCommands:
             assert "draft-1" in result.stdout
             provider.create_draft.assert_called_once()
 
+    def test_draft_create_passes_attachments(self, tmp_path):
+        attachment = tmp_path / "report.pdf"
+        attachment.write_bytes(b"%PDF")
+        provider = _mock_provider(create_draft={"message_id": "draft-1"})
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(
+                app,
+                [
+                    "draft-create",
+                    "--to",
+                    "bob@example.com",
+                    "--subject",
+                    "Report",
+                    "--body",
+                    "Attached.",
+                    "--attach",
+                    str(attachment),
+                ],
+            )
+
+        assert result.exit_code == 0
+        _, kwargs = provider.create_draft.call_args
+        assert kwargs["attachments"] == [str(attachment)]
+
     def test_draft_list_command(self):
         """Test draft-list command lists drafts."""
         mock_drafts = [
