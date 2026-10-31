@@ -147,4 +147,7 @@ dev-dependencies = [
     # cannot uninstall it out from under the local iobox-mcp entry point that
     # Claude Desktop spawns. Dev-dependencies never reach the published wheel.
     "mcp>=1.2",
+    # Also the `outlook` extra; installed for development so the O365 provider
+    # tests (which drive the real python-o365 classes) run instead of skipping.
+    "O365>=2.1.8",
 ]
