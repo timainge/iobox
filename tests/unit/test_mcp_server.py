@@ -71,6 +71,15 @@ def mcp_root(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setenv("IOBOX_MCP_ROOT", str(root))
     monkeypatch.setenv("CREDENTIALS_DIR", str(tmp_path / "creds"))
+    # Never read the developer's real ~/.iobox (active space, configs, tokens).
+    import iobox.space_config as sc
+
+    home = tmp_path / "iobox-home"
+    monkeypatch.setattr(sc, "IOBOX_HOME", home)
+    monkeypatch.setattr(sc, "WORKSPACES_DIR", home / "workspaces")
+    monkeypatch.setattr(sc, "TOKENS_DIR", home / "tokens")
+    monkeypatch.setattr(sc, "INDEXES_DIR", home / "indexes")
+    monkeypatch.setattr(sc, "ACTIVE_SPACE_FILE", home / "active_space")
     return Path(os.path.realpath(root))
 
 
@@ -632,44 +641,69 @@ class TestBatchTrashGmail:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckAuth:
-    def test_check_auth_with_profile(self):
-        with (
-            patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch(
-                f"{MODULE}.get_gmail_profile",
-                return_value={
-                    "emailAddress": "user@gmail.com",
-                    "messagesTotal": 100,
-                    "threadsTotal": 50,
-                },
-            ),
-        ):
-            mock_svc.return_value = MagicMock()
-            result = check_auth()
-        assert result["authenticated"] is True
-        assert result["email"] == "user@gmail.com"
-        assert result["messages_total"] == 100
-        assert result["threads_total"] == 50
+def _save_space(name, entries, active=False):
+    """Write a workspace config into the test-isolated ~/.iobox."""
+    import iobox.space_config as sc
 
-    def test_check_auth_not_authenticated(self):
+    sc.save_space(sc.SpaceConfig(name=name, services=entries))
+    if active:
+        sc.set_active_space(name)
+
+
+def _entry(account, service="google", scopes=("email",), number=1):
+    from iobox.space_config import ServiceEntry
+
+    return ServiceEntry(number=number, service=service, account=account, scopes=list(scopes))
+
+
+def _give_token(entry):
+    from iobox.space_config import token_file_for
+
+    path = token_file_for(entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}")
+
+
+class TestCheckAuth:
+    def test_legacy_reports_cached_status_only(self):
+        """No workspace → cached legacy token status; never builds a Gmail service."""
         with (
             patch(
                 f"{MODULE}.check_auth_status",
                 return_value={"authenticated": False, "token_file_exists": False},
             ),
-            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("no token")),
+            patch("iobox.providers.google.auth.get_gmail_service") as svc,
+            patch("iobox.providers.google.auth.InstalledAppFlow") as flow,
         ):
             result = check_auth()
         assert result["authenticated"] is False
-        assert "email" not in result
+        svc.assert_not_called()
+        flow.assert_not_called()
+
+    def test_workspace_reports_per_service_from_cache(self):
+        authed = _entry("me@gmail.com", scopes=("email", "calendar"))
+        missing = _entry("corp@example.com", service="o365", number=2)
+        _give_token(authed)
+        _save_space("personal", [authed, missing], active=True)
+        with patch(f"{MODULE}.check_auth_status") as legacy:
+            result = check_auth()
+        legacy.assert_not_called()
+        assert result["workspace"] == "personal"
+        assert result["authenticated"] is False
+        by_account = {s["account"]: s for s in result["services"]}
+        assert by_account["me@gmail.com"]["authenticated"] is True
+        assert by_account["corp@example.com"]["authenticated"] is False
+        assert "mode" in result
+
+    def test_named_workspace_missing_returns_error(self):
+        result = check_auth(workspace="typo")
+        assert "error" in result
+        assert result["authenticated"] is False
 
     def test_check_auth_reports_readonly_mode(self, monkeypatch):
         monkeypatch.setenv("IOBOX_MODE", "readonly")
         with (
             patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
-            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
         ):
             result = check_auth()
         assert result["mode"] == "readonly"
@@ -681,7 +715,6 @@ class TestCheckAuth:
         monkeypatch.setenv("IOBOX_MODE", "dangerous")
         with (
             patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
-            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
         ):
             result = check_auth()
         assert result["mode"] == "dangerous"
@@ -1616,7 +1649,6 @@ class TestModeAllowlists:
         monkeypatch.setenv("IOBOX_MODE", "standard")
         with (
             patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
-            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
         ):
             result = check_auth()
         assert result["available_write_ops"] is True
@@ -1756,3 +1788,82 @@ class TestBatchPartialFailure:
             result = save_emails_by_query("in:inbox")
         assert result["saved_count"] == 1
         assert result["failed"] == [{"message_id": "m2", "error": "Not found"}]
+
+
+# ---------------------------------------------------------------------------
+# No interactive OAuth from the server (MCP-02)
+# ---------------------------------------------------------------------------
+
+
+class TestNoInteractiveAuth:
+    def test_workspace_auth_status_skips_slots_without_token(self):
+        authed = _entry("me@gmail.com", scopes=("email", "drive"))
+        missing = _entry("other@gmail.com", scopes=("email",), number=2)
+        _give_token(authed)
+        _save_space("personal", [authed, missing])
+
+        ws = MagicMock()
+        ws.name = "personal"
+        slots = {}
+        for name in (authed.slug, f"{authed.slug}-drive", missing.slug):
+            s = MagicMock()
+            s.name = name
+            s.provider.get_profile.return_value = {"emailAddress": "x@y.com"}
+            slots[name] = s
+        ws.email_providers = [slots[authed.slug], slots[missing.slug]]
+        ws.calendar_providers = []
+        ws.file_providers = [slots[f"{authed.slug}-drive"]]
+
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = workspace_auth_status()
+
+        assert result["slots"][authed.slug]["authenticated"] is True
+        assert result["slots"][f"{authed.slug}-drive"]["authenticated"] is True
+        assert result["slots"][missing.slug]["authenticated"] is False
+        assert "iobox space login" in result["slots"][missing.slug]["error"]
+        slots[missing.slug].provider.get_profile.assert_not_called()
+
+    def test_sync_uses_selected_provider_not_legacy_service(self, mcp_root):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}]
+        provider.batch_get_emails.return_value = [{"message_id": "m1", "from_": "x"}]
+        provider.get_sync_state.return_value = "12345"
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch(f"{MODULE}.check_for_duplicates", return_value=[]),
+            patch(f"{MODULE}.convert_email_to_markdown", return_value="# E"),
+            patch(f"{MODULE}.save_email_to_markdown", return_value="e.md"),
+            patch("iobox.providers.google.auth.get_gmail_service") as legacy,
+        ):
+            result = save_emails_by_query("in:inbox", output_dir="sync", sync=True)
+        assert result["saved_count"] == 1
+        provider.get_sync_state.assert_called_once()
+        legacy.assert_not_called()
+
+        from iobox.processing.file_manager import SyncState
+
+        state = SyncState(str(mcp_root / "sync"))
+        assert state.load()
+        assert state.last_history_id == "12345"
+
+    def test_sync_no_new_messages_uses_provider(self, mcp_root):
+        from iobox.processing.file_manager import SyncState
+
+        out = mcp_root / "sync"
+        out.mkdir()
+        seeded = SyncState(str(out))
+        seeded.update("100", [])
+
+        provider = _make_provider()
+        provider.get_new_messages.return_value = []
+        provider.get_sync_state.return_value = "200"
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch("iobox.providers.google.auth.get_gmail_service") as legacy,
+        ):
+            result = save_emails_by_query("in:inbox", output_dir="sync", sync=True)
+        assert result["saved_count"] == 0
+        legacy.assert_not_called()
+        state = SyncState(str(out))
+        state.load()
+        assert state.last_history_id == "200"

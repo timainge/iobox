@@ -31,8 +31,6 @@ from iobox.processing.markdown_converter import (
 )
 from iobox.providers.google.auth import (
     check_auth_status,
-    get_gmail_profile,
-    get_gmail_service,
     set_active_mode,
 )
 from iobox.utils import slugify_text
@@ -755,6 +753,20 @@ def save_thread(
     return filepath
 
 
+def _refresh_sync_state(p: Any, sync_state: Any, ids: list[str], fallback: str = "") -> None:
+    """Record the provider's current sync token (e.g. Gmail historyId).
+
+    Asks the *selected* provider rather than the legacy module-level Gmail
+    service, so the token belongs to the account that was searched and no
+    separate (possibly interactive) auth path is triggered.
+    """
+    try:
+        token = p.get_sync_state()
+    except Exception:
+        return  # sync only meaningful where the provider supports it.
+    sync_state.update(str(token or fallback), ids)
+
+
 @_tool
 def save_emails_by_query(
     query: str,
@@ -826,9 +838,7 @@ def save_emails_by_query(
 
     if message_ids_to_fetch is not None:
         if not message_ids_to_fetch:
-            service = get_gmail_service()
-            profile = service.users().getProfile(userId="me").execute()
-            sync_state.update(profile.get("historyId", sync_state.last_history_id), [])
+            _refresh_sync_state(p, sync_state, [], fallback=sync_state.last_history_id or "")
             return {
                 "saved_count": 0,
                 "skipped_count": 0,
@@ -859,12 +869,7 @@ def save_emails_by_query(
         )
         if not search_results:
             if sync:
-                try:
-                    service = get_gmail_service()
-                    profile = service.users().getProfile(userId="me").execute()
-                    sync_state.update(profile.get("historyId", ""), [])
-                except Exception:
-                    pass
+                _refresh_sync_state(p, sync_state, [])
             return {
                 "saved_count": 0,
                 "skipped_count": 0,
@@ -907,12 +912,7 @@ def save_emails_by_query(
                 failed.append({"message_id": email_data.get("message_id", ""), "error": str(exc)})
 
     if sync:
-        try:
-            service = get_gmail_service()
-            profile = service.users().getProfile(userId="me").execute()
-            sync_state.update(profile.get("historyId", ""), ids_to_process)
-        except Exception:
-            pass  # sync only meaningful for Gmail.
+        _refresh_sync_state(p, sync_state, ids_to_process)
 
     return {
         "saved_count": saved_count,
@@ -1503,30 +1503,70 @@ def _mode_capabilities() -> dict[str, Any]:
 
 
 @_tool
-def check_auth() -> dict:
-    """Check authentication status, profile info, and the active access mode.
+def check_auth(workspace: str | None = None) -> dict:
+    """Check cached authentication state and the active access mode.
+
+    Reports from cached tokens on disk only — it never contacts Google or
+    Microsoft and never starts an interactive sign-in. When a workspace is
+    named or active, reports each of its service sessions; otherwise reports
+    the legacy single-account Gmail token. For a live per-slot check, call
+    ``workspace_auth_status``. To (re-)authenticate, run
+    ``iobox space login`` in a terminal.
 
     The ``mode`` / ``available_write_ops`` fields let a constrained agent
     self-diagnose: if write tools seem to be missing, it's almost always because
-    the server is running in ``readonly`` mode rather than a missing feature.
+    of the server's ``IOBOX_MODE`` rather than a missing feature.
+
+    Args:
+        workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Status dict including ``mode`` (readonly|standard|dangerous),
-        ``available_write_ops`` (labels/drafts/calendar/file writes),
-        ``available_send_ops`` (send email or drafts, forward, trash), and a ``mode_hint`` when
-        running read-only.
+        Status dict including ``authenticated``, ``mode``
+        (readonly|standard|dangerous), ``available_write_ops``
+        (labels/drafts/calendar/file writes), ``available_send_ops`` (send
+        email or drafts, forward, trash), and a ``mode_hint`` when sending is
+        unavailable. With a workspace, also ``workspace`` and ``services`` —
+        one ``{service, account, mode, scopes, authenticated}`` entry per
+        configured session.
     """
-    status = check_auth_status()
-    status.update(_mode_capabilities())
+    from iobox.space_config import get_active_space, is_authenticated, load_space
 
+    caps = _mode_capabilities()
     try:
-        service = get_gmail_service()
-        profile = get_gmail_profile(service)
-        status["email"] = profile.get("emailAddress")
-        status["messages_total"] = profile.get("messagesTotal")
-        status["threads_total"] = profile.get("threadsTotal")
-    except Exception:
-        pass
+        target = workspace or get_active_space()
+    except Exception as exc:
+        return {"authenticated": False, "error": f"Could not read active workspace: {exc}", **caps}
+
+    if target:
+        try:
+            config = load_space(target)
+        except Exception as exc:
+            return {
+                "authenticated": False,
+                "workspace": target,
+                "error": f"Could not load workspace '{target}': {exc}",
+                **caps,
+            }
+        services = [
+            {
+                "service": entry.service,
+                "account": entry.account,
+                "mode": entry.mode,
+                "scopes": list(entry.scopes),
+                "authenticated": is_authenticated(entry),
+            }
+            for entry in config.services
+        ]
+        return {
+            "workspace": target,
+            "authenticated": bool(services) and all(s["authenticated"] for s in services),
+            "services": services,
+            **caps,
+        }
+
+    # No workspace: legacy single-account Gmail, from the cached token only.
+    status = check_auth_status()
+    status.update(caps)
     return status
 
 
@@ -2197,12 +2237,34 @@ def list_provider_slots(workspace: str | None = None) -> dict:
     }
 
 
+def _cached_auth_by_slot(ws_name: str) -> dict[str, bool] | None:
+    """Map each slot name in *ws_name* to whether a cached token exists.
+
+    Slot names mirror ``Workspace.from_config``: ``slug`` (email),
+    ``slug-cal``, ``slug-drive``. Returns None if the config can't be read.
+    """
+    try:
+        from iobox.space_config import is_authenticated, load_space
+
+        config = load_space(ws_name)
+    except Exception:
+        return None
+    out: dict[str, bool] = {}
+    for entry in config.services:
+        authed = is_authenticated(entry)
+        for name in (entry.slug, f"{entry.slug}-cal", f"{entry.slug}-drive"):
+            out[name] = authed
+    return out
+
+
 @_tool
 def workspace_auth_status(workspace: str | None = None) -> dict:
     """Report per-slot authentication status across the workspace.
 
-    Calls ``get_profile`` on each slot to surface whether tokens are valid
-    and which account they belong to.
+    Calls ``get_profile`` on each slot that has a cached token, to surface
+    whether the token still works and which account it belongs to. Slots
+    with no cached token are reported as unauthenticated without contacting
+    the provider (so the server never opens an interactive sign-in).
 
     Args:
         workspace: Optional workspace name (default: active workspace).
@@ -2214,7 +2276,17 @@ def workspace_auth_status(workspace: str | None = None) -> dict:
     if not ws:
         return {"error": "No active workspace configured."}
 
+    cached = _cached_auth_by_slot(ws.name)
+
     def _check(slot: Any) -> dict:
+        if cached is not None and cached.get(slot.name) is False:
+            # No cached token: calling the provider would start an interactive
+            # sign-in inside the server process. Report instead.
+            return {
+                "authenticated": False,
+                "account": None,
+                "error": "No cached token; run `iobox space login` in a terminal.",
+            }
         try:
             profile = slot.provider.get_profile()
             return {

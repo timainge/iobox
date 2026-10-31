@@ -97,8 +97,8 @@ The count key is `modified_count`, `forwarded_count`, or `trashed_count` dependi
 | `list_workspaces` | readonly | All workspaces and which is active |
 | `get_active_workspace` | readonly | The active workspace name |
 | `list_provider_slots` | readonly | Every email/calendar/file slot in a workspace |
-| `workspace_auth_status` | readonly | Per-slot auth check (calls each provider's profile endpoint) |
-| `check_auth` | readonly | Legacy single-account Gmail auth check |
+| `workspace_auth_status` | readonly | Live per-slot auth check: calls the profile endpoint for each slot that has a cached token; slots without one are reported as signed out |
+| `check_auth` | readonly | Auth status from cached tokens only (per service for the active or named workspace; the single-account Gmail token otherwise), plus the access mode and what it allows |
 | `set_active_workspace` | standard | Switch the active workspace |
 
 ## Return values
