@@ -11,7 +11,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import click
 import typer
+from typer.core import TyperGroup
 
 from iobox import __version__
 from iobox.accounts import set_active_account
@@ -34,7 +36,34 @@ from iobox.utils import parse_date_range, resource_filename
 logger = logging.getLogger(__name__)
 
 # Create a Typer app
-app = typer.Typer(help="Gmail to Markdown converter")
+class _HelpFirstGroup(TyperGroup):
+    """Show a subcommand's ``--help`` even when the access mode would block it.
+
+    Mode gating runs in the group callback, which click calls *before* parsing
+    the subcommand's own arguments — so ``iobox --mode readonly send --help``
+    used to print the mode error. When a help flag is present, parse the
+    target subcommand's arguments first: a real help request prints help and
+    exits before anything runs. If ``--help`` was only an option *value*
+    (e.g. ``send --body --help``), parsing doesn't exit and the normal gate
+    applies.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        args = [*getattr(ctx, "_protected_args", []), *ctx.args]
+        if any(arg in ctx.help_option_names for arg in args):
+            try:
+                cmd_name, cmd, rest = self.resolve_command(ctx, list(args))
+                if cmd is not None:
+                    with cmd.make_context(cmd_name, rest, parent=ctx):
+                        pass
+            except click.exceptions.Exit:
+                raise  # help was printed
+            except click.ClickException:
+                pass  # not a help request after all; let normal handling report it
+        return super().invoke(ctx)
+
+
+app = typer.Typer(help="Gmail to Markdown converter", cls=_HelpFirstGroup)
 
 # Add the version option to the main Typer app
 version_callback = typer.Option(
@@ -1646,7 +1675,7 @@ def _find_file_slot(ws: Any, provider_name: str | None) -> Any:
 
 # ── Events command group ───────────────────────────────────────────────────────
 
-events_app = typer.Typer(help="Calendar event operations.")
+events_app = typer.Typer(help="Calendar event operations.", cls=_HelpFirstGroup)
 app.add_typer(events_app, name="events")
 
 
@@ -1799,7 +1828,7 @@ def events_rsvp(
 
 # ── Files command group ────────────────────────────────────────────────────────
 
-files_app = typer.Typer(help="Cloud file operations.")
+files_app = typer.Typer(help="Cloud file operations.", cls=_HelpFirstGroup)
 app.add_typer(files_app, name="files")
 
 

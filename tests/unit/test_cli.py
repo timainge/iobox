@@ -1548,3 +1548,29 @@ class TestInclusiveEndDate:
         assert result.exit_code == 0, result.output
         eq = provider.search_emails.call_args[0][0]
         assert eq.before == date(2026, 3, 16)
+
+
+class TestHelpOnBlockedCommands:
+    """`--help` works for commands the current mode blocks (FU-06)."""
+
+    def test_help_on_blocked_top_level_command(self):
+        with patch("iobox.cli.get_provider", return_value=_mock_provider()):
+            result = runner.invoke(app, ["--mode", "readonly", "send", "--help"])
+        assert result.exit_code == 0
+        assert "Usage" in result.output
+        assert "not allowed" not in result.output
+
+    def test_help_on_blocked_group_subcommand(self):
+        result = runner.invoke(app, ["--mode", "readonly", "events", "delete", "--help"])
+        assert result.exit_code == 0
+        assert "Usage" in result.output
+        assert "not allowed" not in result.output
+
+    def test_help_as_option_value_does_not_bypass_gate(self):
+        provider = _mock_provider()
+        with patch("iobox.cli.get_provider", return_value=provider):
+            args = ["send", "--to", "a@b.c", "--subject", "s", "--body", "--help"]
+            result = runner.invoke(app, ["--mode", "readonly", *args])
+        assert result.exit_code == 1
+        assert "not allowed in 'readonly' mode" in result.output
+        provider.send_message.assert_not_called()
