@@ -419,6 +419,8 @@ def download_email_attachments(
         email_data: Email data dictionary.
         output_dir: Directory to save attachments to.
         attachment_filters: List of file extensions to filter by (e.g. ['pdf', 'docx']).
+            Case-insensitive; a leading dot is ignored. When set, attachments
+            without an extension are skipped.
         download_fn: Optional callable ``(message_id, attachment_id) -> bytes``.
             When provided, it is used instead of the Gmail-specific download path
             so that any provider backend can supply attachment data.
@@ -450,6 +452,8 @@ def download_email_attachments(
     errors: list[str] = []
     saved: list[dict[str, Any]] = []
 
+    wanted_exts = {f.strip().lower().lstrip(".") for f in attachment_filters or [] if f.strip()}
+
     for attachment in attachments:
         filename = attachment.get("filename", "")
 
@@ -458,9 +462,11 @@ def download_email_attachments(
             skipped_count += 1
             continue
 
-        if attachment_filters:
+        if wanted_exts:
+            # Extensionless attachments cannot match a type filter, so they
+            # are excluded whenever one is set.
             ext = os.path.splitext(filename)[1].lower().lstrip(".")
-            if ext and ext not in attachment_filters:
+            if not ext or ext not in wanted_exts:
                 logger.info(f"Skipping attachment (type filter): {filename}")
                 skipped_count += 1
                 continue

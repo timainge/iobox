@@ -540,6 +540,48 @@ class TestDownloadEmailAttachments:
         # Only pdf was downloaded
         mock_dl.assert_called_once_with(mock_service, "msg-test", "att-1")
 
+    def test_filter_excludes_extensionless_attachments(self, tmp_path):
+        """DATA-15: an extensionless attachment never matches a type filter."""
+        email_data = self._make_email_data(
+            [
+                {"id": "att-1", "filename": "report.pdf", "mime_type": "application/pdf"},
+                {"id": "att-2", "filename": "README", "mime_type": "text/plain"},
+            ]
+        )
+        download_fn = MagicMock(return_value=b"data")
+        result = download_email_attachments(
+            email_data=email_data,
+            output_dir=str(tmp_path),
+            attachment_filters=["pdf"],
+            download_fn=download_fn,
+        )
+        assert result["downloaded_count"] == 1
+        assert result["skipped_count"] == 1
+        download_fn.assert_called_once_with("msg-test", "att-1")
+
+    def test_extensionless_kept_without_filter(self, tmp_path):
+        email_data = self._make_email_data(
+            [{"id": "att-2", "filename": "README", "mime_type": "text/plain"}]
+        )
+        result = download_email_attachments(
+            email_data=email_data,
+            output_dir=str(tmp_path),
+            download_fn=MagicMock(return_value=b"data"),
+        )
+        assert result["downloaded_count"] == 1
+
+    def test_filter_normalises_case_and_dots(self, tmp_path):
+        email_data = self._make_email_data(
+            [{"id": "att-1", "filename": "REPORT.PDF", "mime_type": "application/pdf"}]
+        )
+        result = download_email_attachments(
+            email_data=email_data,
+            output_dir=str(tmp_path),
+            attachment_filters=[".Pdf"],
+            download_fn=MagicMock(return_value=b"data"),
+        )
+        assert result["downloaded_count"] == 1
+
     def test_inline_attachments_skipped_by_default(self, tmp_path):
         """Inline parts (signature logos) are skipped unless include_inline=True."""
         mock_service = MagicMock()
