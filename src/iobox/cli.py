@@ -6,7 +6,6 @@ This module provides a user-friendly CLI for interacting with iobox functionalit
 
 import logging
 import os
-import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -345,9 +344,11 @@ def search(
             else:
                 typer.echo("   " + "-" * 40)
 
+    except typer.Exit:
+        raise
     except Exception as e:
-        typer.echo(f"Error: {str(e)}", err=True)
-        sys.exit(1)
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()
@@ -586,6 +587,8 @@ def save(
             if download_attachments:
                 typer.echo(f"  - {attachment_count} attachments downloaded")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error saving emails: {e}")
         raise typer.Exit(code=1) from e
@@ -657,6 +660,8 @@ def forward(
 
             typer.echo(f"\nForwarded {forwarded} emails to {to}.")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error forwarding emails: {e}")
         raise typer.Exit(code=1) from e
@@ -720,6 +725,8 @@ def send(
 
         typer.echo(f"Email sent successfully. Message ID: {result.get('message_id', 'unknown')}")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error sending email: {e}")
         raise typer.Exit(code=1) from e
@@ -779,6 +786,8 @@ def draft_create(
 
         typer.echo(f"Draft created successfully. Draft ID: {result.get('message_id', 'unknown')}")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error creating draft: {e}")
         raise typer.Exit(code=1) from e
@@ -805,6 +814,8 @@ def draft_list(
             if draft.get("snippet"):
                 typer.echo(f"  Preview: {draft['snippet'][:70]}")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error listing drafts: {e}")
         raise typer.Exit(code=1) from e
@@ -821,6 +832,8 @@ def draft_send(
         result = provider.send_draft(draft_id)
         typer.echo(f"Draft sent successfully. Message ID: {result.get('message_id', 'unknown')}")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error sending draft: {e}")
         raise typer.Exit(code=1) from e
@@ -837,6 +850,8 @@ def draft_delete(
         result = provider.delete_draft(draft_id)
         typer.echo(f"Draft deleted successfully. Draft ID: {result.get('message_id', draft_id)}")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error deleting draft: {e}")
         raise typer.Exit(code=1) from e
@@ -908,6 +923,8 @@ def label(
 
             typer.echo(f"Labels updated for {len(results)} email(s)")
 
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"Error updating labels: {e}", err=True)
         raise typer.Exit(code=1) from e

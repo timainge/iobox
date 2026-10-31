@@ -1188,3 +1188,62 @@ class TestProviderFlag:
             result = runner.invoke(app, ["auth-status"])
         assert result.exit_code == 0
         assert "Provider: gmail" in result.stdout
+
+
+class TestValidationExits:
+    """Validation exits print one clean message, not a wrapped 'Error ...: ' line (CLI-06)."""
+
+    def _invoke(self, args: list[str]):
+        provider = _mock_provider()
+        with patch("iobox.cli.get_provider", return_value=provider):
+            return runner.invoke(app, args)
+
+    def test_save_without_target(self):
+        result = self._invoke(["save"])
+        assert result.exit_code == 1
+        assert "You must specify --message-id" in result.output
+        assert "Error saving emails" not in result.output
+
+    def test_forward_without_target(self):
+        result = self._invoke(["--mode", "dangerous", "forward", "--to", "a@b.com"])
+        assert result.exit_code == 1
+        assert "Error forwarding emails" not in result.output
+
+    def test_send_without_body(self):
+        result = self._invoke(["--mode", "dangerous", "send", "--to", "a@b.com", "-s", "x"])
+        assert result.exit_code == 1
+        assert "You must specify either --body" in result.output
+        assert "Error sending email" not in result.output
+
+    def test_send_missing_body_file(self, tmp_path):
+        missing = str(tmp_path / "nope.txt")
+        result = self._invoke(
+            ["--mode", "dangerous", "send", "--to", "a@b.com", "-s", "x", "-f", missing]
+        )
+        assert result.exit_code == 1
+        assert "File not found" in result.output
+        assert "Error sending email" not in result.output
+
+    def test_draft_create_missing_attachment(self, tmp_path):
+        missing = str(tmp_path / "nope.pdf")
+        result = self._invoke(
+            ["draft-create", "--to", "a@b.com", "-s", "x", "-b", "y", "--attach", missing]
+        )
+        assert result.exit_code == 1
+        assert "Attachment file not found" in result.output
+        assert "Error creating draft" not in result.output
+
+    def test_label_without_target(self):
+        result = self._invoke(["label", "--star"])
+        assert result.exit_code == 1
+        assert "Error updating labels" not in result.output
+
+    def test_provider_error_still_reported(self):
+        provider = _mock_provider()
+        provider.send_message.side_effect = RuntimeError("boom")
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(
+                app, ["--mode", "dangerous", "send", "--to", "a@b.com", "-s", "x", "-b", "y"]
+            )
+        assert result.exit_code == 1
+        assert "Error sending email: boom" in result.output
