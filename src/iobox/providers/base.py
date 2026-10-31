@@ -62,6 +62,10 @@ class EmailData(EmailMetadata, total=False):
     content_type: str  # 'text/plain' or 'text/html'
     attachments: list[AttachmentInfo]
     error: str  # set when this message could not be fetched
+    # Set by the Workspace fan-out only: the provider slot this message came
+    # from, and the provider identifier ("gmail" | "outlook").
+    slot: str
+    provider_id: str
 
 
 @dataclass
@@ -310,10 +314,20 @@ class EmailProvider(ABC):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-class Resource(TypedDict):
+class _ResourceOptional(TypedDict, total=False):
+    # Name of the Workspace provider slot the resource came from. Set by
+    # ``Workspace`` fan-out queries; absent when a provider is called directly.
+    slot: str
+
+
+class Resource(_ResourceOptional):
     """Base TypedDict shared by all workspace resource types.
 
     resource_type values: "email" | "event" | "file"
+
+    ``slot`` (optional) names the Workspace provider slot the resource came
+    from — pass it back to ``Workspace.get_*_provider(slot)`` for follow-up
+    calls on the same account.
     """
 
     id: str

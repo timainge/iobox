@@ -1,8 +1,8 @@
 """
 Unit tests for Workspace write operation routing (task-017).
 
-Verifies that get_email_provider() resolves the correct slot and that
-_check_write_mode() enforces readonly mode gating.
+Verifies that get_email_provider() / get_calendar_provider() /
+get_file_provider() resolve the correct slot.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from iobox.workspace import ProviderSlot, Workspace, WorkspaceSession
+from iobox.workspace import ProviderSlot, Workspace
 
 
 def _make_ws_with_providers(*slots: tuple[str, str]) -> Workspace:
@@ -19,7 +19,7 @@ def _make_ws_with_providers(*slots: tuple[str, str]) -> Workspace:
 
     Each slot is a (name, mode) tuple. The provider mock exposes a .mode attr.
     """
-    ws = Workspace(name="test", session=WorkspaceSession(workspace_name="test"))
+    ws = Workspace(name="test")
     for name, mode in slots:
         provider = MagicMock()
         provider.mode = mode
@@ -44,7 +44,7 @@ class TestGetEmailProvider:
         assert p is ws.email_providers[1].provider
 
     def test_raises_when_no_providers(self):
-        ws = Workspace(name="empty", session=WorkspaceSession(workspace_name="empty"))
+        ws = Workspace(name="empty")
         with pytest.raises(ValueError, match="No email providers"):
             ws.get_email_provider()
 
@@ -60,52 +60,44 @@ class TestGetEmailProvider:
 
 
 # ---------------------------------------------------------------------------
-# _check_write_mode
+# get_calendar_provider / get_file_provider
 # ---------------------------------------------------------------------------
 
 
-class TestCheckWriteMode:
-    def test_allows_standard_mode(self):
-        ws = _make_ws_with_providers(("gmail-personal", "standard"))
-        # Should not raise
-        ws._check_write_mode()
-
-    def test_allows_dangerous_mode(self):
-        ws = _make_ws_with_providers(("gmail-personal", "dangerous"))
-        ws._check_write_mode()
-
-    def test_blocks_readonly_mode(self):
-        ws = _make_ws_with_providers(("gmail-personal", "readonly"))
-        with pytest.raises(PermissionError, match="readonly mode"):
-            ws._check_write_mode()
-
-    def test_blocks_named_readonly_slot(self):
-        ws = _make_ws_with_providers(
-            ("gmail-personal", "standard"),
-            ("outlook-work", "readonly"),
+class TestGetOtherProviders:
+    def _ws(self) -> Workspace:
+        return Workspace(
+            name="test",
+            calendar_providers=[
+                ProviderSlot(name="a-cal", provider=MagicMock()),
+                ProviderSlot(name="b-cal", provider=MagicMock()),
+            ],
+            file_providers=[ProviderSlot(name="a-drive", provider=MagicMock())],
         )
-        with pytest.raises(PermissionError, match="readonly mode"):
-            ws._check_write_mode("outlook-work")
 
-    def test_allows_standard_when_named(self):
-        ws = _make_ws_with_providers(
-            ("gmail-personal", "readonly"),
-            ("gmail-work", "standard"),
-        )
-        # Targeting the standard slot by name — should succeed
-        ws._check_write_mode("gmail-work")
+    def test_calendar_named_slot(self):
+        ws = self._ws()
+        assert ws.get_calendar_provider("b-cal") is ws.calendar_providers[1].provider
 
-    def test_does_nothing_when_no_matching_slot(self):
-        ws = _make_ws_with_providers(("gmail-personal", "standard"))
-        # No slot named "nonexistent" — no PermissionError (get_email_provider raises later)
-        ws._check_write_mode("nonexistent")
+    def test_calendar_default_first(self):
+        ws = self._ws()
+        assert ws.get_calendar_provider() is ws.calendar_providers[0].provider
 
-    def test_does_nothing_when_provider_has_no_mode_attr(self):
-        ws = Workspace(name="test", session=WorkspaceSession(workspace_name="test"))
-        provider = MagicMock(spec=[])  # no .mode attribute
-        ws.email_providers.append(ProviderSlot(name="slot", provider=provider))
-        # Should not raise
-        ws._check_write_mode()
+    def test_file_named_slot(self):
+        ws = self._ws()
+        assert ws.get_file_provider("a-drive") is ws.file_providers[0].provider
+
+    def test_unknown_slot_lists_available(self):
+        with pytest.raises(ValueError, match="a-cal"):
+            self._ws().get_calendar_provider("missing")
+
+    def test_no_file_providers(self):
+        with pytest.raises(ValueError, match="No file providers"):
+            Workspace(name="x").get_file_provider()
+
+    def test_dead_write_mode_helper_removed(self):
+        # Readonly gating lives in providers / CLI / MCP, not on Workspace.
+        assert not hasattr(Workspace, "_check_write_mode")
 
 
 # ---------------------------------------------------------------------------
