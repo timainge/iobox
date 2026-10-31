@@ -7,16 +7,39 @@ from the Gmail API.
 
 import base64
 import logging
+import threading
 import time
+import weakref
 from typing import Any
 
 from googleapiclient.errors import HttpError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Module-level cache for label ID → display name mapping.
-# Populated lazily by get_label_map() and shared across calls within one session.
-_label_cache: dict[str, str] = {}
+# Label ID → display name caches, one per Gmail service object (i.e. per
+# authenticated account). A module-global dict would leak one account's labels
+# into another's lookups when a workspace holds several Gmail slots.
+_label_caches: weakref.WeakKeyDictionary[Any, dict[str, str]] = weakref.WeakKeyDictionary()
+_label_caches_lock = threading.Lock()
+
+
+def _label_cache_for(service: Any) -> dict[str, str]:
+    """Return (creating if needed) the label cache bound to ``service``."""
+    with _label_caches_lock:
+        cache = _label_caches.get(service)
+        if cache is None:
+            cache = {}
+            _label_caches[service] = cache
+        return cache
+
+
+def clear_label_cache(service: Any | None = None) -> None:
+    """Drop the cached label map for ``service`` (or for every service)."""
+    with _label_caches_lock:
+        if service is None:
+            _label_caches.clear()
+        else:
+            _label_caches.pop(service, None)
 
 # Gmail rejects bursts of concurrent requests per user with 429
 # "Too many concurrent requests for user", even inside a single batch.
@@ -90,31 +113,36 @@ def batch_get_messages(
     return results, errors
 
 
-def get_label_map(service: Any) -> dict[str, str]:
+def get_label_map(service: Any, refresh: bool = False) -> dict[str, str]:
     """
     Fetch the Gmail label ID-to-name mapping for the authenticated user.
 
-    Results are cached at module level so the API is called at most once per
-    process invocation. If the API call fails, an empty dict is returned so
-    callers can gracefully fall back to raw label IDs.
+    Results are cached per ``service`` (one per authenticated account), so the
+    API is called once per service unless ``refresh=True``. If the API call
+    fails, an empty dict is returned so callers can gracefully fall back to raw
+    label IDs.
 
     Args:
         service: Authenticated Gmail API service
+        refresh: Re-fetch from the API even when a cached map exists
 
     Returns:
         dict: Mapping of label ID → display name (e.g. {"Label_12345": "Newsletter"})
     """
-    if _label_cache:
-        return _label_cache
+    cache = _label_cache_for(service)
+    if cache and not refresh:
+        return dict(cache)
     try:
         response = service.users().labels().list(userId="me").execute()
         labels = response.get("labels", [])
-        _label_cache.update({label["id"]: label["name"] for label in labels})
-        logging.info(f"Fetched label map with {len(_label_cache)} entries")
-        return _label_cache
+        fresh = {label["id"]: label["name"] for label in labels}
+        cache.clear()
+        cache.update(fresh)
+        logging.info(f"Fetched label map with {len(cache)} entries")
+        return dict(cache)
     except Exception as e:
         logging.warning(f"Failed to fetch label map, returning empty dict: {e}")
-        return {}
+        return dict(cache)
 
 
 def _process_message_response(
@@ -379,10 +407,12 @@ def resolve_label_name(service: Any, label_name: str) -> str:
         return label_name.upper()
     if label_name.upper().startswith("CATEGORY_"):
         return label_name.upper()
-    label_map = get_label_map(service)
-    name_to_id = {v: k for k, v in label_map.items()}
-    if label_name in name_to_id:
-        return name_to_id[label_name]
+    for refresh in (False, True):
+        # On a miss, refetch once — the label may have been created since the
+        # map was cached (in the Gmail UI or by another process).
+        name_to_id = {v: k for k, v in get_label_map(service, refresh=refresh).items()}
+        if label_name in name_to_id:
+            return name_to_id[label_name]
     raise ValueError(f"Label '{label_name}' not found")
 
 
@@ -410,14 +440,14 @@ def create_label(service: Any, name: str) -> dict[str, str]:
     except HttpError as error:
         # 409 → label already exists; resolve and return it.
         if getattr(error, "resp", None) is not None and error.resp.status == 409:
-            existing = get_label_map(service)
+            existing = get_label_map(service, refresh=True)
             name_to_id = {v: k for k, v in existing.items()}
             if name in name_to_id:
                 return {"id": name_to_id[name], "name": name}
         logging.error(f"Error creating label {name!r}: {error}")
         raise
-    # Refresh the module cache so subsequent resolves see the new label.
-    _label_cache[created["id"]] = created["name"]
+    # Update this service's cache so subsequent resolves see the new label.
+    _label_cache_for(service)[created["id"]] = created["name"]
     return {"id": created["id"], "name": created["name"]}
 
 

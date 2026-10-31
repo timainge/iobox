@@ -39,6 +39,12 @@ MOCK_LABELS_RESPONSE = {
 }
 
 
+def _seed_labels(service, mapping):
+    """Replace ``service``'s cached label map with ``mapping``."""
+    er.clear_label_cache(service)
+    er._label_cache_for(service).update(mapping)
+
+
 class TestEmailRetrieval:
     """Test canonical import paths for email retrieval functions."""
 
@@ -89,7 +95,7 @@ class TestGetLabelMap:
 
     def test_get_label_map(self, mock_gmail_service, mocker):
         """Mock labels.list and verify returned dict maps IDs to names."""
-        mocker.patch.dict(er._label_cache, {}, clear=True)
+        _seed_labels(mock_gmail_service, {})
 
         mock_result = MagicMock()
         mock_result.execute.return_value = MOCK_LABELS_RESPONSE
@@ -105,7 +111,7 @@ class TestGetLabelMap:
 
     def test_get_label_map_error_fallback(self, mock_gmail_service, mocker):
         """If labels.list raises, get_label_map returns an empty dict."""
-        mocker.patch.dict(er._label_cache, {}, clear=True)
+        _seed_labels(mock_gmail_service, {})
 
         mock_gmail_service.users().labels().list.side_effect = Exception("API error")
 
@@ -115,7 +121,7 @@ class TestGetLabelMap:
 
     def test_get_label_map_uses_cache(self, mock_gmail_service, mocker):
         """Subsequent calls within a session re-use the cached map."""
-        mocker.patch.dict(er._label_cache, {}, clear=True)
+        _seed_labels(mock_gmail_service, {})
 
         mock_result = MagicMock()
         mock_result.execute.return_value = MOCK_LABELS_RESPONSE
@@ -441,7 +447,7 @@ class TestResolveLabelName:
 
     def test_resolve_label_name_custom(self, mock_gmail_service, mocker):
         """Custom label names are resolved via the label map."""
-        mocker.patch.dict(er._label_cache, {"Label_12345": "Newsletter"}, clear=True)
+        _seed_labels(mock_gmail_service, {"Label_12345": "Newsletter"})
 
         result = resolve_label_name(mock_gmail_service, "Newsletter")
 
@@ -449,7 +455,7 @@ class TestResolveLabelName:
 
     def test_resolve_label_name_not_found(self, mock_gmail_service, mocker):
         """Unknown label name raises ValueError."""
-        mocker.patch.dict(er._label_cache, {}, clear=True)
+        _seed_labels(mock_gmail_service, {})
         mock_labels = MagicMock()
         mock_labels.execute.return_value = {"labels": []}
         mock_gmail_service.users().labels().list.return_value = mock_labels
@@ -462,7 +468,7 @@ class TestCreateLabel:
     """Tests for create_label() (Task 5)."""
 
     def test_create_label_returns_id_and_name(self, mock_gmail_service, mocker):
-        mocker.patch.dict(er._label_cache, {}, clear=True)
+        _seed_labels(mock_gmail_service, {})
         mock_create = MagicMock()
         mock_create.execute.return_value = {
             "id": "Label_999",
@@ -474,12 +480,17 @@ class TestCreateLabel:
 
         assert result == {"id": "Label_999", "name": "LifeAdmin/property/7-leslie-st"}
         # New label is cached for subsequent resolves.
-        assert er._label_cache["Label_999"] == "LifeAdmin/property/7-leslie-st"
+        cache = er._label_cache_for(mock_gmail_service)
+        assert cache["Label_999"] == "LifeAdmin/property/7-leslie-st"
 
     def test_create_label_already_exists_returns_existing(self, mock_gmail_service, mocker):
         from googleapiclient.errors import HttpError
 
-        mocker.patch.dict(er._label_cache, {"Label_55": "Existing"}, clear=True)
+        # Cache is stale (created elsewhere) — the 409 path refetches.
+        _seed_labels(mock_gmail_service, {"Label_1": "Other"})
+        mock_gmail_service.users().labels().list.return_value.execute.return_value = {
+            "labels": [{"id": "Label_55", "name": "Existing"}]
+        }
         resp = MagicMock()
         resp.status = 409
         mock_gmail_service.users().labels().create.return_value.execute.side_effect = HttpError(
@@ -488,6 +499,38 @@ class TestCreateLabel:
 
         result = create_label(mock_gmail_service, "Existing")
         assert result == {"id": "Label_55", "name": "Existing"}
+
+
+class TestLabelCacheScoping:
+    """DATA-04: label cache is per service (account) and refreshed on a miss."""
+
+    def _svc(self, labels: list[dict[str, str]]) -> MagicMock:
+        svc = MagicMock()
+        svc.users().labels().list.return_value.execute.return_value = {"labels": labels}
+        return svc
+
+    def test_cache_not_shared_between_accounts(self) -> None:
+        a = self._svc([{"id": "Label_1", "name": "Work"}])
+        b = self._svc([{"id": "Label_9", "name": "Family"}])
+        assert get_label_map(a) == {"Label_1": "Work"}
+        assert get_label_map(b) == {"Label_9": "Family"}
+        assert resolve_label_name(b, "Family") == "Label_9"
+        with pytest.raises(ValueError):
+            resolve_label_name(b, "Work")
+
+    def test_resolve_refetches_once_on_miss(self) -> None:
+        svc = self._svc([{"id": "Label_1", "name": "Work"}])
+        get_label_map(svc)  # prime the cache
+        svc.users().labels().list.return_value.execute.return_value = {
+            "labels": [{"id": "Label_1", "name": "Work"}, {"id": "Label_2", "name": "New"}]
+        }
+        assert resolve_label_name(svc, "New") == "Label_2"
+
+    def test_resolve_hit_does_not_refetch(self) -> None:
+        svc = self._svc([{"id": "Label_1", "name": "Work"}])
+        resolve_label_name(svc, "Work")
+        resolve_label_name(svc, "Work")
+        assert svc.users().labels().list.return_value.execute.call_count == 1
 
 
 class TestBatchModifyLabels:
