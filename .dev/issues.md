@@ -163,6 +163,7 @@ Packages own disjoint files so they can run in parallel. Cross-cutting items are
 | FU-13 | low | `o365/email.py` drafts | New drafts > ~3 MB with attachments fail (library chunks uploads only for existing drafts) | fixed (25fb27d) — needs live-tenant verification |
 | FU-14 | low | `o365/email.py` `$batch` | Throttled (429) batch items reported as failures, not retried | fixed (71d1a13) — needs live-tenant verification |
 | FU-16 | low | `google/_retrieval.get_thread_content` | Thread fetches never resolve label IDs to names (raw `Label_123`) | fixed (82b3036) |
+| FU-17 | low | `docs/overrides/` | Theme overrides copied from mkdocs-shadcn 0.10.2; 0.10.7+ removed `components/sidebar_item.html` and 0.12 changed `seo.html`/404 rendering. Pinned to 0.10.2 — update overrides, then unpin | open |
 | FU-15 | med | O365 providers | Live-tenant checks: KQL quoting/`hasAttachments:`, `any()` filters vs InefficientFilter, draft ImmutableId after send, public-client app setup, granted-scope format, calendarView `$orderby`, `permanentDelete`; `parentFolderId ne` filters, `$select` with `$search`, attachment-list `$select`, upload sessions, `Retry-After` in `$batch` sub-responses | open (needs M365 dev tenant) |
 
 ## Backlog (ideas carried over from the old MCP parity list)

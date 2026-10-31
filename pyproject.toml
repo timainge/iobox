@@ -57,7 +57,7 @@ dev = [
 ]
 docs = [
     "mkdocs>=1.6,<2",
-    "mkdocs-shadcn>=0.9,<0.11",  # 0.12 breaks docs/overrides/main.html (404 page)
+    "mkdocs-shadcn==0.10.2",  # newer releases break docs/overrides (see FU-17)
 ]
 
 [project.urls]
@@ -130,7 +130,7 @@ no_implicit_reexport = false
 [dependency-groups]
 docs = [
     "mkdocs>=1.6,<2",
-    "mkdocs-shadcn>=0.9,<0.11",  # 0.12 breaks docs/overrides/main.html (404 page)
+    "mkdocs-shadcn==0.10.2",  # newer releases break docs/overrides (see FU-17)
 ]
 
 [tool.uv]
