@@ -184,6 +184,27 @@ class TestCliCommands:
             assert result.exit_code == 0
             assert "Searching for emails matching" in result.stdout
 
+    def test_auth_status_outlook_uses_account_flag(self):
+        mock_status = {
+            "authenticated": True,
+            "client_id_configured": True,
+            "tenant_id": "common",
+            "token_file_exists": True,
+            "token_path": "/tokens/corp@company.com/o365_token.txt",
+        }
+        with (
+            patch("iobox.cli.get_provider", return_value=_mock_provider()),
+            patch(
+                "iobox.providers.o365.auth.check_outlook_auth_status", return_value=mock_status
+            ) as mock_check,
+        ):
+            result = runner.invoke(
+                app, ["--provider", "outlook", "--account", "corp@company.com", "auth-status"]
+            )
+
+        assert result.exit_code == 0
+        mock_check.assert_called_once_with(account="corp@company.com")
+
     def test_auth_status_command(self):
         """Test the auth-status command."""
         mock_status = {

@@ -298,9 +298,10 @@ class OutlookProvider(EmailProvider):
         if self._microsoft_auth is not None:
             self._account = self._microsoft_auth.get_account()
         else:
+            from iobox.accounts import get_active_account
             from iobox.providers.o365.auth import get_outlook_account
 
-            self._account = get_outlook_account()
+            self._account = get_outlook_account(account=get_active_account())
         self._mailbox = self._account.mailbox()
         self._set_immutable_id_header()
 

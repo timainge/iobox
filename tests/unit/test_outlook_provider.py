@@ -138,6 +138,20 @@ class TestAuthenticate:
         assert p._mailbox is not None
 
     @patch("iobox.providers.o365.auth.get_outlook_account")
+    def test_authenticate_uses_active_account(self, mock_get_acct):
+        from iobox.accounts import get_active_account, set_active_account
+
+        mock_get_acct.return_value = make_mock_account()
+        previous = get_active_account()
+        set_active_account("corp@company.com")
+        try:
+            OutlookProvider().authenticate()
+        finally:
+            set_active_account(previous)
+
+        mock_get_acct.assert_called_once_with(account="corp@company.com")
+
+    @patch("iobox.providers.o365.auth.get_outlook_account")
     def test_authenticate_sets_immutable_id_header(self, mock_get_acct):
         mock_account = make_mock_account()
         mock_get_acct.return_value = mock_account

@@ -127,7 +127,7 @@ def auth_status(ctx: typer.Context):
     if provider_name == "outlook":
         from iobox.providers.o365.auth import check_outlook_auth_status
 
-        status = check_outlook_auth_status()
+        status = check_outlook_auth_status(account=current_account)
         typer.echo(f"Authenticated: {status['authenticated']}")
         typer.echo(f"Client ID configured: {status['client_id_configured']}")
         typer.echo(f"Tenant ID: {status['tenant_id']}")

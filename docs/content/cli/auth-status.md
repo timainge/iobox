@@ -6,7 +6,7 @@ Show authentication status for the single-account email provider used by the top
     `auth-status` prints a deprecation notice. For workspace sessions use [`iobox space status`](space.md#status).
 
 !!! note "Single account, not the workspace"
-    `auth-status` does not look at your workspace or `iobox space` sessions. It reports on the one mailbox chosen by the global options `--provider gmail|outlook` and `--account NAME` (or `IOBOX_PROVIDER` / `IOBOX_ACCOUNT`), which go **before** the command name. Gmail tokens are read from `$CREDENTIALS_DIR/tokens/NAME/token_{readonly|standard}.json`; `CREDENTIALS_DIR` defaults to the current directory. Outlook currently ignores `--account` and always reports on the `default` token directory. See [CLI overview](index.md) for global options.
+    `auth-status` does not look at your workspace or `iobox space` sessions. It reports on the one mailbox chosen by the global options `--provider gmail|outlook` and `--account NAME` (or `IOBOX_PROVIDER` / `IOBOX_ACCOUNT`), which go **before** the command name. Gmail tokens are read from `$CREDENTIALS_DIR/tokens/NAME/token_{readonly|standard}.json`; `CREDENTIALS_DIR` defaults to the current directory. See [CLI overview](index.md) for global options.
 
 **Access mode:** available in all modes (`readonly`, `standard`, `dangerous`).
 
