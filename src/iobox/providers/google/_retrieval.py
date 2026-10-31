@@ -344,6 +344,8 @@ def get_thread_content(
 
         messages = result.get("messages", [])
         email_list = []
+        label_map = get_label_map(service)
+        refresh_label_map_for_messages(service, label_map, messages)
 
         for message in messages:
             payload = message["payload"]
@@ -363,7 +365,7 @@ def get_thread_content(
                 "date": next(
                     (h["value"] for h in headers if h["name"].lower() == "date"), "Unknown Date"
                 ),
-                "labels": message.get("labelIds", []),
+                "labels": [label_map.get(lid, lid) for lid in message.get("labelIds", [])],
                 "internal_date": int(message.get("internalDate", 0)),
             }
 

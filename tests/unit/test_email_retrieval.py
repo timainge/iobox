@@ -378,6 +378,22 @@ class TestGetThreadContent:
         for key in ("message_id", "thread_id", "subject", "from", "to", "date", "labels", "body"):
             assert key in msg, f"Missing key: {key}"
 
+    def test_get_thread_content_resolves_label_names(self, mock_gmail_service):
+        """Label IDs are resolved to display names, refetching once for unknown IDs (FU-16)."""
+        body_b64 = base64.urlsafe_b64encode(b"body").decode()
+        msg = _make_message("msg-1", "Subject", "sender@example.com", "Mon", 1000, body_b64)
+        msg["labelIds"] = ["INBOX", "Label_42"]
+        mock_get = MagicMock()
+        mock_get.execute.return_value = {"messages": [msg]}
+        mock_gmail_service.users().threads().get.return_value = mock_get
+        mock_gmail_service.users().labels().list().execute.return_value = {
+            "labels": [{"id": "INBOX", "name": "INBOX"}, {"id": "Label_42", "name": "Clients/Acme"}]
+        }
+
+        result = get_thread_content(mock_gmail_service, "thread-123")
+
+        assert result[0]["labels"] == ["INBOX", "Clients/Acme"]
+
     def test_get_thread_content_empty_thread(self, mock_gmail_service):
         """Empty message list returns empty list."""
         mock_get = MagicMock()
