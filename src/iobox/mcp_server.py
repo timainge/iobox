@@ -8,8 +8,11 @@ Install with: pip install iobox[mcp]
 Run with: python -m iobox.mcp_server
 """
 
+import functools
 import os
+import typing
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -28,8 +31,6 @@ from iobox.processing.markdown_converter import (
 )
 from iobox.providers.google.auth import (
     check_auth_status,
-    get_gmail_profile,
-    get_gmail_service,
     set_active_mode,
 )
 from iobox.utils import slugify_text
@@ -44,10 +45,42 @@ mcp = FastMCP("iobox")
 _ALL_TOOLS: dict[str, Any] = {}
 
 
+class ToolInputError(Exception):
+    """A tool call that must be refused with ``{"error": ...}`` rather than raised.
+
+    Raised by helpers (workspace loading, path confinement) deep inside a tool;
+    the ``_tool`` wrapper converts it into the tool's error return shape.
+    """
+
+
+class WorkspaceLoadError(ToolInputError):
+    """A named or active workspace is configured but could not be loaded."""
+
+
+def _error_result(fn: Any, message: str) -> Any:
+    """Return ``{"error": message}`` in the shape *fn* normally returns."""
+    ret = getattr(fn, "__annotations__", {}).get("return")
+    if ret is list or typing.get_origin(ret) is list:
+        return [{"error": message}]
+    return {"error": message}
+
+
 def _tool(fn: Any) -> Any:
-    """Collect a tool function without registering it yet."""
-    _ALL_TOOLS[fn.__name__] = fn
-    return fn
+    """Collect a tool function without registering it yet.
+
+    The collected wrapper turns a ``ToolInputError`` into an ``{"error": ...}``
+    result so a refused call never surfaces as an unhandled exception.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except ToolInputError as exc:
+            return _error_result(fn, str(exc))
+
+    _ALL_TOOLS[fn.__name__] = wrapper
+    return wrapper
 
 
 def register_tools(mode: AccessMode) -> None:
@@ -71,18 +104,27 @@ def _get_gmail_provider() -> Any:
 
 
 def _default_workspace_fn(name: str | None = None) -> Any | None:
-    """Default factory: load named (or active) workspace from disk, or None."""
-    try:
-        from iobox.space_config import IOBOX_HOME, get_active_space, load_space
-        from iobox.workspace import Workspace
+    """Default factory: load the named (or active) workspace from disk.
 
+    Returns ``None`` only when no workspace is requested *and* none is active —
+    the one case where email tools may fall back to legacy single-account Gmail.
+    A requested or active workspace that fails to load raises
+    ``WorkspaceLoadError``; it never silently degrades to another account.
+    """
+    from iobox.space_config import IOBOX_HOME, get_active_space, load_space
+    from iobox.workspace import Workspace
+
+    try:
         target = name or get_active_space()
-        if not target:
-            return None
+    except Exception as exc:
+        raise WorkspaceLoadError(f"Could not read the active workspace: {exc}") from exc
+    if not target:
+        return None
+    try:
         config = load_space(target)
         return Workspace.from_config(config, credentials_dir=str(IOBOX_HOME))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise WorkspaceLoadError(f"Could not load workspace '{target}': {exc}") from exc
 
 
 def create_mcp_server(*, _workspace_fn: Callable[..., Any] | None = None) -> FastMCP:
@@ -96,12 +138,11 @@ _workspace_factory: Callable[..., Any | None] = _default_workspace_fn
 
 
 def _get_workspace(name: str | None = None) -> Any | None:
-    """Return the named (or active) Workspace, or None if not configured."""
-    try:
-        # Newer factories accept a name argument; tolerate older zero-arg fns.
-        return _workspace_factory(name)  # type: ignore[call-arg]
-    except TypeError:
-        return _workspace_factory()
+    """Return the named (or active) Workspace, or None if none is configured.
+
+    Raises ``WorkspaceLoadError`` when a requested/active workspace can't load.
+    """
+    return _workspace_factory(name)
 
 
 def _find_email_slot(ws: Any, name: str | None = None) -> Any | None:
@@ -147,14 +188,17 @@ def _resolve_email_provider(
     """Resolve an email provider via workspace slot, falling back to legacy Gmail.
 
     Resolution order:
-    1. If a workspace (named or active) is configured and has email slots, return
-       the matching slot's provider — this is the only path that supports
-       multiple Gmail/Outlook accounts.
-    2. Otherwise, fall back to the legacy module-level ``GmailProvider()``
-       (single-account, env-driven).
+    1. If a workspace (named or active) is configured, return the matching
+       email slot's provider — this is the only path that supports multiple
+       Gmail/Outlook accounts. A workspace that fails to load, or has no email
+       slots, is an error (never a silent fallback to another account).
+    2. Only when no workspace is requested or active, fall back to the legacy
+       module-level ``GmailProvider()`` (single-account, env-driven).
     """
-    ws = _get_workspace(workspace) if (workspace or provider) else _get_workspace()
-    if ws is not None and ws.email_providers:
+    ws = _get_workspace(workspace)
+    if ws is not None:
+        if not ws.email_providers:
+            raise WorkspaceLoadError(f"Workspace '{ws.name}' has no email accounts configured.")
         slot = _find_email_slot(ws, provider)
         if slot is None:
             available = ", ".join(s.name for s in ws.email_providers)
@@ -173,6 +217,113 @@ def _resolve_email_provider(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+class PathNotAllowedError(ToolInputError):
+    """A filesystem path supplied to a tool falls outside the MCP root."""
+
+
+_DEFAULT_MCP_ROOT = "~/iobox"
+
+
+def _mcp_root() -> Path:
+    """Return the resolved directory every MCP filesystem path is confined to.
+
+    Set with ``IOBOX_MCP_ROOT`` (default ``~/iobox``). Created on demand.
+    """
+    raw = os.environ.get("IOBOX_MCP_ROOT", "").strip() or _DEFAULT_MCP_ROOT
+    root = Path(os.path.realpath(os.path.expanduser(raw)))
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _denied_paths() -> tuple[list[Path], list[Path]]:
+    """Return (denied directories, denied files) holding credentials or tokens.
+
+    ``~/.iobox`` (workspace tokens) is always denied, even when the MCP root is
+    configured to contain it. The legacy single-account credential/token files
+    under ``CREDENTIALS_DIR`` are denied too.
+    """
+
+    def _real(p: str) -> Path:
+        return Path(os.path.realpath(os.path.expanduser(p)))
+
+    creds_dir = os.environ.get("CREDENTIALS_DIR") or os.getcwd()
+    dirs = [_real("~/.iobox"), _real(os.path.join(creds_dir, "tokens"))]
+    files = [
+        _real(
+            os.path.join(
+                creds_dir, os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
+            )
+        ),
+        _real(os.path.join(creds_dir, os.environ.get("GMAIL_TOKEN_FILE", "token.json"))),
+        _real(os.path.join(creds_dir, "o365_token.txt")),
+    ]
+    return dirs, files
+
+
+def _confine_path(path: str | None, *, purpose: str = "path") -> Path:
+    """Resolve *path* inside the MCP root, or raise ``PathNotAllowedError``.
+
+    Relative paths resolve under the root; absolute (and ``~``) paths must
+    resolve inside it. Symlinks are resolved first (``os.path.realpath``) so a
+    link inside the root can't point outside it. Paths inside ``~/.iobox`` or
+    at legacy credential/token files are always refused.
+    """
+    root = _mcp_root()
+    raw = (path or "").strip() or "."
+    expanded = os.path.expanduser(raw)
+    candidate = expanded if os.path.isabs(expanded) else os.path.join(root, expanded)
+    resolved = Path(os.path.realpath(candidate))
+
+    if resolved != root and not resolved.is_relative_to(root):
+        raise PathNotAllowedError(
+            f"{purpose} {raw!r} is outside the iobox MCP root {str(root)!r}. "
+            "Use a path inside it (relative paths resolve under it), or set "
+            "IOBOX_MCP_ROOT to change it."
+        )
+    denied_dirs, denied_files = _denied_paths()
+    if any(resolved == d or resolved.is_relative_to(d) for d in denied_dirs) or (
+        resolved in denied_files
+    ):
+        raise PathNotAllowedError(f"{purpose} {raw!r} points at iobox credentials or tokens.")
+    return resolved
+
+
+def _confine_existing_file(path: str, *, purpose: str) -> Path:
+    """Confine *path* and require it to be an existing regular file."""
+    resolved = _confine_path(path, purpose=purpose)
+    if not resolved.is_file():
+        raise PathNotAllowedError(f"{purpose} not found or not a regular file: {path!r}")
+    return resolved
+
+
+def _confine_output_dir(output_dir: str | None) -> str:
+    """Confine and create an output directory; return it as a string."""
+    resolved = _confine_path(output_dir, purpose="output_dir")
+    return create_output_directory(str(resolved))
+
+
+def _confine_attachments(attachments: list[str] | None) -> list[str] | None:
+    """Confine each outgoing attachment path; return the resolved paths."""
+    if not attachments:
+        return attachments
+    return [str(_confine_existing_file(fp, purpose="Attachment")) for fp in attachments]
+
+
+def _write_new_file(path: Path, data: bytes) -> None:
+    """Write *data* to *path*, refusing to overwrite anything already there.
+
+    ``O_EXCL`` also refuses a pre-planted symlink at *path*.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "xb") as fh:
+            fh.write(data)
+    except FileExistsError:
+        raise PathNotAllowedError(
+            f"Refusing to overwrite existing file {str(path)!r}; choose a new output_path."
+        ) from None
 
 
 def _email_data_to_dict(data: Any) -> dict[str, Any]:
@@ -228,6 +379,91 @@ def _apply_body_mode(data: dict[str, Any], mode: str, max_body_chars: int | None
         data["truncated"] = True
 
     return data
+
+
+BATCH_MAX_RESULTS = 100
+
+
+def _parse_ymd(value: str, field: str) -> Any:
+    """Parse ``YYYY/MM/DD`` (or ``YYYY-MM-DD``) into a ``date``."""
+    from datetime import date
+
+    try:
+        y, m, d = (int(x) for x in value.replace("-", "/").split("/"))
+        return date(y, m, d)
+    except (ValueError, TypeError):
+        raise ToolInputError(f"{field} must be YYYY/MM/DD, got {value!r}.") from None
+
+
+def _batch_query(
+    query: str,
+    max_results: int,
+    days: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[Any, str | None]:
+    """Build a bounded ``EmailQuery`` for a destructive batch tool.
+
+    Requires a non-empty query, and ``days >= 1`` unless ``start_date`` gives
+    an explicit lower bound. Clamps ``max_results`` to 1..``BATCH_MAX_RESULTS``.
+    Returns ``(query, note)`` where *note* explains any clamping.
+    """
+    from datetime import date, timedelta
+
+    from iobox.providers.base import EmailQuery
+
+    if not query or not query.strip():
+        raise ToolInputError(
+            "Batch operations require a non-empty query; refusing to act on the whole mailbox."
+        )
+    if start_date:
+        after = _parse_ymd(start_date, "start_date")
+    elif days is None or days < 1:
+        raise ToolInputError(
+            "Batch operations require days >= 1 (or an explicit start_date); "
+            "refusing to act on the whole mailbox history."
+        )
+    else:
+        after = date.today() - timedelta(days=days)
+    before = _parse_ymd(end_date, "end_date") if end_date else None
+    limit = max(1, min(int(max_results), BATCH_MAX_RESULTS))
+    eq = EmailQuery(text=query, max_results=limit, after=after, before=before)
+    note = f"max_results clamped to {limit}." if limit != max_results else None
+    return eq, note
+
+
+def _run_batch(
+    message_ids: list[str], action: Callable[[str], Any]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Apply *action* to each ID, collecting per-item failures instead of aborting."""
+    succeeded: list[str] = []
+    failed: list[dict[str, str]] = []
+    for mid in message_ids:
+        try:
+            action(mid)
+            succeeded.append(mid)
+        except Exception as exc:
+            failed.append({"message_id": mid, "error": str(exc)})
+    return succeeded, failed
+
+
+def _batch_result(
+    count_key: str,
+    matched: int,
+    succeeded: list[str],
+    failed: list[dict[str, str]],
+    note: str | None,
+) -> dict[str, Any]:
+    """Summarise a batch: ``<count_key>`` (successes), matched, per-item outcome."""
+    result: dict[str, Any] = {
+        count_key: len(succeeded),
+        "matched_count": matched,
+        "succeeded": succeeded,
+        "failed": failed,
+    }
+    if note:
+        result["detail"] = note
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +529,10 @@ def search_gmail(
         include_spam_trash=include_spam_trash,
     )
 
-    ws = _get_workspace(workspace) if (workspace or provider) else _get_workspace()
-    if ws is not None and ws.email_providers:
+    ws = _get_workspace(workspace)
+    if ws is not None:
+        if not ws.email_providers:
+            return [{"error": f"Workspace '{ws.name}' has no email accounts configured."}]
         providers_arg = [provider] if provider else None
         try:
             results = ws.search_emails(eq, providers=providers_arg)
@@ -302,7 +540,9 @@ def search_gmail(
             return [{"error": str(exc)}]
         return [_email_data_to_dict(r) for r in results]
 
-    # Legacy fallback: single-account Gmail
+    # Legacy fallback: single-account Gmail (no workspace configured at all)
+    if provider is not None:
+        return [{"error": "No active workspace; cannot route by provider name."}]
     p = _get_gmail_provider()
     results = p.search_emails(eq)
     return [_email_data_to_dict(r) for r in results]
@@ -383,8 +623,10 @@ def get_emails(
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        List of email dicts in the same order as ``message_ids``. Failed
-        fetches appear as ``{"message_id": ..., "error": ...}``.
+        Exactly one entry per requested ID, in the same order as
+        ``message_ids``. Missing or failed messages appear in place as
+        ``{"message_id": ..., "error": ...}``; one failure never drops or
+        shifts the others.
     """
     mode = body.lower()
     if mode not in _VALID_BODY_MODES:
@@ -392,14 +634,35 @@ def get_emails(
 
     content_type = "text/html" if mode in ("html", "markdown") else "text/plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    raw_batch = p.batch_get_emails(message_ids, preferred_content_type=content_type)
+
+    # Index whatever the provider returns by ID: providers may reorder, drop
+    # missing IDs (Outlook), or return per-item error rows (Gmail).
+    by_id: dict[str, dict[str, Any]] = {}
+    try:
+        for raw in p.batch_get_emails(list(message_ids), preferred_content_type=content_type):
+            mid = raw.get("message_id")
+            if mid is not None and mid not in by_id:
+                by_id[mid] = dict(raw)
+    except Exception:
+        by_id = {}  # whole-batch failure: fall back to per-message fetches below.
 
     out: list[dict] = []
-    for raw in raw_batch:
-        if "error" in raw:
-            out.append({"message_id": raw.get("message_id", ""), "error": raw["error"]})
+    for mid in message_ids:
+        raw = by_id.get(mid)
+        if raw is not None and "error" in raw:
+            out.append({"message_id": mid, "error": raw["error"]})
             continue
-        out.append(_apply_body_mode(_email_data_to_dict(raw), mode, max_body_chars))
+        if raw is None:
+            # Not in the batch response: fetch it alone to get a real answer.
+            try:
+                raw = dict(p.get_email_content(mid, content_type))
+            except Exception as exc:
+                out.append({"message_id": mid, "error": str(exc)})
+                continue
+        try:
+            out.append(_apply_body_mode(_email_data_to_dict(raw), mode, max_body_chars))
+        except Exception as exc:
+            out.append({"message_id": mid, "error": str(exc)})
     return out
 
 
@@ -416,7 +679,6 @@ def save_email(
     download_attachments: bool = False,
     attachment_types: str | None = None,
     include_inline: bool = False,
-    include_spam_trash: bool = False,
     provider: str | None = None,
     workspace: str | None = None,
 ) -> dict:
@@ -432,7 +694,9 @@ def save_email(
 
     Args:
         message_id: Email message ID.
-        output_dir: Directory to save the file (default: current dir).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         prefer_html: Use HTML content if available (default: True).
         download_attachments: Also save every attachment on this email into
             ``output_dir`` (default: False — Markdown only). Gmail slots only.
@@ -440,7 +704,6 @@ def save_email(
             these extensions (comma-separated, e.g. ``"pdf,docx"``).
         include_inline: Include inline parts (signature logos, cid images) when
             downloading attachments (default False — skip inline cruft).
-        include_spam_trash: Include messages from SPAM and TRASH (default False).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
@@ -452,7 +715,7 @@ def save_email(
     p = _resolve_email_provider(provider=provider, workspace=workspace)
     email_data = _email_data_to_dict(p.get_email_content(message_id, content_type))
     md = convert_email_to_markdown(email_data)
-    out = create_output_directory(output_dir)
+    out = _confine_output_dir(output_dir)
     filepath = save_email_to_markdown(email_data, md, out)
 
     saved: list[dict] = []
@@ -476,23 +739,22 @@ def save_email(
 def save_thread(
     thread_id: str,
     output_dir: str = ".",
-    prefer_html: bool = True,
-    include_spam_trash: bool = False,
     provider: str | None = None,
     workspace: str | None = None,
-) -> str:
+) -> str | dict:
     """Save an entire email thread/conversation as a single Markdown file.
 
     Args:
         thread_id: Thread/conversation ID.
-        output_dir: Directory to save the file (default: current dir).
-        prefer_html: Use HTML content if available (default: True).
-        include_spam_trash: Include messages from SPAM and TRASH (default False).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Absolute path to the saved file.
+        Absolute path to the saved file, or ``{"error": ...}`` when the
+        output location is refused.
     """
     p = _resolve_email_provider(provider=provider, workspace=workspace)
     messages_raw = p.get_thread(thread_id)
@@ -501,11 +763,25 @@ def save_thread(
     subject = messages[0].get("subject", "thread") if messages else "thread"
     subject_slug = slugify_text(subject)
     filename = f"{subject_slug}_{thread_id}.md"
-    out = create_output_directory(output_dir)
-    filepath = os.path.join(out, filename)
+    out = _confine_output_dir(output_dir)
+    filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md)
     return filepath
+
+
+def _refresh_sync_state(p: Any, sync_state: Any, ids: list[str], fallback: str = "") -> None:
+    """Record the provider's current sync token (e.g. Gmail historyId).
+
+    Asks the *selected* provider rather than the legacy module-level Gmail
+    service, so the token belongs to the account that was searched and no
+    separate (possibly interactive) auth path is triggered.
+    """
+    try:
+        token = p.get_sync_state()
+    except Exception:
+        return  # sync only meaningful where the provider supports it.
+    sync_state.update(str(token or fallback), ids)
 
 
 @_tool
@@ -533,7 +809,9 @@ def save_emails_by_query(
 
     Args:
         query: Email search syntax.
-        output_dir: Directory to save files (default: current dir).
+        output_dir: Directory to save files, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         max_results: Maximum emails to save (default 10).
         days: Days back to search (default 7).
         start_date: Start date YYYY/MM/DD (overrides days).
@@ -544,20 +822,23 @@ def save_emails_by_query(
             Gmail slots only.
         attachment_types: When ``download_attachments`` is True, restrict to
             these extensions (comma-separated, e.g. ``"pdf,docx"``).
+        include_inline: Include inline parts (signature logos, cid images) when
+            downloading attachments (default False — skip inline cruft).
         include_spam_trash: Include SPAM and TRASH (default False).
         sync: Enable incremental sync — Gmail only (default False).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with saved_count, skipped_count, and attachment_count.
+        Summary dict with saved_count, skipped_count, attachment_count, and
+        ``failed`` (``{message_id, error}`` for messages that could not be saved).
     """
     from datetime import date, timedelta
 
     from iobox.providers.base import EmailQuery
 
     content_type = "text/html" if prefer_html else "text/plain"
-    out = create_output_directory(output_dir)
+    out = _confine_output_dir(output_dir)
     att_filters = (
         [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
     )
@@ -576,9 +857,7 @@ def save_emails_by_query(
 
     if message_ids_to_fetch is not None:
         if not message_ids_to_fetch:
-            service = get_gmail_service()
-            profile = service.users().getProfile(userId="me").execute()
-            sync_state.update(profile.get("historyId", sync_state.last_history_id), [])
+            _refresh_sync_state(p, sync_state, [], fallback=sync_state.last_history_id or "")
             return {
                 "saved_count": 0,
                 "skipped_count": 0,
@@ -609,12 +888,7 @@ def save_emails_by_query(
         )
         if not search_results:
             if sync:
-                try:
-                    service = get_gmail_service()
-                    profile = service.users().getProfile(userId="me").execute()
-                    sync_state.update(profile.get("historyId", ""), [])
-                except Exception:
-                    pass
+                _refresh_sync_state(p, sync_state, [])
             return {
                 "saved_count": 0,
                 "skipped_count": 0,
@@ -629,38 +903,41 @@ def save_emails_by_query(
 
     saved_count = 0
     attachment_count = 0
+    failed: list[dict[str, str]] = []
 
     if ids_to_process:
         email_batch = p.batch_get_emails(ids_to_process, preferred_content_type=content_type)
         for email_raw in email_batch:
             if "error" in email_raw:
+                failed.append(
+                    {"message_id": email_raw.get("message_id", ""), "error": email_raw["error"]}
+                )
                 continue
             email_data = _email_data_to_dict(email_raw)
-            md = convert_email_to_markdown(email_data)
-            save_email_to_markdown(email_data, md, out)
-            saved_count += 1
-            if download_attachments and email_data.get("attachments"):
-                res = download_email_attachments(
-                    download_fn=p.download_attachment,
-                    email_data=email_data,
-                    output_dir=out,
-                    attachment_filters=att_filters,
-                    include_inline=include_inline,
-                )
-                attachment_count += res["downloaded_count"]
+            try:
+                md = convert_email_to_markdown(email_data)
+                save_email_to_markdown(email_data, md, out)
+                saved_count += 1
+                if download_attachments and email_data.get("attachments"):
+                    res = download_email_attachments(
+                        download_fn=p.download_attachment,
+                        email_data=email_data,
+                        output_dir=out,
+                        attachment_filters=att_filters,
+                        include_inline=include_inline,
+                    )
+                    attachment_count += res["downloaded_count"]
+            except Exception as exc:
+                failed.append({"message_id": email_data.get("message_id", ""), "error": str(exc)})
 
     if sync:
-        try:
-            service = get_gmail_service()
-            profile = service.users().getProfile(userId="me").execute()
-            sync_state.update(profile.get("historyId", ""), ids_to_process)
-        except Exception:
-            pass  # sync only meaningful for Gmail.
+        _refresh_sync_state(p, sync_state, ids_to_process)
 
     return {
         "saved_count": saved_count,
         "skipped_count": len(duplicates),
         "attachment_count": attachment_count,
+        "failed": failed,
     }
 
 
@@ -689,8 +966,11 @@ def download_email_attachment(
     Args:
         message_id: Email message ID containing the attachment.
         attachment_id: Attachment ID from the email's ``attachments`` list.
-        output_path: Local path to write the file. Required when
-            ``return_base64`` is False. Parent directories are created.
+        output_path: File path to write, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it. Required when ``return_base64`` is False. Parent
+            directories are created. An existing file is never overwritten —
+            the call returns an error instead.
         return_base64: If True, skip the disk write and return the bytes
             inline as a base64-encoded ASCII string in the ``data`` field
             (default False).
@@ -702,15 +982,20 @@ def download_email_attachment(
         On base64: ``{"data": str, "bytes_written": int, "encoding": "base64"}``.
         On failure: ``{"error": str}``.
     """
-    if not return_base64 and not output_path:
-        return {"error": "output_path is required when return_base64=False."}
+    path: Path | None = None
+    if not return_base64:
+        if not output_path:
+            return {"error": "output_path is required when return_base64=False."}
+        path = _confine_path(output_path, purpose="output_path")
+        if path.exists() or path.is_symlink():
+            return {"error": f"Refusing to overwrite existing file {str(path)!r}."}
     try:
         p = _resolve_email_provider(provider=provider, workspace=workspace)
         data = p.download_attachment(message_id, attachment_id)
     except Exception as exc:
         return {"error": str(exc)}
 
-    if return_base64:
+    if path is None:
         import base64
 
         return {
@@ -719,11 +1004,7 @@ def download_email_attachment(
             "encoding": "base64",
         }
 
-    from pathlib import Path
-
-    path = Path(output_path)  # type: ignore[arg-type]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+    _write_new_file(path, data)
     return {"filepath": str(path), "bytes_written": len(data)}
 
 
@@ -753,16 +1034,13 @@ def send_email(
         cc: CC recipients (comma-separated).
         bcc: BCC recipients (comma-separated).
         html: Send body as HTML content (default False).
-        attachments: List of file paths to attach.
+        attachments: List of file paths to attach. Each must be an existing
+            file inside the MCP root (``IOBOX_MCP_ROOT``, default
+            ``~/iobox``); relative paths resolve under it.
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
     """
-    from pathlib import Path
-
-    if attachments:
-        for fp in attachments:
-            if not Path(fp).exists():
-                raise FileNotFoundError(f"Attachment not found: {fp}")
+    attachments = _confine_attachments(attachments)
 
     content_type = "html" if html else "plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
@@ -815,8 +1093,9 @@ def batch_forward_gmail(
     Args:
         query: Email search syntax to find messages.
         to: Recipient email address.
-        max_results: Maximum messages to forward (default 10).
-        days: Days back to search (default 7).
+        max_results: Maximum messages to forward (default 10, capped at 100).
+        days: Days back to search (default 7; must be >= 1 unless
+            ``start_date`` is given).
         start_date: Start date YYYY/MM/DD (overrides days).
         end_date: End date YYYY/MM/DD.
         note: Optional text to prepend to each forwarded email.
@@ -824,34 +1103,21 @@ def batch_forward_gmail(
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with forwarded_count.
+        Summary dict: ``forwarded_count`` (successes), ``matched_count``,
+        ``succeeded`` (message IDs) and ``failed`` (``{message_id, error}``).
+        One failure doesn't stop the rest.
     """
-    from datetime import date, timedelta
-
-    from iobox.providers.base import EmailQuery
-
-    after: date | None = None
-    before: date | None = None
-    if start_date:
-        parts = start_date.replace("-", "/").split("/")
-        after = date(int(parts[0]), int(parts[1]), int(parts[2]))
-    elif days:
-        after = date.today() - timedelta(days=days)
-    if end_date:
-        parts = end_date.replace("-", "/").split("/")
-        before = date(int(parts[0]), int(parts[1]), int(parts[2]))
-
+    eq, limit_note = _batch_query(query, max_results, days, start_date, end_date)
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    results = p.search_emails(
-        EmailQuery(text=query, max_results=max_results, after=after, before=before)
-    )
+    results = p.search_emails(eq)[: eq.max_results]
     if not results:
-        return {"forwarded_count": 0, "detail": "No emails found matching the query."}
+        return _batch_result("forwarded_count", 0, [], [], "No emails found matching the query.")
 
-    for r in results:
-        p.forward_message(message_id=r["message_id"], to=to, comment=note)
-
-    return {"forwarded_count": len(results)}
+    succeeded, failed = _run_batch(
+        [r["message_id"] for r in results],
+        lambda mid: p.forward_message(message_id=mid, to=to, comment=note),
+    )
+    return _batch_result("forwarded_count", len(results), succeeded, failed, limit_note)
 
 
 # ---------------------------------------------------------------------------
@@ -880,16 +1146,13 @@ def create_gmail_draft(
         cc: CC recipients (comma-separated).
         bcc: BCC recipients (comma-separated).
         html: Use HTML content type (default False).
-        attachments: List of file paths to attach.
+        attachments: List of file paths to attach. Each must be an existing
+            file inside the MCP root (``IOBOX_MCP_ROOT``, default
+            ``~/iobox``); relative paths resolve under it.
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
     """
-    from pathlib import Path
-
-    if attachments:
-        for fp in attachments:
-            if not Path(fp).exists():
-                raise FileNotFoundError(f"Attachment not found: {fp}")
+    attachments = _confine_attachments(attachments)
 
     content_type = "html" if html else "plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
@@ -1113,8 +1376,8 @@ def batch_modify_gmail_labels(
 
     Args:
         query: Email search syntax to find messages.
-        max_results: Maximum messages to modify (default 10).
-        days: Days back to search (default 7).
+        max_results: Maximum messages to modify (default 10, capped at 100).
+        days: Days back to search (default 7; must be >= 1).
         mark_read: Mark as read.
         mark_unread: Mark as unread.
         star: Star messages.
@@ -1126,21 +1389,19 @@ def batch_modify_gmail_labels(
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with ``modified_count``.
+        Summary dict: ``modified_count`` (successes), ``matched_count``,
+        ``succeeded`` (message IDs) and ``failed`` (``{message_id, error}``).
+        One failure doesn't stop the rest.
     """
-    from datetime import date, timedelta
-
-    from iobox.providers.base import EmailQuery
-
+    eq, limit_note = _batch_query(query, max_results, days)
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    after_date: date | None = date.today() - timedelta(days=days) if days else None
-    results = p.search_emails(EmailQuery(text=query, max_results=max_results, after=after_date))
+    results = p.search_emails(eq)[: eq.max_results]
     if not results:
-        return {"modified_count": 0, "detail": "No emails found matching the query."}
+        return _batch_result("modified_count", 0, [], [], "No emails found matching the query.")
 
-    msg_ids = [r["message_id"] for r in results]
-    for mid in msg_ids:
-        _apply_label_actions(
+    succeeded, failed = _run_batch(
+        [r["message_id"] for r in results],
+        lambda mid: _apply_label_actions(
             p,
             mid,
             mark_read=mark_read,
@@ -1150,9 +1411,9 @@ def batch_modify_gmail_labels(
             archive=archive,
             add_label=add_label,
             remove_label=remove_label,
-        )
-
-    return {"modified_count": len(msg_ids)}
+        ),
+    )
+    return _batch_result("modified_count", len(results), succeeded, failed, limit_note)
 
 
 # ---------------------------------------------------------------------------
@@ -1208,28 +1469,24 @@ def batch_trash_gmail(
 
     Args:
         query: Email search syntax to find messages.
-        max_results: Maximum messages to trash (default 10).
-        days: Days back to search (default 7).
+        max_results: Maximum messages to trash (default 10, capped at 100).
+        days: Days back to search (default 7; must be >= 1).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Summary dict with trashed_count.
+        Summary dict: ``trashed_count`` (successes), ``matched_count``,
+        ``succeeded`` (message IDs) and ``failed`` (``{message_id, error}``).
+        One failure doesn't stop the rest.
     """
-    from datetime import date, timedelta
-
-    from iobox.providers.base import EmailQuery
-
+    eq, limit_note = _batch_query(query, max_results, days)
     p = _resolve_email_provider(provider=provider, workspace=workspace)
-    after_date: date | None = date.today() - timedelta(days=days) if days else None
-    results = p.search_emails(EmailQuery(text=query, max_results=max_results, after=after_date))
+    results = p.search_emails(eq)[: eq.max_results]
     if not results:
-        return {"trashed_count": 0, "detail": "No emails found matching the query."}
+        return _batch_result("trashed_count", 0, [], [], "No emails found matching the query.")
 
-    for r in results:
-        p.trash(r["message_id"])
-
-    return {"trashed_count": len(results)}
+    succeeded, failed = _run_batch([r["message_id"] for r in results], p.trash)
+    return _batch_result("trashed_count", len(results), succeeded, failed, limit_note)
 
 
 # ---------------------------------------------------------------------------
@@ -1237,42 +1494,98 @@ def batch_trash_gmail(
 # ---------------------------------------------------------------------------
 
 
+_WRITE_OP_TOOLS = ("create_gmail_draft", "modify_labels", "create_event", "upload_file")
+_SEND_OP_TOOLS = ("send_email", "send_gmail_draft", "forward_gmail", "trash_gmail")
+
+
+def _mode_capabilities() -> dict[str, Any]:
+    """Describe the active mode, derived from the same allowlist that registers tools."""
+    mode = get_mode_from_env()
+    allowed = MCP_TOOLS_BY_MODE[mode]
+    caps: dict[str, Any] = {
+        "mode": mode.value,
+        "available_write_ops": all(t in allowed for t in _WRITE_OP_TOOLS),
+        "available_send_ops": all(t in allowed for t in _SEND_OP_TOOLS),
+    }
+    if not caps["available_send_ops"]:
+        caps["mode_hint"] = (
+            f"Running in {mode.value} mode. "
+            + (
+                "Set IOBOX_MODE=standard for labels/drafts/calendar/file writes, or "
+                if not caps["available_write_ops"]
+                else ""
+            )
+            + "set IOBOX_MODE=dangerous to send mail (including sending drafts), "
+            "forward, or trash."
+        )
+    return caps
+
+
 @_tool
-def check_auth() -> dict:
-    """Check authentication status, profile info, and the active access mode.
+def check_auth(workspace: str | None = None) -> dict:
+    """Check cached authentication state and the active access mode.
+
+    Reports from cached tokens on disk only — it never contacts Google or
+    Microsoft and never starts an interactive sign-in. When a workspace is
+    named or active, reports each of its service sessions; otherwise reports
+    the legacy single-account Gmail token. For a live per-slot check, call
+    ``workspace_auth_status``. To (re-)authenticate, run
+    ``iobox space login`` in a terminal.
 
     The ``mode`` / ``available_write_ops`` fields let a constrained agent
     self-diagnose: if write tools seem to be missing, it's almost always because
-    the server is running in ``readonly`` mode rather than a missing feature.
+    of the server's ``IOBOX_MODE`` rather than a missing feature.
+
+    Args:
+        workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Status dict including ``mode`` (readonly|standard|dangerous),
-        ``available_write_ops`` (labels/drafts/calendar/file writes),
-        ``available_send_ops`` (send/forward/trash), and a ``mode_hint`` when
-        running read-only.
+        Status dict including ``authenticated``, ``mode``
+        (readonly|standard|dangerous), ``available_write_ops``
+        (labels/drafts/calendar/file writes), ``available_send_ops`` (send
+        email or drafts, forward, trash), and a ``mode_hint`` when sending is
+        unavailable. With a workspace, also ``workspace`` and ``services`` —
+        one ``{service, account, mode, scopes, authenticated}`` entry per
+        configured session.
     """
-    from iobox.modes import AccessMode, get_mode_from_env
+    from iobox.space_config import get_active_space, is_authenticated, load_space
 
-    status = check_auth_status()
-
-    mode = get_mode_from_env()
-    status["mode"] = mode.value
-    status["available_write_ops"] = mode != AccessMode.readonly
-    status["available_send_ops"] = mode == AccessMode.dangerous
-    if mode == AccessMode.readonly:
-        status["mode_hint"] = (
-            "Running read-only. Set IOBOX_MODE=standard for labels/drafts/"
-            "calendar/file writes, or IOBOX_MODE=dangerous for send/forward/trash."
-        )
-
+    caps = _mode_capabilities()
     try:
-        service = get_gmail_service()
-        profile = get_gmail_profile(service)
-        status["email"] = profile.get("emailAddress")
-        status["messages_total"] = profile.get("messagesTotal")
-        status["threads_total"] = profile.get("threadsTotal")
-    except Exception:
-        pass
+        target = workspace or get_active_space()
+    except Exception as exc:
+        return {"authenticated": False, "error": f"Could not read active workspace: {exc}", **caps}
+
+    if target:
+        try:
+            config = load_space(target)
+        except Exception as exc:
+            return {
+                "authenticated": False,
+                "workspace": target,
+                "error": f"Could not load workspace '{target}': {exc}",
+                **caps,
+            }
+        services = [
+            {
+                "service": entry.service,
+                "account": entry.account,
+                "mode": entry.mode,
+                "scopes": list(entry.scopes),
+                "authenticated": is_authenticated(entry),
+            }
+            for entry in config.services
+        ]
+        return {
+            "workspace": target,
+            "authenticated": bool(services) and all(s["authenticated"] for s in services),
+            "services": services,
+            **caps,
+        }
+
+    # No workspace: legacy single-account Gmail, from the cached token only.
+    status = check_auth_status()
+    status.update(caps)
     return status
 
 
@@ -1393,7 +1706,9 @@ def save_event(
 
     Args:
         event_id: Event ID.
-        output_dir: Directory to save the file (default: current dir).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         provider: Calendar slot name (default: first calendar slot).
         workspace: Optional workspace name (default: active workspace).
 
@@ -1413,10 +1728,10 @@ def save_event(
     try:
         event = slot.provider.get_event(event_id)
         md = convert_event_to_markdown(event)
-        out = create_output_directory(output_dir)
+        out = _confine_output_dir(output_dir)
         title_slug = slugify_text(event.get("title", "event"))
         filename = f"{title_slug}_{event_id}.md"
-        filepath = os.path.join(out, filename)
+        filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(md)
         return {"filepath": filepath, "title": event.get("title", "")}
@@ -1676,7 +1991,9 @@ def save_file(
 
     Args:
         file_id: File ID.
-        output_dir: Directory to save the file (default: current dir).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         provider: File slot name (default: first file slot).
         workspace: Optional workspace name (default: active workspace).
 
@@ -1696,10 +2013,10 @@ def save_file(
     try:
         file_meta = slot.provider.get_file(file_id)
         md = convert_file_to_markdown(file_meta)
-        out = create_output_directory(output_dir)
+        out = _confine_output_dir(output_dir)
         name_slug = slugify_text(file_meta.get("title") or file_meta.get("name", "file"))
         filename = f"{name_slug}_{file_id}.md"
-        filepath = os.path.join(out, filename)
+        filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(md)
         return {"filepath": filepath, "name": file_meta.get("title", "")}
@@ -1718,13 +2035,19 @@ def download_file(
 
     Args:
         file_id: File ID.
-        output_path: Local file path to write the bytes to.
+        output_path: File path to write the bytes to, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it. An existing file is never overwritten — the call
+            returns an error instead.
         provider: File slot name (default: first file slot).
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
         Dict with ``filepath`` and ``bytes_written``, or ``error``.
     """
+    path = _confine_path(output_path, purpose="output_path")
+    if path.exists() or path.is_symlink():
+        return {"error": f"Refusing to overwrite existing file {str(path)!r}."}
     ws = _get_workspace(workspace)
     if not ws:
         return {"error": "No active workspace configured."}
@@ -1735,11 +2058,7 @@ def download_file(
         return {"error": f"File provider '{provider}' not found."}
     try:
         data = slot.provider.download_file(file_id)
-        from pathlib import Path
-
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        _write_new_file(path, data)
         return {"filepath": str(path), "bytes_written": len(data)}
     except Exception as exc:
         return {"error": str(exc)}
@@ -1756,7 +2075,9 @@ def upload_file(
     """Upload a local file to the file provider.
 
     Args:
-        local_path: Path to the file on disk.
+        local_path: Path to the file on disk, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it.
         name: Optional remote filename (defaults to ``Path(local_path).name``).
         parent_id: Optional parent folder ID.
         provider: File slot name (default: first file slot).
@@ -1765,10 +2086,9 @@ def upload_file(
     Returns:
         Dict with ``id`` and ``name``, or ``error``.
     """
-    from pathlib import Path
-
-    if not Path(local_path).exists():
-        return {"error": f"File not found: {local_path}"}
+    resolved = _confine_existing_file(local_path, purpose="local_path")
+    name = name or Path(local_path).name
+    local_path = str(resolved)
     ws = _get_workspace(workspace)
     if not ws:
         return {"error": "No active workspace configured."}
@@ -1936,12 +2256,34 @@ def list_provider_slots(workspace: str | None = None) -> dict:
     }
 
 
+def _cached_auth_by_slot(ws_name: str) -> dict[str, bool] | None:
+    """Map each slot name in *ws_name* to whether a cached token exists.
+
+    Slot names mirror ``Workspace.from_config``: ``slug`` (email),
+    ``slug-cal``, ``slug-drive``. Returns None if the config can't be read.
+    """
+    try:
+        from iobox.space_config import is_authenticated, load_space
+
+        config = load_space(ws_name)
+    except Exception:
+        return None
+    out: dict[str, bool] = {}
+    for entry in config.services:
+        authed = is_authenticated(entry)
+        for name in (entry.slug, f"{entry.slug}-cal", f"{entry.slug}-drive"):
+            out[name] = authed
+    return out
+
+
 @_tool
 def workspace_auth_status(workspace: str | None = None) -> dict:
     """Report per-slot authentication status across the workspace.
 
-    Calls ``get_profile`` on each slot to surface whether tokens are valid
-    and which account they belong to.
+    Calls ``get_profile`` on each slot that has a cached token, to surface
+    whether the token still works and which account it belongs to. Slots
+    with no cached token are reported as unauthenticated without contacting
+    the provider (so the server never opens an interactive sign-in).
 
     Args:
         workspace: Optional workspace name (default: active workspace).
@@ -1953,7 +2295,17 @@ def workspace_auth_status(workspace: str | None = None) -> dict:
     if not ws:
         return {"error": "No active workspace configured."}
 
+    cached = _cached_auth_by_slot(ws.name)
+
     def _check(slot: Any) -> dict:
+        if cached is not None and cached.get(slot.name) is False:
+            # No cached token: calling the provider would start an interactive
+            # sign-in inside the server process. Report instead.
+            return {
+                "authenticated": False,
+                "account": None,
+                "error": "No cached token; run `iobox space login` in a terminal.",
+            }
         try:
             profile = slot.provider.get_profile()
             return {
@@ -1988,9 +2340,11 @@ def semantic_search_workspace(
     Requires the ``semantic`` optional dependency group:
     ``pip install 'iobox[semantic]'``.
 
-    Resources must be indexed first via ``embed_resources()`` before this
-    tool returns meaningful results.  Falls back gracefully if no index
-    exists yet.
+    Resources must be indexed first. Nothing in iobox builds the index yet,
+    so on a workspace that has never been indexed this returns a single
+    ``{"error": "No semantic index for workspace ..."}`` entry rather than an
+    empty list (which would wrongly read as "no matches"). Use
+    ``search_workspace`` for keyword search instead.
 
     Args:
         query: Natural-language search query.
@@ -2003,7 +2357,8 @@ def semantic_search_workspace(
 
     Returns:
         List of dicts with ``id``, ``resource_type``, ``provider_id``, and
-        ``score`` fields, ranked by similarity (highest first).
+        ``score`` fields, ranked by similarity (highest first), or a single
+        ``{"error": ...}`` entry.
     """
     try:
         from iobox.processing.embed import get_backend as _get_backend
@@ -2017,24 +2372,64 @@ def semantic_search_workspace(
             }
         ]
 
+    from iobox import space_config
+
     # Resolve workspace name
     ws_name = workspace
     if not ws_name:
         try:
-            from iobox.space_config import get_active_space
-
-            ws_name = get_active_space()
+            ws_name = space_config.get_active_space()
         except Exception:
             pass
     if not ws_name:
         return [{"error": "No active workspace. Set one with `iobox space use NAME`."}]
+    if ws_name not in space_config.list_spaces():
+        return [{"error": f"Workspace '{ws_name}' not found."}]
+
+    # Check the index read-only first: avoids an embedding API call and
+    # creating an empty index directory/database as a side effect.
+    iobox_home = space_config.INDEXES_DIR.parent
+    if _indexed_count(space_config.INDEXES_DIR / ws_name / "index.db", ws_name) == 0:
+        return [
+            {
+                "error": (
+                    f"No semantic index for workspace {ws_name}; nothing has been indexed yet. "
+                    "Use search_workspace for keyword search."
+                )
+            }
+        ]
 
     try:
         emb_backend = _get_backend(backend)
-        results = _semantic_search(query, ws_name, types=types, top_k=top_k, backend=emb_backend)
-        return results
+        return _semantic_search(
+            query,
+            ws_name,
+            types=types,
+            top_k=top_k,
+            backend=emb_backend,
+            credentials_dir=str(iobox_home),
+        )
     except Exception as exc:
         return [{"error": str(exc)}]
+
+
+def _indexed_count(db_path: Path, ws_name: str) -> int:
+    """Count indexed resources for *ws_name* without creating anything on disk."""
+    import sqlite3
+
+    if not db_path.is_file():
+        return 0
+    try:
+        conn = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM resource_embeddings WHERE workspace = ?", (ws_name,)
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return 0
+    return int(row[0]) if row else 0
 
 
 def main() -> None:

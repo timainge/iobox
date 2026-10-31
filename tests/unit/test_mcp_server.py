@@ -1,7 +1,11 @@
 """Tests for MCP server tools."""
 
+import os
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Mock FastMCP so tests work without mcp package installed
 mock_fastmcp_module = MagicMock()
@@ -58,6 +62,25 @@ from iobox.mcp_server import (  # noqa: E402
 )
 
 MODULE = "iobox.mcp_server"
+
+
+@pytest.fixture(autouse=True)
+def mcp_root(tmp_path, monkeypatch):
+    """Confine every MCP filesystem path to a per-test root (never ~/iobox)."""
+    root = tmp_path / "mcp-root"
+    root.mkdir()
+    monkeypatch.setenv("IOBOX_MCP_ROOT", str(root))
+    monkeypatch.setenv("CREDENTIALS_DIR", str(tmp_path / "creds"))
+    # Never read the developer's real ~/.iobox (active space, configs, tokens).
+    import iobox.space_config as sc
+
+    home = tmp_path / "iobox-home"
+    monkeypatch.setattr(sc, "IOBOX_HOME", home)
+    monkeypatch.setattr(sc, "WORKSPACES_DIR", home / "workspaces")
+    monkeypatch.setattr(sc, "TOKENS_DIR", home / "tokens")
+    monkeypatch.setattr(sc, "INDEXES_DIR", home / "indexes")
+    monkeypatch.setattr(sc, "ACTIVE_SPACE_FILE", home / "active_space")
+    return Path(os.path.realpath(root))
 
 
 def _make_provider():
@@ -256,10 +279,9 @@ class TestSaveEmail:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
         ):
-            result = save_email("m1", output_dir="/tmp/out")
+            result = save_email("m1", output_dir="out")
         assert result["markdown_path"] == "/tmp/out/email.md"
         assert result["attachments"] == []
 
@@ -269,10 +291,9 @@ class TestSaveEmail:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
         ):
-            save_email("m2", output_dir="/tmp/out", prefer_html=False)
+            save_email("m2", output_dir="out", prefer_html=False)
         provider.get_email_content.assert_called_once_with("m2", "text/plain")
 
     def test_save_with_attachments(self):
@@ -282,7 +303,6 @@ class TestSaveEmail:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
             patch(f"{MODULE}.download_email_attachments") as mock_dl,
         ):
@@ -309,10 +329,9 @@ class TestSaveThread:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_thread_to_markdown", return_value="# Thread"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch("builtins.open", MagicMock()),
         ):
-            result = save_thread("t1", output_dir="/tmp/out")
+            result = save_thread("t1", output_dir="out")
         assert "t1" in result
         assert result.endswith(".md")
 
@@ -323,7 +342,6 @@ class TestSaveEmailsByQuery:
         provider.search_emails.return_value = []
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
         ):
             result = save_emails_by_query("from:nobody@example.com")
         assert result["saved_count"] == 0
@@ -339,7 +357,6 @@ class TestSaveEmailsByQuery:
         provider.batch_get_emails.return_value = email_batch
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.check_for_duplicates", return_value=[]),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
@@ -356,7 +373,6 @@ class TestSaveEmailsByQuery:
         provider.batch_get_emails.return_value = email_batch
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.check_for_duplicates", return_value=["m1"]),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
@@ -408,15 +424,13 @@ class TestSendEmail:
             attachments=None,
         )
 
-    def test_send_with_attachments(self):
+    def test_send_with_attachments(self, mcp_root):
+        (mcp_root / "f.txt").write_text("x")
         provider = _make_provider()
-        with (
-            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch("pathlib.Path.exists", return_value=True),
-        ):
-            send_email("bob@example.com", "Hi", "See attached", attachments=["/tmp/f.txt"])
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            send_email("bob@example.com", "Hi", "See attached", attachments=["f.txt"])
         _, kwargs = provider.send_message.call_args
-        assert kwargs["attachments"] == ["/tmp/f.txt"]
+        assert kwargs["attachments"] == [str(mcp_root / "f.txt")]
 
 
 class TestForwardGmail:
@@ -627,44 +641,69 @@ class TestBatchTrashGmail:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckAuth:
-    def test_check_auth_with_profile(self):
-        with (
-            patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
-            patch(f"{MODULE}.get_gmail_service") as mock_svc,
-            patch(
-                f"{MODULE}.get_gmail_profile",
-                return_value={
-                    "emailAddress": "user@gmail.com",
-                    "messagesTotal": 100,
-                    "threadsTotal": 50,
-                },
-            ),
-        ):
-            mock_svc.return_value = MagicMock()
-            result = check_auth()
-        assert result["authenticated"] is True
-        assert result["email"] == "user@gmail.com"
-        assert result["messages_total"] == 100
-        assert result["threads_total"] == 50
+def _save_space(name, entries, active=False):
+    """Write a workspace config into the test-isolated ~/.iobox."""
+    import iobox.space_config as sc
 
-    def test_check_auth_not_authenticated(self):
+    sc.save_space(sc.SpaceConfig(name=name, services=entries))
+    if active:
+        sc.set_active_space(name)
+
+
+def _entry(account, service="google", scopes=("email",), number=1):
+    from iobox.space_config import ServiceEntry
+
+    return ServiceEntry(number=number, service=service, account=account, scopes=list(scopes))
+
+
+def _give_token(entry):
+    from iobox.space_config import token_file_for
+
+    path = token_file_for(entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}")
+
+
+class TestCheckAuth:
+    def test_legacy_reports_cached_status_only(self):
+        """No workspace → cached legacy token status; never builds a Gmail service."""
         with (
             patch(
                 f"{MODULE}.check_auth_status",
                 return_value={"authenticated": False, "token_file_exists": False},
             ),
-            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("no token")),
+            patch("iobox.providers.google.auth.get_gmail_service") as svc,
+            patch("iobox.providers.google.auth.InstalledAppFlow") as flow,
         ):
             result = check_auth()
         assert result["authenticated"] is False
-        assert "email" not in result
+        svc.assert_not_called()
+        flow.assert_not_called()
+
+    def test_workspace_reports_per_service_from_cache(self):
+        authed = _entry("me@gmail.com", scopes=("email", "calendar"))
+        missing = _entry("corp@example.com", service="o365", number=2)
+        _give_token(authed)
+        _save_space("personal", [authed, missing], active=True)
+        with patch(f"{MODULE}.check_auth_status") as legacy:
+            result = check_auth()
+        legacy.assert_not_called()
+        assert result["workspace"] == "personal"
+        assert result["authenticated"] is False
+        by_account = {s["account"]: s for s in result["services"]}
+        assert by_account["me@gmail.com"]["authenticated"] is True
+        assert by_account["corp@example.com"]["authenticated"] is False
+        assert "mode" in result
+
+    def test_named_workspace_missing_returns_error(self):
+        result = check_auth(workspace="typo")
+        assert "error" in result
+        assert result["authenticated"] is False
 
     def test_check_auth_reports_readonly_mode(self, monkeypatch):
         monkeypatch.setenv("IOBOX_MODE", "readonly")
         with (
             patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
-            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
         ):
             result = check_auth()
         assert result["mode"] == "readonly"
@@ -676,7 +715,6 @@ class TestCheckAuth:
         monkeypatch.setenv("IOBOX_MODE", "dangerous")
         with (
             patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
-            patch(f"{MODULE}.get_gmail_service", side_effect=Exception("skip profile")),
         ):
             result = check_auth()
         assert result["mode"] == "dangerous"
@@ -872,9 +910,8 @@ class TestSaveEvent:
                 "iobox.processing.markdown.convert_event_to_markdown",
                 return_value="# Event",
             ),
-            patch(f"{MODULE}.create_output_directory", return_value=str(tmp_path)),
         ):
-            result = save_event("e1", output_dir=str(tmp_path))
+            result = save_event("e1", output_dir="saved")
         assert result["title"] == "Standup"
         assert result["filepath"].endswith(".md")
 
@@ -989,9 +1026,8 @@ class TestSaveFile:
                 "iobox.processing.markdown.convert_file_to_markdown",
                 return_value="# File",
             ),
-            patch(f"{MODULE}.create_output_directory", return_value=str(tmp_path)),
         ):
-            result = save_file("f1", output_dir=str(tmp_path))
+            result = save_file("f1", output_dir="saved")
         assert result["filepath"].endswith(".md")
         assert "name" in result
 
@@ -1002,10 +1038,10 @@ class TestSaveFile:
 
 
 class TestDownloadFile:
-    def test_download_file_success(self, tmp_path):
+    def test_download_file_success(self, mcp_root):
         ws = _make_workspace(files=[{"id": "f1"}])
         ws.file_providers[0].provider.download_file.return_value = b"hello world"
-        target = tmp_path / "out" / "file.bin"
+        target = mcp_root / "out" / "file.bin"
         with patch(f"{MODULE}._get_workspace", return_value=ws):
             result = download_file("f1", str(target))
         assert result["bytes_written"] == len(b"hello world")
@@ -1019,8 +1055,8 @@ class TestDownloadFile:
 
 
 class TestUploadFile:
-    def test_upload_file_success(self, tmp_path):
-        local = tmp_path / "report.pdf"
+    def test_upload_file_success(self, mcp_root):
+        local = mcp_root / "report.pdf"
         local.write_bytes(b"data")
         ws = _make_workspace(files=[{"id": "f1"}])
         ws.file_providers[0].provider.upload_file.return_value = {
@@ -1270,3 +1306,737 @@ class TestEmailToolsWorkspaceRouting:
             result = send_email("bob@example.com", "Hi", "Body")
         assert result["id"] == "sent-1"
         provider.send_message.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Workspace loading: no silent fallback (SEC-05, MCP-05)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceLoading:
+    def test_default_fn_no_workspace_returns_none(self):
+        from iobox.mcp_server import _default_workspace_fn
+
+        with patch("iobox.space_config.get_active_space", return_value=None):
+            assert _default_workspace_fn(None) is None
+
+    def test_default_fn_named_missing_raises(self):
+        from iobox.mcp_server import WorkspaceLoadError, _default_workspace_fn
+
+        with (
+            patch("iobox.space_config.get_active_space", return_value=None),
+            patch("iobox.space_config.load_space", side_effect=FileNotFoundError("nope")),
+        ):
+            try:
+                _default_workspace_fn("typo")
+            except WorkspaceLoadError as exc:
+                assert "typo" in str(exc)
+            else:
+                raise AssertionError("expected WorkspaceLoadError")
+
+    def test_default_fn_active_unloadable_raises(self):
+        from iobox.mcp_server import WorkspaceLoadError, _default_workspace_fn
+
+        with (
+            patch("iobox.space_config.get_active_space", return_value="work"),
+            patch("iobox.space_config.load_space", side_effect=ValueError("bad toml")),
+        ):
+            try:
+                _default_workspace_fn(None)
+            except WorkspaceLoadError as exc:
+                assert "work" in str(exc)
+            else:
+                raise AssertionError("expected WorkspaceLoadError")
+
+    def test_get_workspace_passes_name_without_retry(self):
+        import iobox.mcp_server as srv
+
+        calls = []
+
+        def factory(name):
+            calls.append(name)
+            raise TypeError("boom")
+
+        with patch.object(srv, "_workspace_factory", factory):
+            try:
+                srv._get_workspace("work")
+            except TypeError:
+                pass
+            else:
+                raise AssertionError("TypeError should propagate, not retry")
+        assert calls == ["work"]
+
+    def test_send_email_misspelled_workspace_does_not_fall_back(self):
+        provider = _make_provider()
+        with (
+            patch("iobox.space_config.get_active_space", return_value=None),
+            patch("iobox.space_config.load_space", side_effect=FileNotFoundError("nope")),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            result = send_email("bob@example.com", "Hi", "Body", workspace="typo")
+        assert "error" in result
+        assert "typo" in result["error"]
+        provider.send_message.assert_not_called()
+
+    def test_search_gmail_misspelled_workspace_does_not_fall_back(self):
+        provider = _make_provider()
+        with (
+            patch("iobox.space_config.get_active_space", return_value=None),
+            patch("iobox.space_config.load_space", side_effect=FileNotFoundError("nope")),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            result = search_gmail("hello", workspace="typo")
+        assert len(result) == 1 and "error" in result[0]
+        provider.search_emails.assert_not_called()
+
+    def test_list_events_unloadable_workspace_returns_error(self):
+        with (
+            patch("iobox.space_config.get_active_space", return_value="work"),
+            patch("iobox.space_config.load_space", side_effect=ValueError("bad")),
+        ):
+            result = list_events()
+        assert len(result) == 1 and "work" in result[0]["error"]
+
+    def test_workspace_without_email_slots_errors(self):
+        ws = _make_full_workspace()
+        ws.email_providers = []
+        provider = _make_provider()
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=ws),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            sent = send_email("bob@example.com", "Hi", "Body")
+            found = search_gmail("hello")
+        assert "error" in sent
+        assert "error" in found[0]
+        provider.send_message.assert_not_called()
+        provider.search_emails.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Filesystem confinement (SEC-01, SEC-03, SEC-04)
+# ---------------------------------------------------------------------------
+
+
+class TestConfinePath:
+    def test_relative_resolves_under_root(self, mcp_root):
+        from iobox.mcp_server import _confine_path
+
+        assert _confine_path("a/b.txt") == mcp_root / "a" / "b.txt"
+        assert _confine_path(None) == mcp_root
+        assert _confine_path(".") == mcp_root
+
+    def test_absolute_inside_root_allowed(self, mcp_root):
+        from iobox.mcp_server import _confine_path
+
+        assert _confine_path(str(mcp_root / "x.bin")) == mcp_root / "x.bin"
+
+    def test_traversal_rejected(self):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("../escape.txt")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("sub/../../escape.txt")
+
+    def test_absolute_outside_rejected(self, tmp_path):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        with pytest.raises(PathNotAllowedError):
+            _confine_path(str(tmp_path / "elsewhere.txt"))
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("/etc/passwd")
+
+    def test_symlink_escape_rejected(self, mcp_root, tmp_path):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("s")
+        (mcp_root / "linkdir").symlink_to(outside)
+        (mcp_root / "linkfile").symlink_to(outside / "secret.txt")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("linkdir/secret.txt")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("linkfile")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("linkdir/new.bin")
+
+    def test_iobox_home_denied_even_when_root_contains_it(self, tmp_path, monkeypatch):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        home = tmp_path / "home"
+        (home / ".iobox" / "tokens" / "me").mkdir(parents=True)
+        (home / ".iobox" / "tokens" / "me" / "token_standard.json").write_text("{}")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("IOBOX_MCP_ROOT", str(home))
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("~/.iobox/tokens/me/token_standard.json")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path(".iobox/tokens/me/token_standard.json")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path(".iobox")
+        assert _confine_path("notes/a.md") == Path(os.path.realpath(home)) / "notes" / "a.md"
+
+    def test_legacy_credentials_denied(self, mcp_root, monkeypatch):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        monkeypatch.setenv("CREDENTIALS_DIR", str(mcp_root))
+        for name in ("credentials.json", "token.json", "o365_token.txt", "tokens/a/t.json"):
+            with pytest.raises(PathNotAllowedError):
+                _confine_path(name)
+
+    def test_root_created_on_demand(self, tmp_path, monkeypatch):
+        from iobox.mcp_server import _mcp_root
+
+        target = tmp_path / "fresh" / "root"
+        monkeypatch.setenv("IOBOX_MCP_ROOT", str(target))
+        assert _mcp_root() == Path(os.path.realpath(target))
+        assert target.is_dir()
+
+    def test_default_root_is_home_iobox(self, tmp_path, monkeypatch):
+        from iobox.mcp_server import _mcp_root
+
+        monkeypatch.delenv("IOBOX_MCP_ROOT", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _mcp_root() == Path(os.path.realpath(tmp_path)) / "iobox"
+
+
+class TestDownloadConfinement:
+    def test_attachment_outside_root_refused(self, tmp_path):
+        from iobox.mcp_server import download_email_attachment
+
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", output_path=str(tmp_path / "x.bin"))
+        assert "error" in result
+        provider.download_attachment.assert_not_called()
+
+    def test_attachment_written_inside_root(self, mcp_root):
+        from iobox.mcp_server import download_email_attachment
+
+        provider = _make_provider()
+        provider.download_attachment.return_value = b"data"
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", output_path="att/x.bin")
+        assert result == {"filepath": str(mcp_root / "att" / "x.bin"), "bytes_written": 4}
+        assert (mcp_root / "att" / "x.bin").read_bytes() == b"data"
+
+    def test_attachment_does_not_overwrite(self, mcp_root):
+        from iobox.mcp_server import download_email_attachment
+
+        existing = mcp_root / "keep.txt"
+        existing.write_bytes(b"original")
+        provider = _make_provider()
+        provider.download_attachment.return_value = b"new"
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", output_path="keep.txt")
+        assert "error" in result
+        assert existing.read_bytes() == b"original"
+
+    def test_attachment_base64_needs_no_path(self):
+        from iobox.mcp_server import download_email_attachment
+
+        provider = _make_provider()
+        provider.download_attachment.return_value = b"hi"
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", return_base64=True)
+        assert result["data"] == "aGk="
+
+    def test_download_file_outside_root_refused(self, tmp_path):
+        ws = _make_workspace(files=[{"id": "f1"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = download_file("f1", str(tmp_path / "evil.bin"))
+        assert "error" in result
+        ws.file_providers[0].provider.download_file.assert_not_called()
+
+    def test_download_file_does_not_overwrite(self, mcp_root):
+        (mcp_root / "f.bin").write_bytes(b"original")
+        ws = _make_workspace(files=[{"id": "f1"}])
+        ws.file_providers[0].provider.download_file.return_value = b"new"
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = download_file("f1", "f.bin")
+        assert "error" in result
+        assert (mcp_root / "f.bin").read_bytes() == b"original"
+
+    def test_save_email_output_dir_outside_root_refused(self, tmp_path):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = save_email("m1", output_dir=str(tmp_path / "elsewhere"))
+        assert "error" in result
+        assert not (tmp_path / "elsewhere").exists()
+
+    def test_save_thread_id_traversal_refused(self, mcp_root):
+        provider = _make_provider()
+        provider.get_thread.return_value = [{"subject": "S", "message_id": "m1", "from_": "x"}]
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch(f"{MODULE}.convert_thread_to_markdown", return_value="# T"),
+        ):
+            result = save_thread("x/../../../escape", output_dir="out")
+        assert isinstance(result, dict) and "error" in result
+
+
+class TestOutgoingFileConfinement:
+    def test_draft_attachment_outside_root_refused(self, tmp_path):
+        secret = tmp_path / "secret.txt"
+        secret.write_text("s")
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = create_gmail_draft("a@b.com", "S", "B", attachments=[str(secret)])
+        assert "error" in result
+        provider.create_draft.assert_not_called()
+
+    def test_send_attachment_token_file_refused(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        token = home / ".iobox" / "tokens" / "me" / "token_standard.json"
+        token.parent.mkdir(parents=True)
+        token.write_text("{}")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("IOBOX_MCP_ROOT", str(home))
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = send_email("a@b.com", "S", "B", attachments=[str(token)])
+        assert "error" in result
+        provider.send_message.assert_not_called()
+
+    def test_missing_attachment_refused(self):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = create_gmail_draft("a@b.com", "S", "B", attachments=["nope.pdf"])
+        assert "error" in result
+
+    def test_upload_outside_root_refused(self, tmp_path):
+        local = tmp_path / "report.pdf"
+        local.write_bytes(b"data")
+        ws = _make_workspace(files=[{"id": "f1"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = upload_file(str(local))
+        assert "error" in result
+        ws.file_providers[0].provider.upload_file.assert_not_called()
+
+    def test_upload_inside_root_passes_resolved_path(self, mcp_root):
+        (mcp_root / "r.pdf").write_bytes(b"data")
+        ws = _make_workspace(files=[{"id": "f1"}])
+        ws.file_providers[0].provider.upload_file.return_value = {"id": "u1", "title": "r.pdf"}
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            upload_file("r.pdf")
+        ws.file_providers[0].provider.upload_file.assert_called_once_with(
+            str(mcp_root / "r.pdf"), parent_id=None, name="r.pdf"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Mode allowlists (SEC-02)
+# ---------------------------------------------------------------------------
+
+
+class TestModeAllowlists:
+    def test_send_gmail_draft_is_dangerous_only(self):
+        from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode
+
+        assert "send_gmail_draft" not in MCP_TOOLS_BY_MODE[AccessMode.readonly]
+        assert "send_gmail_draft" not in MCP_TOOLS_BY_MODE[AccessMode.standard]
+        assert "send_gmail_draft" in MCP_TOOLS_BY_MODE[AccessMode.dangerous]
+
+    def test_standard_has_no_outbound_mail_tool(self):
+        from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode
+
+        outbound = {"send_email", "send_gmail_draft", "forward_gmail", "batch_forward_gmail"}
+        assert not outbound & MCP_TOOLS_BY_MODE[AccessMode.standard]
+
+    def test_check_auth_standard_reports_no_send(self, monkeypatch):
+        monkeypatch.setenv("IOBOX_MODE", "standard")
+        with (
+            patch(f"{MODULE}.check_auth_status", return_value={"authenticated": True}),
+        ):
+            result = check_auth()
+        assert result["available_write_ops"] is True
+        assert result["available_send_ops"] is False
+        assert "dangerous" in result["mode_hint"]
+
+    def test_capabilities_match_registered_tools(self, monkeypatch):
+        from iobox.mcp_server import _SEND_OP_TOOLS, _WRITE_OP_TOOLS, _mode_capabilities
+        from iobox.modes import MCP_TOOLS_BY_MODE, AccessMode
+
+        for mode in AccessMode:
+            monkeypatch.setenv("IOBOX_MODE", mode.value)
+            caps = _mode_capabilities()
+            allowed = MCP_TOOLS_BY_MODE[mode]
+            assert caps["available_send_ops"] == any(t in allowed for t in _SEND_OP_TOOLS)
+            assert caps["available_write_ops"] == any(t in allowed for t in _WRITE_OP_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# Batch guard rails and partial failure (SEC-06, MCP-01)
+# ---------------------------------------------------------------------------
+
+
+def _batch_calls():
+    """(tool, kwargs) for each destructive batch tool."""
+    return [
+        (batch_trash_gmail, {}),
+        (batch_forward_gmail, {"to": "bob@example.com"}),
+        (batch_modify_gmail_labels, {"archive": True}),
+    ]
+
+
+class TestBatchGuardRails:
+    @pytest.mark.parametrize("query", ["", "   "])
+    def test_empty_query_refused(self, query):
+        for tool, extra in _batch_calls():
+            provider = _make_provider()
+            with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+                result = tool(query, **extra)
+            assert "error" in result, tool.__name__
+            provider.search_emails.assert_not_called()
+
+    @pytest.mark.parametrize("days", [0, -3])
+    def test_days_below_one_refused(self, days):
+        for tool, extra in _batch_calls():
+            provider = _make_provider()
+            with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+                result = tool("from:x@y.com", days=days, **extra)
+            assert "error" in result, tool.__name__
+            provider.search_emails.assert_not_called()
+
+    def test_forward_explicit_start_date_allows_days_zero(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_forward_gmail(
+                "subject:x", "bob@example.com", days=0, start_date="2024/01/01"
+            )
+        assert result["forwarded_count"] == 1
+
+    def test_invalid_date_refused(self):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_forward_gmail("subject:x", "bob@example.com", start_date="soon")
+        assert "error" in result
+
+    def test_max_results_clamped(self):
+        for tool, extra in _batch_calls():
+            provider = _make_provider()
+            provider.search_emails.return_value = [{"message_id": f"m{i}"} for i in range(150)]
+            with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+                result = tool("from:x@y.com", max_results=100000, **extra)
+            query = provider.search_emails.call_args[0][0]
+            assert query.max_results == 100, tool.__name__
+            assert result["matched_count"] == 100
+            assert "clamped" in result["detail"]
+
+    def test_days_bounds_query(self):
+        from datetime import date, timedelta
+
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            batch_trash_gmail("from:x@y.com", days=3)
+        query = provider.search_emails.call_args[0][0]
+        assert query.after == date.today() - timedelta(days=3)
+
+
+class TestBatchPartialFailure:
+    def test_trash_continues_after_failure(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [
+            {"message_id": "m1"},
+            {"message_id": "m2"},
+            {"message_id": "m3"},
+        ]
+        provider.trash.side_effect = [None, RuntimeError("rate limited"), None]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_trash_gmail("from:x@y.com")
+        assert result["trashed_count"] == 2
+        assert result["matched_count"] == 3
+        assert result["succeeded"] == ["m1", "m3"]
+        assert result["failed"] == [{"message_id": "m2", "error": "rate limited"}]
+
+    def test_forward_continues_after_failure(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
+        provider.forward_message.side_effect = [RuntimeError("boom"), {"message_id": "f2"}]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_forward_gmail("from:x@y.com", "bob@example.com")
+        assert result["forwarded_count"] == 1
+        assert result["succeeded"] == ["m2"]
+        assert result["failed"][0]["message_id"] == "m1"
+
+    def test_modify_continues_after_failure(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
+        provider.archive.side_effect = [None, RuntimeError("gone")]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = batch_modify_gmail_labels("from:x@y.com", archive=True)
+        assert result["modified_count"] == 1
+        assert result["succeeded"] == ["m1"]
+        assert result["failed"] == [{"message_id": "m2", "error": "gone"}]
+
+    def test_save_by_query_reports_failed(self):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}, {"message_id": "m2"}]
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m1", "subject": "A", "from_": "x"},
+            {"message_id": "m2", "error": "Not found"},
+        ]
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch(f"{MODULE}.check_for_duplicates", return_value=[]),
+            patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
+            patch(f"{MODULE}.save_email_to_markdown", return_value="email.md"),
+        ):
+            result = save_emails_by_query("in:inbox")
+        assert result["saved_count"] == 1
+        assert result["failed"] == [{"message_id": "m2", "error": "Not found"}]
+
+
+# ---------------------------------------------------------------------------
+# No interactive OAuth from the server (MCP-02)
+# ---------------------------------------------------------------------------
+
+
+class TestNoInteractiveAuth:
+    def test_workspace_auth_status_skips_slots_without_token(self):
+        authed = _entry("me@gmail.com", scopes=("email", "drive"))
+        missing = _entry("other@gmail.com", scopes=("email",), number=2)
+        _give_token(authed)
+        _save_space("personal", [authed, missing])
+
+        ws = MagicMock()
+        ws.name = "personal"
+        slots = {}
+        for name in (authed.slug, f"{authed.slug}-drive", missing.slug):
+            s = MagicMock()
+            s.name = name
+            s.provider.get_profile.return_value = {"emailAddress": "x@y.com"}
+            slots[name] = s
+        ws.email_providers = [slots[authed.slug], slots[missing.slug]]
+        ws.calendar_providers = []
+        ws.file_providers = [slots[f"{authed.slug}-drive"]]
+
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = workspace_auth_status()
+
+        assert result["slots"][authed.slug]["authenticated"] is True
+        assert result["slots"][f"{authed.slug}-drive"]["authenticated"] is True
+        assert result["slots"][missing.slug]["authenticated"] is False
+        assert "iobox space login" in result["slots"][missing.slug]["error"]
+        slots[missing.slug].provider.get_profile.assert_not_called()
+
+    def test_sync_uses_selected_provider_not_legacy_service(self, mcp_root):
+        provider = _make_provider()
+        provider.search_emails.return_value = [{"message_id": "m1"}]
+        provider.batch_get_emails.return_value = [{"message_id": "m1", "from_": "x"}]
+        provider.get_sync_state.return_value = "12345"
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch(f"{MODULE}.check_for_duplicates", return_value=[]),
+            patch(f"{MODULE}.convert_email_to_markdown", return_value="# E"),
+            patch(f"{MODULE}.save_email_to_markdown", return_value="e.md"),
+            patch("iobox.providers.google.auth.get_gmail_service") as legacy,
+        ):
+            result = save_emails_by_query("in:inbox", output_dir="sync", sync=True)
+        assert result["saved_count"] == 1
+        provider.get_sync_state.assert_called_once()
+        legacy.assert_not_called()
+
+        from iobox.processing.file_manager import SyncState
+
+        state = SyncState(str(mcp_root / "sync"))
+        assert state.load()
+        assert state.last_history_id == "12345"
+
+    def test_sync_no_new_messages_uses_provider(self, mcp_root):
+        from iobox.processing.file_manager import SyncState
+
+        out = mcp_root / "sync"
+        out.mkdir()
+        seeded = SyncState(str(out))
+        seeded.update("100", [])
+
+        provider = _make_provider()
+        provider.get_new_messages.return_value = []
+        provider.get_sync_state.return_value = "200"
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch("iobox.providers.google.auth.get_gmail_service") as legacy,
+        ):
+            result = save_emails_by_query("in:inbox", output_dir="sync", sync=True)
+        assert result["saved_count"] == 0
+        legacy.assert_not_called()
+        state = SyncState(str(out))
+        state.load()
+        assert state.last_history_id == "200"
+
+
+# ---------------------------------------------------------------------------
+# get_emails alignment (MCP-03)
+# ---------------------------------------------------------------------------
+
+
+class TestGetEmailsAlignment:
+    def test_dropped_id_reported_in_place(self):
+        """Outlook-style: provider silently omits a missing ID."""
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m1", "from_": "a", "subject": "A"},
+            {"message_id": "m3", "from_": "c", "subject": "C"},
+        ]
+        provider.get_email_content.side_effect = KeyError("m2 not found")
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2", "m3"])
+        assert [r["message_id"] for r in result] == ["m1", "m2", "m3"]
+        assert "error" in result[1]
+        assert "error" not in result[0] and "error" not in result[2]
+
+    def test_reordered_response_returned_in_input_order(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [
+            {"message_id": "m2", "from_": "b"},
+            {"message_id": "m1", "from_": "a"},
+        ]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2"])
+        assert [r["from"] for r in result] == ["a", "b"]
+
+    def test_dropped_id_recovered_by_single_fetch(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [{"message_id": "m1", "from_": "a"}]
+        provider.get_email_content.return_value = {"message_id": "m2", "from_": "b"}
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m2"])
+        assert result[1] == {"message_id": "m2", "from": "b"}
+
+    def test_batch_exception_falls_back_per_message(self):
+        provider = _make_provider()
+        provider.batch_get_emails.side_effect = RuntimeError("batch endpoint down")
+
+        def _one(mid, _ct):
+            if mid == "bad":
+                raise RuntimeError("nope")
+            return {"message_id": mid, "from_": "x"}
+
+        provider.get_email_content.side_effect = _one
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "bad", "m2"])
+        assert [r["message_id"] for r in result] == ["m1", "bad", "m2"]
+        assert result[1] == {"message_id": "bad", "error": "nope"}
+        assert "error" not in result[0] and "error" not in result[2]
+
+    def test_duplicate_ids_each_get_an_entry(self):
+        provider = _make_provider()
+        provider.batch_get_emails.return_value = [{"message_id": "m1", "from_": "a"}]
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = get_emails(["m1", "m1"])
+        assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# No accepted-but-ignored parameters (MCP-04)
+# ---------------------------------------------------------------------------
+
+
+class TestToolParameters:
+    def test_every_tool_parameter_is_used(self):
+        import ast
+        import inspect
+        import textwrap
+
+        from iobox.mcp_server import _ALL_TOOLS
+
+        unused = []
+        for name, wrapper in _ALL_TOOLS.items():
+            fn = inspect.unwrap(wrapper)
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+            func = tree.body[0]
+            assert isinstance(func, ast.FunctionDef)
+            used = {n.id for n in ast.walk(func) if isinstance(n, ast.Name)}
+            unused += [f"{name}.{a.arg}" for a in func.args.args if a.arg not in used]
+        assert unused == []
+
+    def test_save_tools_drop_ignored_params(self):
+        import inspect
+
+        assert "include_spam_trash" not in inspect.signature(save_email).parameters
+        params = inspect.signature(save_thread).parameters
+        assert "include_spam_trash" not in params
+        assert "prefer_html" not in params
+
+
+# ---------------------------------------------------------------------------
+# semantic_search_workspace with no index (MCP-06)
+# ---------------------------------------------------------------------------
+
+
+class TestSemanticSearchWorkspace:
+    def test_missing_index_returns_clear_error_without_side_effects(self):
+        import iobox.space_config as sc
+        from iobox.mcp_server import semantic_search_workspace
+
+        _save_space("personal", [_entry("me@gmail.com")], active=True)
+        with (
+            patch("iobox.processing.embed.get_backend") as get_backend,
+            patch("iobox.processing.embed.semantic_search") as search,
+        ):
+            result = semantic_search_workspace("budget")
+        assert len(result) == 1
+        assert "No semantic index for workspace personal" in result[0]["error"]
+        get_backend.assert_not_called()
+        search.assert_not_called()
+        assert not (sc.INDEXES_DIR / "personal").exists()
+
+    def test_empty_index_returns_error(self):
+        import sqlite3
+
+        import iobox.space_config as sc
+        from iobox.mcp_server import semantic_search_workspace
+
+        _save_space("personal", [_entry("me@gmail.com")])
+        db = sc.INDEXES_DIR / "personal" / "index.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE resource_embeddings (resource_id TEXT, workspace TEXT, "
+            "resource_type TEXT, provider_id TEXT, content_hash TEXT, embedding_json TEXT)"
+        )
+        conn.commit()
+        conn.close()
+        with patch("iobox.processing.embed.semantic_search") as search:
+            result = semantic_search_workspace("budget", workspace="personal")
+        assert "No semantic index" in result[0]["error"]
+        search.assert_not_called()
+
+    def test_populated_index_searches(self):
+        import sqlite3
+
+        import iobox.space_config as sc
+        from iobox.mcp_server import semantic_search_workspace
+
+        _save_space("personal", [_entry("me@gmail.com")])
+        db = sc.INDEXES_DIR / "personal" / "index.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE resource_embeddings (resource_id TEXT, workspace TEXT, "
+            "resource_type TEXT, provider_id TEXT, content_hash TEXT, embedding_json TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO resource_embeddings VALUES ('r1', 'personal', 'email', 'p', 'h', '[]')"
+        )
+        conn.commit()
+        conn.close()
+        hits = [{"id": "r1", "resource_type": "email", "provider_id": "p", "score": 0.9}]
+        with (
+            patch("iobox.processing.embed.get_backend", return_value="backend"),
+            patch("iobox.processing.embed.semantic_search", return_value=hits) as search,
+        ):
+            result = semantic_search_workspace("budget", workspace="personal")
+        assert result == hits
+        _, kwargs = search.call_args
+        assert kwargs["credentials_dir"] == str(sc.IOBOX_HOME)
+
+    def test_unknown_workspace_returns_error(self):
+        from iobox.mcp_server import semantic_search_workspace
+
+        result = semantic_search_workspace("budget", workspace="../../etc")
+        assert "not found" in result[0]["error"]

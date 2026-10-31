@@ -7,14 +7,16 @@ Every tool below is registered only in the [access mode](configuration.md#access
 - `provider` — a [slot name](multi-account.md#targeting-one-account). Search and list tools fan out across all slots when omitted; fetch and write tools use the first slot of their type.
 - `workspace` — a workspace name. Defaults to the active workspace.
 
-`search_workspace` takes `workspace` but not `provider`; `semantic_search_workspace` takes neither.
+`search_workspace`, `semantic_search_workspace`, and `check_auth` take `workspace` but not `provider`.
+
+**File paths.** `output_dir`, `output_path`, `attachments`, and `local_path` are confined to the [file access root](configuration.md#file-access-root) (`IOBOX_MCP_ROOT`, default `~/iobox`). Relative paths resolve under it, and `output_dir="."` means the root itself. Downloads never overwrite an existing file.
 
 ## Cross-type
 
 | Tool | Mode | Description | Key arguments |
 |---|---|---|---|
 | `search_workspace` | readonly | Search email, events, and files in parallel; results merged by date | `query`, `types=["email","event","file"]`, `max_results=10` |
-| `semantic_search_workspace` | readonly | Vector search over the local embedding index (needs `iobox[semantic]` and a built index) | `query`, `types`, `top_k=10`, `backend="openai"` |
+| `semantic_search_workspace` | readonly | Vector search over the local embedding index (needs `iobox[semantic]` and a built index). Nothing in iobox builds the index yet, so on an unindexed workspace it returns `{"error": "No semantic index for workspace …"}` — use `search_workspace` instead | `query`, `types`, `top_k=10`, `backend="openai"` |
 
 ## Email
 
@@ -30,19 +32,35 @@ Every tool below is registered only in the [access mode](configuration.md#access
 | `list_gmail_drafts` | readonly | List drafts | `max_results=10` |
 | `list_labels` | readonly | List labels (Gmail) or categories (Outlook) | — |
 | `create_gmail_draft` | standard | Create a draft | `to`, `subject`, `body`, `cc`, `bcc`, `html`, `attachments` |
-| `send_gmail_draft` | standard | Send an existing draft | `draft_id` |
+| `send_gmail_draft` | dangerous | Send an existing draft | `draft_id` |
 | `delete_gmail_draft` | standard | Delete a draft | `draft_id` |
 | `create_label` | standard | Create a label, including nested (`Parent/Child`) | `name` |
 | `modify_labels` | standard | Read/unread, star, archive, add/remove label on one message | `message_id`, `mark_read`, `mark_unread`, `star`, `unstar`, `archive`, `add_label`, `remove_label` |
-| `batch_modify_gmail_labels` | standard | Same actions for every message matching a query | `query`, `max_results=10`, `days=7`, …same flags |
+| `batch_modify_gmail_labels` | standard | Same actions for every message matching a query (see [batch limits](#batch-limits)) | `query`, `max_results=10`, `days=7`, …same flags |
 | `send_email` | dangerous | Send a new email | `to`, `subject`, `body`, `cc`, `bcc`, `html`, `attachments` |
 | `forward_gmail` | dangerous | Forward a message | `message_id`, `to`, `note` |
-| `batch_forward_gmail` | dangerous | Forward every message matching a query | `query`, `to`, `max_results=10`, `days=7`, `note` |
+| `batch_forward_gmail` | dangerous | Forward every message matching a query (see [batch limits](#batch-limits)) | `query`, `to`, `max_results=10`, `days=7`, `start_date`, `end_date`, `note` |
 | `trash_gmail` | dangerous | Move a message to trash | `message_id` |
 | `untrash_gmail` | dangerous | Restore a message from trash | `message_id` |
-| `batch_trash_gmail` | dangerous | Trash every message matching a query | `query`, `max_results=10`, `days=7` |
+| `batch_trash_gmail` | dangerous | Trash every message matching a query (see [batch limits](#batch-limits)) | `query`, `max_results=10`, `days=7` |
 
 Despite the `gmail` in some names, email tools work against whichever email provider the slot uses (Gmail or Outlook).
+
+### Batch limits
+
+`batch_modify_gmail_labels`, `batch_forward_gmail`, and `batch_trash_gmail` refuse requests that could sweep the whole mailbox:
+
+- `query` must be non-empty.
+- `days` must be at least 1 (`batch_forward_gmail` also accepts an explicit `start_date` instead).
+- `max_results` is capped at 100; a larger value is clamped and the result's `detail` says so.
+
+Each message is processed independently, so one failure doesn't stop the rest. The result reports what happened to every message:
+
+```json
+{"trashed_count": 2, "matched_count": 3, "succeeded": ["m1", "m3"], "failed": [{"message_id": "m2", "error": "..."}]}
+```
+
+The count key is `modified_count`, `forwarded_count`, or `trashed_count` depending on the tool. `save_emails_by_query` likewise returns a `failed` list for messages it couldn't save.
 
 !!! tip "Keeping responses small"
     A raw HTML email can be tens of thousands of characters. For triage, search first, then call `get_emails(message_ids=[…], body="none")` to scan headers, and only fetch bodies (`body="markdown"`, `max_body_chars=4000`) for the messages that matter.
@@ -79,8 +97,8 @@ Despite the `gmail` in some names, email tools work against whichever email prov
 | `list_workspaces` | readonly | All workspaces and which is active |
 | `get_active_workspace` | readonly | The active workspace name |
 | `list_provider_slots` | readonly | Every email/calendar/file slot in a workspace |
-| `workspace_auth_status` | readonly | Per-slot auth check (calls each provider's profile endpoint) |
-| `check_auth` | readonly | Legacy single-account Gmail auth check |
+| `workspace_auth_status` | readonly | Live per-slot auth check: calls the profile endpoint for each slot that has a cached token; slots without one are reported as signed out |
+| `check_auth` | readonly | Auth status from cached tokens only (per service for the active or named workspace; the single-account Gmail token otherwise), plus the access mode and what it allows |
 | `set_active_workspace` | standard | Switch the active workspace |
 
 ## Return values
