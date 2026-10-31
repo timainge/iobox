@@ -2,65 +2,131 @@
 OutlookProvider — Microsoft 365 / Outlook email backend.
 
 Implements the ``EmailProvider`` ABC for Microsoft 365 using the python-o365
-library (which wraps the Microsoft Graph API internally).
+library (O365 >= 2.1, which wraps the Microsoft Graph API).
 
-Read operations (authenticate, search, get content, batch fetch, threads,
-attachment download, and query translation) are fully implemented here.
-Write operations (send, forward, drafts CRUD) are also fully implemented.
-Organization operations (mark read, star/flag, archive, trash, untrash,
-category tags) are fully implemented with a ``_batch_graph_requests()``
-helper that chunks multi-message operations into 20-request batches via
-Graph's ``$batch`` endpoint.
-Sync operations use Microsoft Graph's delta query mechanism to enable
-incremental sync — fetching only messages added or changed since the
-last sync.  A 410-Gone response (expired delta token) is handled
-gracefully by signalling a full re-sync.
-
-ImmutableId header
-------------------
-All Graph requests made through ``account.con.session`` carry the header::
-
-    Prefer: IdType="ImmutableId"
-
-This prevents message IDs from silently changing when messages are moved
-between folders — a Microsoft Graph quirk that would break any saved
-reference to a message ID.
+ImmutableId
+-----------
+Every Graph request carries ``Prefer: IdType="ImmutableId"`` (set on
+``account.con.default_headers`` by :func:`~iobox.providers.o365.auth.ensure_immutable_ids`),
+so message IDs stay stable when messages move between folders. ``$batch``
+sub-requests carry the header individually because Graph does not apply the
+outer request's headers to them.
 
 All-mail search
 ---------------
 ``search_emails()`` and ``get_thread()`` use the root mailbox message
-collection (``self._mb.get_messages()``) rather than
-``self._mb.inbox_folder().get_messages()``.  This searches across **all
-folders** — Inbox, Sent, Archive, Drafts, and custom folders — so that no
-messages are silently excluded.
-
-The python-o365 ``MailBox`` object (``self._mb``) exposes a ``get_messages()``
-method that targets the ``/me/messages`` Graph endpoint rather than the
-folder-scoped ``/me/mailFolders/{id}/messages`` endpoint.
+collection (``/me/messages``), which spans every folder (Inbox, Sent,
+Archive, Drafts, Deleted Items, Junk and custom folders).
 
 Query path selection
 --------------------
-Microsoft Graph's ``/me/messages`` endpoint (like its folder-scoped cousin)
-cannot combine ``$filter`` and ``$search`` in the same request.  The provider
-selects the path based on whether free-text search is needed:
+Graph cannot combine ``$search`` with ``$filter`` or ``$orderby`` on message
+collections, so the provider picks one:
 
 * ``raw_query`` set → KQL passthrough via ``$search``
-* ``query.text`` set → ``$search`` with KQL built from all query fields
-* otherwise → ``$filter`` via python-o365 ``Query`` builder
+* ``query.text`` set → ``$search`` with KQL built from the query fields;
+  ``is_unread`` and ``label`` have no KQL equivalent and are applied
+  client-side
+* otherwise → ``$filter`` built with python-o365's ``QueryBuilder``
 """
 
 from __future__ import annotations
 
+import html
 import logging
+import mimetypes
+import re
 from datetime import datetime
 from typing import Any
 
 from iobox.providers.base import AttachmentInfo, EmailData, EmailProvider, EmailQuery
+from iobox.providers.o365.auth import IMMUTABLE_ID_PREFER, ensure_immutable_ids
 
 logger = logging.getLogger(__name__)
 
-# Header applied to every Graph request to ensure stable, immutable message IDs.
-_IMMUTABLE_ID_HEADER: dict[str, str] = {"Prefer": 'IdType="ImmutableId"'}
+# Graph $batch accepts at most 20 sub-requests per call.
+_BATCH_LIMIT = 20
+# When $search results are filtered client-side, fetch this many candidates.
+_CLIENT_FILTER_FETCH = 250
+# Error codes Graph uses (besides HTTP 410) for an unusable delta token.
+_DELTA_RESYNC_CODES = {"syncstatenotfound", "syncstateinvalid", "resyncrequired"}
+
+_KQL_NEEDS_QUOTES = re.compile(r'[\s"():]')
+
+
+class OutlookBatchError(RuntimeError):
+    """Raised when one or more ``$batch`` sub-requests fail.
+
+    ``failures`` lists ``{"message_id", "status", "error"}`` dicts; every
+    other sub-request in the batch succeeded.
+    """
+
+    def __init__(self, failures: list[dict[str, Any]], total: int) -> None:
+        self.failures = failures
+        self.total = total
+        ids = ", ".join(str(f["message_id"]) for f in failures[:5])
+        more = "" if len(failures) <= 5 else f" (+{len(failures) - 5} more)"
+        super().__init__(f"{len(failures)} of {total} Outlook batch operations failed: {ids}{more}")
+
+
+def _http_status(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _graph_error_code(exc: BaseException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:  # NB: a 4xx requests.Response is falsy
+        return ""
+    try:
+        return str(response.json().get("error", {}).get("code", ""))
+    except Exception:
+        return ""
+
+
+def _kql_term(prop: str, value: str) -> str:
+    """Render ``prop:value``, quoting the value when it contains spaces etc."""
+    if _KQL_NEEDS_QUOTES.search(value):
+        return f'{prop}:"{value.replace(chr(34), "")}"'
+    return f"{prop}:{value}"
+
+
+def _search_param(kql: str) -> str:
+    """Wrap a KQL expression for Graph's ``$search`` (double quotes, escaped)."""
+    return '"' + kql.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _odata_str(value: str) -> str:
+    """Escape a value for an OData string literal (single quotes doubled)."""
+    return value.replace("'", "''")
+
+
+class _SearchQuery:
+    """Minimal query object for ``Folder.get_messages(query=...)``.
+
+    python-o365's ``QueryBuilder.search()`` runs the text through its
+    ``$filter`` literal formatter (``'...'``) and then wraps it in double
+    quotes, so ``from:x subject:y`` becomes the phrase ``"'from:x subject:y'"``.
+    ``get_messages`` only needs ``as_params()``.
+    """
+
+    def __init__(self, kql: str) -> None:
+        self.kql = kql
+
+    def as_params(self) -> dict[str, str]:
+        return {"$search": _search_param(self.kql)}
+
+    @property
+    def has_selects(self) -> bool:
+        return False
+
+    @property
+    def has_expands(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return f"_SearchQuery({self.kql!r})"
 
 
 class OutlookProvider(EmailProvider):
@@ -69,10 +135,14 @@ class OutlookProvider(EmailProvider):
     def __init__(
         self,
         auth: Any | None = None,
+        *,
+        mode: str | None = None,
     ) -> None:
         self._microsoft_auth: Any | None = auth  # MicrosoftAuth (optional)
+        # Access mode for the legacy (no ``auth``) path — selects the token tier.
+        self._mode = mode or "standard"
         self._account: Any | None = None  # O365.Account instance
-        self._mailbox: Any | None = None  # O365.MailBox instance
+        self._mailbox: Any | None = None  # O365.mailbox.MailBox instance
 
     # ------------------------------------------------------------------
     # Internal lazy-access properties
@@ -96,29 +166,49 @@ class OutlookProvider(EmailProvider):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _set_immutable_id_header(self) -> None:
-        """Apply the ImmutableId preference header to all Graph requests."""
-        assert self._account is not None  # guaranteed by authenticate() calling this
-        self._account.con.session.headers.update(_IMMUTABLE_ID_HEADER)
+    def _attachment_infos(self, message_id: str) -> list[AttachmentInfo]:
+        """Fetch attachment metadata for a message.
+
+        python-o365 only populates ``Message.attachments`` when asked to
+        download them, and its attachment objects drop ``contentType``, so
+        the attachment list is read straight from Graph.
+        """
+        con = self._acct.con
+        resp = con.get(self._mb.build_url(f"/messages/{message_id}/attachments"))
+        infos: list[AttachmentInfo] = []
+        for a in resp.json().get("value", []) if resp else []:
+            name = a.get("name") or ""
+            mime = a.get("contentType") or (
+                mimetypes.guess_type(name)[0] or "application/octet-stream"
+            )
+            content_id = a.get("contentId")
+            if content_id:
+                content_id = content_id.strip().strip("<>")
+            infos.append(
+                AttachmentInfo(
+                    id=a.get("id", ""),
+                    filename=name,
+                    mime_type=mime,
+                    size=int(a.get("size") or 0),
+                    inline=bool(a.get("isInline", False)),
+                    content_id=content_id or None,
+                )
+            )
+        return infos
 
     def _message_to_email_data(
         self,
         msg: Any,
         include_body: bool = True,
     ) -> EmailData:
-        """Convert a python-o365 ``Message`` object into an :class:`EmailData` dict.
+        """Convert a python-o365 ``Message`` into an :class:`EmailData` dict.
 
         Args:
-            msg: A python-o365 ``Message`` (or ``MockMessage`` in tests).
+            msg: A python-o365 ``Message``.
             include_body: When ``True``, include ``body``, ``content_type``,
-                and ``attachments`` fields.  Set to ``False`` for lightweight
-                search/metadata results.
-
-        Returns:
-            Normalised :class:`EmailData` dict compatible with downstream
-            modules (``markdown_converter``, ``file_manager``).
+                and ``attachments`` (one extra Graph call when the message has
+                attachments).
         """
-        # ── Sender → "Display Name <email>" string ───────────────────
         sender = msg.sender
         if sender and getattr(sender, "address", None):
             name = getattr(sender, "name", "") or ""
@@ -126,7 +216,6 @@ class OutlookProvider(EmailProvider):
         else:
             from_ = ""
 
-        # ── Received datetime → ISO 8601 string ──────────────────────
         received = msg.received
         if received is not None and hasattr(received, "isoformat"):
             date_str = received.isoformat()
@@ -134,7 +223,6 @@ class OutlookProvider(EmailProvider):
             date_str = str(received) if received is not None else ""
 
         def _recipients(recipients: Any) -> str:
-            """Join a python-o365 Recipients collection into a header-style string."""
             if not recipients:
                 return ""
             out = []
@@ -142,8 +230,8 @@ class OutlookProvider(EmailProvider):
                 addr = getattr(r, "address", None)
                 if not addr:
                     continue
-                name = getattr(r, "name", "") or ""
-                out.append(f"{name} <{addr}>" if name else addr)
+                rname = getattr(r, "name", "") or ""
+                out.append(f"{rname} <{addr}>" if rname else addr)
             return ", ".join(out)
 
         data: EmailData = {
@@ -162,109 +250,83 @@ class OutlookProvider(EmailProvider):
 
         if include_body:
             data["body"] = msg.body or ""
-
-            # Graph returns HTML by default; preserve for html2text conversion.
-            # body_type is 'HTML' or 'Text' on real Graph messages.
-            body_type = getattr(msg, "body_type", "HTML")
-            data["content_type"] = "text/plain" if body_type == "Text" else "text/html"
-
-            # Attachment metadata (content bytes fetched separately).
-            if msg.has_attachments:
-                data["attachments"] = [
-                    AttachmentInfo(
-                        id=getattr(a, "attachment_id", ""),
-                        filename=getattr(a, "name", ""),
-                        mime_type=getattr(a, "content_type", "application/octet-stream"),
-                        size=getattr(a, "size", 0),
-                        inline=bool(getattr(a, "is_inline", False)),
-                        content_id=getattr(a, "content_id", None),
-                    )
-                    for a in msg.attachments
-                ]
-            else:
-                data["attachments"] = []
+            # Graph v1.0 returns bodyType as "html" / "text" (lower case).
+            body_type = str(getattr(msg, "body_type", "html") or "html").lower()
+            data["content_type"] = "text/plain" if body_type == "text" else "text/html"
+            data["attachments"] = (
+                self._attachment_infos(msg.object_id) if msg.has_attachments else []
+            )
 
         return data
 
-    def _build_outlook_filter(self, query: EmailQuery) -> Any:
-        """Build an OData ``$filter`` query using the python-o365 Query builder.
+    def _build_outlook_filter(self, query: EmailQuery) -> Any | None:
+        """Build an OData ``$filter`` with python-o365's ``QueryBuilder``.
 
-        Used when no free-text (``query.text``) is present.  All structured
-        ``EmailQuery`` fields are translated to OData filter expressions.
-
-        ``raw_query`` is handled upstream in ``search_emails()`` and is never
-        passed to this method.
-
-        Args:
-            query: Structured email query parameters.
-
-        Returns:
-            A python-o365 ``Query`` object ready for ``get_messages(query=...)``.
+        Used when no free-text (``query.text``) is present. Returns a
+        ``CompositeFilter`` (or ``None`` when the query has no conditions).
         """
-        q = self._mb.new_query()
+        from O365.utils.query import CompositeFilter, IterableFilter, LogicalFilter
+
+        qb = self._mb.new_query()
+        parts: list[Any] = []
 
         if query.from_addr:
-            q = q.on_attribute("from/emailAddress/address").equals(query.from_addr)
+            # "from" maps to from/emailAddress/address in QueryBuilder.
+            parts.append(qb.equals("from", _odata_str(query.from_addr)))
 
         if query.to_addr:
-            q = q.on_attribute("toRecipients/emailAddress/address").equals(query.to_addr)
+            # toRecipients/any(r: r/emailAddress/address eq '...'). Built from
+            # the filter primitives because QueryBuilder's casing helper
+            # mangles multi-segment attributes ("emailAddress/address").
+            inner = LogicalFilter("eq", "emailAddress/address", f"'{_odata_str(query.to_addr)}'")
+            parts.append(
+                CompositeFilter(filters=IterableFilter("any", "toRecipients", inner, item_name="r"))
+            )
 
         if query.subject:
-            q = q.on_attribute("subject").contains(query.subject)
+            parts.append(qb.contains("subject", _odata_str(query.subject)))
 
         if query.after:
             after_dt = datetime.combine(query.after, datetime.min.time())
-            q = q.on_attribute("receivedDateTime").greater_equal(after_dt)
+            parts.append(qb.greater_equal("receivedDateTime", after_dt))
 
         if query.before:
             before_dt = datetime.combine(query.before, datetime.min.time())
-            q = q.on_attribute("receivedDateTime").less(before_dt)
+            parts.append(qb.less("receivedDateTime", before_dt))
 
-        if query.has_attachment is True:
-            q = q.on_attribute("hasAttachments").equals(True)
-        elif query.has_attachment is False:
-            q = q.on_attribute("hasAttachments").equals(False)
+        if query.has_attachment is not None:
+            parts.append(qb.equals("hasAttachments", bool(query.has_attachment)))
 
-        if query.is_unread is True:
-            q = q.on_attribute("isRead").equals(False)
-        elif query.is_unread is False:
-            q = q.on_attribute("isRead").equals(True)
+        if query.is_unread is not None:
+            parts.append(qb.equals("isRead", not query.is_unread))
 
         if query.label:
-            # OData lambda: categories/any(c:c eq 'LabelName')
-            # We encode the full OData filter expression as the "attribute"
-            # and use a raw marker so the provider can reconstruct it.
-            escaped = query.label.replace("'", "''")
-            raw_expr = f"categories/any(c:c eq '{escaped}')"
-            q = q.on_attribute(raw_expr).equals(True)
+            # categories/any(c: c eq 'Label')
+            inner = LogicalFilter("eq", None, f"'{_odata_str(query.label)}'")
+            parts.append(
+                CompositeFilter(filters=IterableFilter("any", "categories", inner, item_name="c"))
+            )
 
-        return q
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return qb.chain_and(*parts)
 
     def _build_outlook_search(self, query: EmailQuery) -> str:
-        """Build a KQL ``$search`` string.
+        """Build a KQL expression for ``$search`` (unquoted; see ``_search_param``).
 
-        Used when ``query.text`` is present or ``raw_query`` triggers the
-        ``$search`` path.  Note: ``$filter`` and ``$search`` **cannot** be
-        combined on Graph message collections, so all conditions are expressed
-        as KQL keywords here.
-
-        ``raw_query`` is handled upstream in ``search_emails()`` and is never
-        passed to this method.
-
-        Args:
-            query: Structured email query parameters.
-
-        Returns:
-            KQL search string for the ``$search`` query parameter.
+        ``is_unread`` and ``label`` have no reliable KQL property on Graph
+        messages; :meth:`search_emails` applies them client-side.
         """
         parts: list[str] = []
 
         if query.from_addr:
-            parts.append(f"from:{query.from_addr}")
+            parts.append(_kql_term("from", query.from_addr))
         if query.to_addr:
-            parts.append(f"to:{query.to_addr}")
+            parts.append(_kql_term("to", query.to_addr))
         if query.subject:
-            parts.append(f"subject:{query.subject}")
+            parts.append(_kql_term("subject", query.subject))
         if query.after:
             parts.append(f"received>={query.after.isoformat()}")
         if query.before:
@@ -273,49 +335,56 @@ class OutlookProvider(EmailProvider):
             parts.append("hasAttachments:true")
         elif query.has_attachment is False:
             parts.append("hasAttachments:false")
-        if query.is_unread is True:
-            parts.append("isRead:false")
-        elif query.is_unread is False:
-            parts.append("isRead:true")
-        if query.label:
-            parts.append(f"category:{query.label}")
         if query.text:
-            parts.append(f'"{query.text}"')
+            parts.append(query.text.strip())
 
         return " ".join(parts)
+
+    @staticmethod
+    def _client_side_match(msg: Any, query: EmailQuery) -> bool:
+        if query.is_unread is not None and bool(msg.is_read) == bool(query.is_unread):
+            return False
+        if query.label:
+            cats = [c.lower() for c in (msg.categories or [])]
+            if query.label.lower() not in cats:
+                return False
+        return True
+
+    def _get_message_or_raise(self, message_id: str) -> Any:
+        """Fetch a message by ID, raising ``ValueError`` if it does not exist."""
+        try:
+            msg = self._mb.get_message(object_id=message_id)
+        except Exception as exc:
+            if _http_status(exc) == 404:
+                raise ValueError(f"Message not found: {message_id!r}") from exc
+            raise
+        if msg is None:
+            raise ValueError(f"Message not found: {message_id!r}")
+        return msg
 
     # ------------------------------------------------------------------
     # 1. Authentication & profile
     # ------------------------------------------------------------------
 
     def authenticate(self) -> None:
-        """Authenticate with Microsoft 365 and configure the ImmutableId header.
-
-        On first call this triggers the OAuth consent flow (browser or
-        device-code depending on the ``auth`` configuration).
-        Subsequent calls reuse the cached token transparently.
-        """
+        """Authenticate with Microsoft 365 and enable immutable IDs."""
         if self._microsoft_auth is not None:
             self._account = self._microsoft_auth.get_account()
         else:
             from iobox.accounts import get_active_account
             from iobox.providers.o365.auth import get_outlook_account
 
-            self._account = get_outlook_account(account=get_active_account())
+            self._account = get_outlook_account(account=get_active_account(), mode=self._mode)
+        ensure_immutable_ids(self._account)
         self._mailbox = self._account.mailbox()
-        self._set_immutable_id_header()
 
     def get_profile(self) -> dict[str, Any]:
-        """Return basic authentication status as a profile dict.
-
-        python-o365 does not expose ``/me`` profile data via a dedicated method;
-        a future enhancement can call ``self._acct.con.get('.../me')`` to fetch
-        the full profile (displayName, mail, etc.).
-        """
+        """Return authentication status and the signed-in username (no network call)."""
         acct = self._acct
         return {
             "provider": "outlook",
             "authenticated": acct.is_authenticated,
+            "email": getattr(acct, "username", None),
         }
 
     # ------------------------------------------------------------------
@@ -323,133 +392,128 @@ class OutlookProvider(EmailProvider):
     # ------------------------------------------------------------------
 
     def search_emails(self, query: EmailQuery) -> list[EmailData]:
-        """Search all mail folders and return normalised metadata results.
-
-        Searches across **all folders** (Inbox, Sent, Archive, Drafts, and
-        custom folders) via the root mailbox message collection
-        (``/me/messages``).
-
-        Query path selection:
-
-        1. ``raw_query`` set → KQL passthrough via ``$search``
-        2. ``query.text`` set → ``$search`` with KQL built from all fields
-        3. No free-text → ``$filter`` with OData conditions
-
-        Args:
-            query: Provider-agnostic search parameters.
-
-        Returns:
-            List of :class:`EmailData` dicts (body absent — metadata only).
-        """
+        """Search all mail folders and return metadata-only results."""
+        limit = query.max_results
+        client_filter = False
+        q: Any
         if query.raw_query:
-            # Raw KQL passthrough.
-            q = self._mb.new_query().search(query.raw_query)
-            messages = self._mb.get_messages(query=q, limit=query.max_results)
+            q = _SearchQuery(query.raw_query)
         elif query.text:
-            # Free-text present — must use $search; cannot combine with $filter.
-            kql = self._build_outlook_search(query)
-            q = self._mb.new_query().search(kql)
-            messages = self._mb.get_messages(query=q, limit=query.max_results)
+            q = _SearchQuery(self._build_outlook_search(query))
+            client_filter = query.is_unread is not None or bool(query.label)
+            if client_filter:
+                limit = max(limit, _CLIENT_FILTER_FETCH)
         else:
-            # Structured filters only — use $filter path.
             q = self._build_outlook_filter(query)
-            messages = self._mb.get_messages(query=q, limit=query.max_results)
 
-        return [self._message_to_email_data(msg, include_body=False) for msg in messages]
+        messages = self._mb.get_messages(limit=limit, query=q)
+        results: list[EmailData] = []
+        for msg in messages:
+            if client_filter and not self._client_side_match(msg, query):
+                continue
+            results.append(self._message_to_email_data(msg, include_body=False))
+            if len(results) >= query.max_results:
+                break
+        return results
 
     def get_email_content(
         self, message_id: str, preferred_content_type: str = "text/plain"
     ) -> EmailData:
         """Retrieve the full content of a single email by its immutable ID.
 
-        Args:
-            message_id: The message's immutable Graph object ID.
-            preferred_content_type: Not used for Outlook (body is always HTML
-                from Graph); kept for ABC compatibility.
-
-        Returns:
-            :class:`EmailData` dict with ``body`` and ``attachments`` populated.
-
         Raises:
             ValueError: If the message ID is not found.
         """
-        msg = self._mb.get_message(object_id=message_id)
-        if msg is None:
-            raise ValueError(f"Message not found: {message_id!r}")
+        msg = self._get_message_or_raise(message_id)
         return self._message_to_email_data(msg, include_body=True)
 
     def batch_get_emails(
         self, message_ids: list[str], preferred_content_type: str = "text/plain"
     ) -> list[EmailData]:
-        """Retrieve full content for a list of message IDs.
-
-        Graph's list endpoint returns complete message bodies, so individual
-        ``GET`` calls are sufficient here.  Missing IDs are logged and skipped.
-
-        Args:
-            message_ids: List of immutable Graph message IDs.
-            preferred_content_type: Not used for Outlook; kept for ABC compat.
-
-        Returns:
-            List of :class:`EmailData` dicts in the same order as ``message_ids``
-            (missing messages are omitted).
-        """
+        """Retrieve full content for a list of message IDs (missing IDs are skipped)."""
         results: list[EmailData] = []
         for mid in message_ids:
-            msg = self._mb.get_message(object_id=mid)
-            if msg is not None:
-                results.append(self._message_to_email_data(msg, include_body=True))
-            else:
+            try:
+                msg = self._get_message_or_raise(mid)
+            except ValueError:
                 logger.warning("Message not found during batch_get_emails: %r", mid)
+                continue
+            results.append(self._message_to_email_data(msg, include_body=True))
         return results
 
     def get_thread(self, thread_id: str) -> list[EmailData]:
-        """Return all messages in a conversation, ordered chronologically.
+        """Return all messages in a conversation (all folders), oldest first.
 
-        Searches across **all folders** so that thread replies in Sent Items or
-        other folders are included alongside Inbox messages.  Filters by
-        ``conversationId`` using the ``$filter`` path via the root mailbox
-        message collection (``/me/messages``).
-
-        Args:
-            thread_id: The Outlook ``conversationId`` (maps to ``thread_id``
-                in :class:`EmailData`).
-
-        Returns:
-            List of :class:`EmailData` dicts ordered by ``receivedDateTime``.
+        Graph rejects ``$orderby`` combined with a ``conversationId`` filter
+        on ``/me/messages`` (InefficientFilter), so ordering is done here.
         """
-        q = self._mb.new_query().on_attribute("conversationId").equals(thread_id)
-        messages = self._mb.get_messages(query=q, order_by="receivedDateTime asc")
+        qb = self._mb.new_query()
+        q = qb.equals("conversationId", _odata_str(thread_id))
+        messages = list(self._mb.get_messages(limit=None, query=q))
+        far_past = datetime.min
+
+        def _key(m: Any) -> Any:
+            r = m.received
+            return r.replace(tzinfo=None) if r is not None else far_past
+
+        messages.sort(key=_key)
         return [self._message_to_email_data(msg, include_body=True) for msg in messages]
 
     def download_attachment(self, message_id: str, attachment_id: str) -> bytes:
         """Download a single attachment and return its raw bytes.
 
-        Args:
-            message_id: Immutable message ID containing the attachment.
-            attachment_id: The attachment's ID (``attachment_id`` attribute on
-                the attachment object).
-
-        Returns:
-            Raw attachment bytes.
+        Uses ``GET /messages/{id}/attachments/{aid}/$value``, which returns
+        the decoded file content (the JSON form carries base64 text).
 
         Raises:
             ValueError: If the message or attachment is not found.
         """
-        msg = self._mb.get_message(object_id=message_id)
-        if msg is None:
-            raise ValueError(f"Message not found: {message_id!r}")
-
-        for attachment in msg.attachments:
-            a_id = getattr(attachment, "attachment_id", None)
-            if a_id == attachment_id:
-                return bytes(attachment.content)
-
-        raise ValueError(f"Attachment {attachment_id!r} not found in message {message_id!r}")
+        con = self._acct.con
+        url = self._mb.build_url(f"/messages/{message_id}/attachments/{attachment_id}/$value")
+        try:
+            resp = con.get(url)
+        except Exception as exc:
+            if _http_status(exc) == 404:
+                raise ValueError(
+                    f"Attachment {attachment_id!r} not found in message {message_id!r}"
+                ) from exc
+            raise
+        if not resp:
+            raise ValueError(f"Attachment {attachment_id!r} not found in message {message_id!r}")
+        return bytes(resp.content)
 
     # ------------------------------------------------------------------
     # 3. Send, forward & drafts
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _split_addresses(value: str | None) -> list[str]:
+        if not value:
+            return []
+        return [a.strip() for a in re.split(r"[,;]", value) if a.strip()]
+
+    def _compose(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: str | None,
+        bcc: str | None,
+        content_type: str,
+        attachments: list[str] | None,
+    ) -> Any:
+        msg = self._mb.new_message()
+        msg.to.add(self._split_addresses(to))
+        if cc:
+            msg.cc.add(self._split_addresses(cc))
+        if bcc:
+            msg.bcc.add(self._split_addresses(bcc))
+        msg.subject = subject
+        msg.body_type = "html" if content_type.lower() == "html" else "text"
+        msg.body = body
+        if attachments:
+            msg.attachments.add(list(attachments))
+        return msg
 
     def send_message(
         self,
@@ -461,37 +525,15 @@ class OutlookProvider(EmailProvider):
         content_type: str = "plain",
         attachments: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Compose and immediately send an email via Microsoft Graph.
+        """Compose and send an email.
 
-        python-o365 handles attachment sizing internally:
-        files < 3 MB are sent inline; larger files use an upload session.
-
-        Args:
-            to: Primary recipient email address.
-            subject: Email subject line.
-            body: Email body text (plain or HTML depending on *content_type*).
-            cc: Optional CC recipient address.
-            bcc: Optional BCC recipient address.
-            content_type: ``"plain"`` (default) or ``"html"``.
-            attachments: Optional list of local file paths to attach.
-
-        Returns:
-            Dict with ``message_id`` and ``status`` keys.
+        The message is saved as a draft first and then sent, so the returned
+        ``message_id`` is a real immutable ID (python-o365's direct
+        ``sendMail`` path only yields the placeholder ``"sent_message"``).
         """
-        msg = self._mb.new_message()
-        msg.to.add(to)
-        if cc:
-            msg.cc.add(cc)
-        if bcc:
-            msg.bcc.add(bcc)
-        msg.subject = subject
-        msg.body = body
-        if content_type.lower() == "html":
-            msg.body_type = "HTML"
-        else:
-            msg.body_type = "Text"
-        for path in attachments or []:
-            msg.attachments.add(path)
+        msg = self._compose(to, subject, body, cc, bcc, content_type, attachments)
+        if not msg.save_draft():
+            raise RuntimeError("Failed to create message for sending")
         if not msg.send():
             raise RuntimeError(f"Failed to send message: {msg.object_id!r}")
         return {"message_id": msg.object_id, "status": "sent"}
@@ -499,31 +541,24 @@ class OutlookProvider(EmailProvider):
     def forward_message(
         self, message_id: str, to: str, comment: str | None = None
     ) -> dict[str, Any]:
-        """Forward an existing message using the native Graph forward endpoint.
+        """Forward a message via Graph ``createForward`` + ``send``.
 
-        No manual "---------- Forwarded message ----------" body construction
-        is needed — Graph handles the forwarded body automatically.
-
-        Args:
-            message_id: Immutable message ID to forward.
-            to: Recipient address for the forward.
-            comment: Optional introductory text prepended to the forwarded body.
-
-        Returns:
-            Dict with ``message_id`` and ``status`` keys.
-
-        Raises:
-            ValueError: If the source message is not found.
+        The forward draft already quotes the original; ``comment`` is
+        prepended to it (python-o365's ``Message.body`` setter prepends when
+        the body is non-empty).
         """
-        msg = self._mb.get_message(object_id=message_id)
-        if msg is None:
-            raise ValueError(f"Message not found: {message_id!r}")
-        fwd = msg.forward()
-        fwd.to.add(to)
+        src = self._get_message_or_raise(message_id)
+        fwd = src.forward()
+        if fwd is None:
+            raise RuntimeError(f"Failed to create forward of message: {message_id!r}")
+        fwd.to.add(self._split_addresses(to))
         if comment:
-            fwd.body = comment
+            if str(fwd.body_type).lower() == "html":
+                fwd.body = "<p>" + html.escape(comment).replace("\n", "<br>") + "</p>"
+            else:
+                fwd.body = comment
         if not fwd.send():
-            raise RuntimeError(f"Failed to forward message: {fwd.object_id!r}")
+            raise RuntimeError(f"Failed to forward message: {message_id!r}")
         return {"message_id": fwd.object_id, "status": "sent"}
 
     def create_draft(
@@ -536,47 +571,14 @@ class OutlookProvider(EmailProvider):
         content_type: str = "plain",
         attachments: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create a new draft message and save it in the Drafts folder.
-
-        Args:
-            to: Primary recipient email address.
-            subject: Email subject line.
-            body: Email body text (plain or HTML depending on *content_type*).
-            cc: Optional CC recipient address.
-            bcc: Optional BCC recipient address.
-            content_type: ``"plain"`` (default) or ``"html"``.
-            attachments: Optional list of local file paths to attach.
-
-        Returns:
-            Dict with ``message_id`` and ``status`` keys.
-        """
-        msg = self._mb.new_message()
-        msg.to.add(to)
-        if cc:
-            msg.cc.add(cc)
-        if bcc:
-            msg.bcc.add(bcc)
-        msg.subject = subject
-        msg.body = body
-        if content_type.lower() == "html":
-            msg.body_type = "HTML"
-        else:
-            msg.body_type = "Text"
-        for path in attachments or []:
-            msg.attachments.add(path)
+        """Create a new draft message in the Drafts folder."""
+        msg = self._compose(to, subject, body, cc, bcc, content_type, attachments)
         if not msg.save_draft():
-            raise RuntimeError(f"Failed to save draft: {msg.object_id!r}")
+            raise RuntimeError("Failed to save draft")
         return {"message_id": msg.object_id, "status": "draft"}
 
     def list_drafts(self, max_results: int = 10) -> list[dict[str, Any]]:
-        """Return a list of draft summaries from the Drafts folder.
-
-        Args:
-            max_results: Maximum number of drafts to return (default 10).
-
-        Returns:
-            List of dicts with ``message_id``, ``subject``, and ``snippet`` keys.
-        """
+        """Return draft summaries from the Drafts folder."""
         drafts_folder = self._mb.drafts_folder()
         messages = drafts_folder.get_messages(limit=max_results)
         return [
@@ -591,37 +593,26 @@ class OutlookProvider(EmailProvider):
     def send_draft(self, draft_id: str) -> dict[str, Any]:
         """Send an existing draft message.
 
-        Args:
-            draft_id: Immutable message ID of the draft to send.
-
-        Returns:
-            Dict with ``message_id`` and ``status`` keys.
-
         Raises:
-            ValueError: If the draft is not found.
+            ValueError: If the draft is not found or the message is not a draft.
         """
-        msg = self._mb.get_message(object_id=draft_id)
-        if msg is None:
-            raise ValueError(f"Draft not found: {draft_id!r}")
+        try:
+            msg = self._get_message_or_raise(draft_id)
+        except ValueError:
+            raise ValueError(f"Draft not found: {draft_id!r}") from None
+        if not msg.is_draft:
+            # Message.send() *returns* (not raises) a RuntimeError here.
+            raise ValueError(f"Message {draft_id!r} is not a draft")
         if not msg.send():
             raise RuntimeError(f"Failed to send draft: {draft_id!r}")
         return {"message_id": draft_id, "status": "sent"}
 
     def delete_draft(self, draft_id: str) -> dict[str, Any]:
-        """Permanently delete a draft message.
-
-        Args:
-            draft_id: Immutable message ID of the draft to delete.
-
-        Returns:
-            Dict with ``message_id`` and ``status`` keys.
-
-        Raises:
-            ValueError: If the draft is not found.
-        """
-        msg = self._mb.get_message(object_id=draft_id)
-        if msg is None:
-            raise ValueError(f"Draft not found: {draft_id!r}")
+        """Delete a draft message (Graph moves it to Deleted Items)."""
+        try:
+            msg = self._get_message_or_raise(draft_id)
+        except ValueError:
+            raise ValueError(f"Draft not found: {draft_id!r}") from None
         if not msg.delete():
             raise RuntimeError(f"Failed to delete draft: {draft_id!r}")
         return {"message_id": draft_id, "status": "deleted"}
@@ -630,197 +621,178 @@ class OutlookProvider(EmailProvider):
     # Internal batch helper
     # ------------------------------------------------------------------
 
-    def _batch_graph_requests(self, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Send multiple Graph API requests using the ``$batch`` endpoint.
+    def _batch_graph_requests(
+        self, requests: list[dict[str, Any]], message_ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Send requests through Graph ``$batch`` (chunks of 20) and check results.
 
-        Microsoft Graph's ``$batch`` endpoint accepts at most 20 individual
-        requests per call.  This helper transparently chunks larger lists
-        and returns all individual responses in order.
-
-        Each element of *requests* should be a dict matching the Graph batch
-        request format::
-
-            {
-                "id": "1",
-                "method": "PATCH",
-                "url": "/me/messages/{id}",
-                "body": { ... },
-                "headers": {"Content-Type": "application/json"},
-            }
+        Each sub-request gets the ImmutableId ``Prefer`` header (outer request
+        headers are not inherited by sub-requests). Every sub-response status
+        is checked; failures are collected across all chunks and raised
+        together as :class:`OutlookBatchError` once every chunk has run.
 
         Args:
-            requests: List of individual Graph batch request dicts.
+            requests: Graph batch request dicts (``id``, ``method``, ``url``…).
+            message_ids: Message ID for each request (same order), used in
+                error reports. Defaults to the request ``id``.
 
         Returns:
-            Flat list of response dicts (``{"id", "status", "body"}``),
-            one per input request.
+            All sub-response dicts (``{"id", "status", "body"}``).
         """
-        _BATCH_LIMIT = 20
-        con = self._acct.con
+        acct = self._acct
+        con = acct.con
+        # The protocol lives on the Account (Connection has no ``protocol``);
+        # service_url already ends with "/".
+        url = f"{acct.protocol.service_url.rstrip('/')}/$batch"
+        ids = message_ids or [r["id"] for r in requests]
+        by_req_id = {r["id"]: ids[i] for i, r in enumerate(requests)}
         all_responses: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
 
         for start in range(0, len(requests), _BATCH_LIMIT):
-            chunk = requests[start : start + _BATCH_LIMIT]
-            payload = {"requests": chunk}
-            resp = con.post(
-                f"{con.protocol.service_url}/$batch",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            if resp and hasattr(resp, "json"):
-                body = resp.json()
-                all_responses.extend(body.get("responses", []))
-            else:
-                logger.warning("Batch request returned no response for chunk starting at %d", start)
+            chunk = []
+            for req in requests[start : start + _BATCH_LIMIT]:
+                headers = {"Content-Type": "application/json", **req.get("headers", {})}
+                prefer = headers.get("Prefer")
+                if not prefer:
+                    headers["Prefer"] = IMMUTABLE_ID_PREFER
+                elif "immutableid" not in prefer.lower():
+                    headers["Prefer"] = f"{prefer}, {IMMUTABLE_ID_PREFER}"
+                chunk.append({**req, "headers": headers})
 
+            resp = con.post(url, data={"requests": chunk})
+            responses = resp.json().get("responses", []) if resp else []
+            seen = set()
+            for r in responses:
+                seen.add(r.get("id"))
+                status = int(r.get("status", 0))
+                if not 200 <= status < 300:
+                    body = r.get("body") or {}
+                    err = body.get("error", {}) if isinstance(body, dict) else {}
+                    failures.append(
+                        {
+                            "message_id": by_req_id.get(r.get("id"), r.get("id")),
+                            "status": status,
+                            "error": err.get("message") or err.get("code") or "",
+                        }
+                    )
+            for req in chunk:
+                if req["id"] not in seen:
+                    failures.append(
+                        {
+                            "message_id": by_req_id.get(req["id"], req["id"]),
+                            "status": 0,
+                            "error": "no response in $batch reply",
+                        }
+                    )
+            all_responses.extend(responses)
+
+        if failures:
+            raise OutlookBatchError(failures, total=len(requests))
         return all_responses
+
+    def _batch_per_message(
+        self, message_ids: list[str], method: str, suffix: str, body: dict[str, Any]
+    ) -> None:
+        requests = [
+            {
+                "id": str(i),
+                "method": method,
+                "url": f"/me/messages/{mid}{suffix}",
+                "body": body,
+            }
+            for i, mid in enumerate(message_ids)
+        ]
+        if requests:
+            self._batch_graph_requests(requests, list(message_ids))
 
     # ------------------------------------------------------------------
     # 4. System operations (mark read, star, archive, trash)
     # ------------------------------------------------------------------
 
-    def _get_message_or_raise(self, message_id: str) -> Any:
-        """Fetch a message by ID, raising ``ValueError`` if not found."""
-        msg = self._mb.get_message(object_id=message_id)
-        if msg is None:
-            raise ValueError(f"Message not found: {message_id!r}")
-        return msg
-
     def mark_read(self, message_id: str, read: bool = True) -> None:
-        """Toggle the ``isRead`` property on a message.
-
-        Args:
-            message_id: Immutable Graph message ID.
-            read: ``True`` to mark as read (default), ``False`` for unread.
-        """
+        """Toggle the ``isRead`` property on a message."""
         msg = self._get_message_or_raise(message_id)
-        if read:
-            msg.mark_as_read()
-        else:
-            msg.mark_as_unread()
+        ok = msg.mark_as_read() if read else msg.mark_as_unread()
+        if not ok:
+            raise RuntimeError(f"Failed to update read state: {message_id!r}")
 
     def set_star(self, message_id: str, starred: bool = True) -> None:
         """Toggle the follow-up flag (Outlook's equivalent of Gmail's star).
 
-        Maps ``starred=True`` → ``flag.flagStatus = "flagged"`` and
-        ``starred=False`` → ``flag.flagStatus = "notFlagged"``.
-
-        Args:
-            message_id: Immutable Graph message ID.
-            starred: ``True`` to flag (default), ``False`` to unflag.
+        ``Message.flag`` is a read-only ``MessageFlag``; it is changed through
+        ``set_flagged()`` / ``delete_flag()`` and persisted by
+        ``save_message()``.
         """
         msg = self._get_message_or_raise(message_id)
-        status = "flagged" if starred else "notFlagged"
-        msg.flag = {"flagStatus": status}
-        msg.save_message()
+        if starred:
+            msg.flag.set_flagged()
+        else:
+            msg.flag.delete_flag()
+        if not msg.save_message():
+            raise RuntimeError(f"Failed to update flag: {message_id!r}")
 
     def archive(self, message_id: str) -> None:
-        """Move a message to the Archive well-known folder.
-
-        Args:
-            message_id: Immutable Graph message ID.
-        """
+        """Move a message to the Archive well-known folder."""
         msg = self._get_message_or_raise(message_id)
-        archive_folder = self._mb.archive_folder()
-        msg.move(archive_folder)
+        if not msg.move(self._mb.archive_folder()):
+            raise RuntimeError(f"Failed to archive message: {message_id!r}")
 
     def trash(self, message_id: str) -> None:
-        """Soft-delete a message (move to Deleted Items).
-
-        python-o365's ``Message.delete()`` performs a soft delete,
-        moving the message to the Deleted Items folder.
-
-        Args:
-            message_id: Immutable Graph message ID.
-        """
+        """Soft-delete a message (Graph ``DELETE`` moves it to Deleted Items)."""
         msg = self._get_message_or_raise(message_id)
-        msg.delete()
+        if not msg.delete():
+            raise RuntimeError(f"Failed to trash message: {message_id!r}")
 
     def untrash(self, message_id: str) -> None:
-        """Restore a message from Deleted Items back to Inbox.
-
-        Args:
-            message_id: Immutable Graph message ID.
-        """
+        """Restore a message from Deleted Items back to Inbox."""
         msg = self._get_message_or_raise(message_id)
-        inbox_folder = self._mb.inbox_folder()
-        msg.move(inbox_folder)
+        if not msg.move(self._mb.inbox_folder()):
+            raise RuntimeError(f"Failed to restore message: {message_id!r}")
 
     # ------------------------------------------------------------------
     # 5. Tag operations (Outlook categories)
     # ------------------------------------------------------------------
 
     def add_tag(self, message_id: str, tag_name: str) -> None:
-        """Append a category to the message's ``categories`` array.
-
-        No-op if the category is already present.
-
-        Args:
-            message_id: Immutable Graph message ID.
-            tag_name: Category name to add.
-        """
+        """Append a category to the message (no-op if already present)."""
         msg = self._get_message_or_raise(message_id)
         categories: list[str] = list(msg.categories) if msg.categories else []
         if tag_name not in categories:
             categories.append(tag_name)
             msg.categories = categories
-            msg.save_message()
+            if not msg.save_message():
+                raise RuntimeError(f"Failed to add category to {message_id!r}")
 
     def remove_tag(self, message_id: str, tag_name: str) -> None:
-        """Remove a category from the message's ``categories`` array.
-
-        No-op if the category is not present.
-
-        Args:
-            message_id: Immutable Graph message ID.
-            tag_name: Category name to remove.
-        """
+        """Remove a category from the message (no-op if absent)."""
         msg = self._get_message_or_raise(message_id)
         categories: list[str] = list(msg.categories) if msg.categories else []
         if tag_name in categories:
             categories.remove(tag_name)
             msg.categories = categories
-            msg.save_message()
+            if not msg.save_message():
+                raise RuntimeError(f"Failed to remove category from {message_id!r}")
 
     def list_tags(self) -> dict[str, str]:
-        """Return the master category list as a ``{name: name}`` mapping.
-
-        Outlook categories are identified by display name (not ID), so
-        both key and value are the category name.
-
-        Returns:
-            Dict mapping category name → category name.
-        """
-        con = self._acct.con
-        url = f"{con.protocol.service_url}/me/outlook/masterCategories"
-        resp = con.get(url)
-        result: dict[str, str] = {}
-        if resp and hasattr(resp, "json"):
-            data = resp.json()
-            for cat in data.get("value", []):
-                name = cat.get("displayName", "")
-                if name:
-                    result[name] = name
-        return result
+        """Return the master category list as a ``{name: name}`` mapping."""
+        categories = self._acct.outlook_categories().get_categories()
+        return {c.name: c.name for c in categories if c.name}
 
     def create_tag(self, name: str) -> dict[str, str]:
         """Register a master category named ``name``; returns ``{"id", "name"}``.
 
-        Outlook categories are free-form display-name strings — ``add_tag`` works
-        on any name without pre-registration — but creating the master category
-        makes it appear in the user's category picker. If it already exists, the
-        existing category is returned. Nested ``/`` names are not special in
-        Outlook; they are stored verbatim.
+        Outlook categories are free-form display-name strings — ``add_tag``
+        works on any name without pre-registration — but creating the master
+        category makes it appear in the user's category picker. If it already
+        exists (or creation is not permitted) the name is returned as-is.
         """
-        con = self._acct.con
-        url = f"{con.protocol.service_url}/me/outlook/masterCategories"
         try:
-            resp = con.post(url, data={"displayName": name, "color": "preset0"})
-            if resp and hasattr(resp, "json"):
-                created = resp.json()
-                return {"id": created.get("id", name), "name": created.get("displayName", name)}
+            created = self._acct.outlook_categories().create_category(name)
+            if created is not None:
+                return {"id": created.object_id or name, "name": created.name or name}
         except Exception as exc:  # already exists or restricted — fall back to name
-            logger.warning(f"create_tag({name!r}) falling back to free-form category: {exc}")
+            logger.warning("create_tag(%r) falling back to free-form category: %s", name, exc)
         return {"id": name, "name": name}
 
     # ------------------------------------------------------------------
@@ -828,95 +800,54 @@ class OutlookProvider(EmailProvider):
     # ------------------------------------------------------------------
 
     def batch_mark_read(self, message_ids: list[str], read: bool = True) -> None:
-        """Mark multiple messages as read or unread via a single Graph $batch call."""
-        requests = [
-            {
-                "id": str(i),
-                "method": "PATCH",
-                "url": f"/me/messages/{mid}",
-                "body": {"isRead": read},
-                "headers": {"Content-Type": "application/json"},
-            }
-            for i, mid in enumerate(message_ids)
-        ]
-        if requests:
-            self._batch_graph_requests(requests)
+        """Mark messages read/unread via Graph ``$batch``."""
+        self._batch_per_message(message_ids, "PATCH", "", {"isRead": read})
 
     def batch_archive(self, message_ids: list[str]) -> None:
-        """Move multiple messages to the Archive folder via a single Graph $batch call."""
-        requests = [
-            {
-                "id": str(i),
-                "method": "POST",
-                "url": f"/me/messages/{mid}/move",
-                "body": {"destinationId": "archive"},
-                "headers": {"Content-Type": "application/json"},
-            }
-            for i, mid in enumerate(message_ids)
-        ]
-        if requests:
-            self._batch_graph_requests(requests)
+        """Move messages to the Archive folder via Graph ``$batch``."""
+        self._batch_per_message(message_ids, "POST", "/move", {"destinationId": "archive"})
 
     def batch_trash(self, message_ids: list[str]) -> None:
-        """Move multiple messages to Deleted Items via a single Graph $batch call."""
-        requests = [
-            {
-                "id": str(i),
-                "method": "POST",
-                "url": f"/me/messages/{mid}/move",
-                "body": {"destinationId": "deleteditems"},
-                "headers": {"Content-Type": "application/json"},
-            }
-            for i, mid in enumerate(message_ids)
-        ]
-        if requests:
-            self._batch_graph_requests(requests)
+        """Move messages to Deleted Items via Graph ``$batch``."""
+        self._batch_per_message(message_ids, "POST", "/move", {"destinationId": "deleteditems"})
+
+    def _batch_set_categories(
+        self, message_ids: list[str], tag_name: str, *, add: bool, op: str
+    ) -> None:
+        batch_requests: list[dict[str, Any]] = []
+        batch_ids: list[str] = []
+        for mid in message_ids:
+            try:
+                msg = self._get_message_or_raise(mid)
+            except ValueError:
+                logger.warning("%s: message not found, skipping: %r", op, mid)
+                continue
+            categories: list[str] = list(msg.categories) if msg.categories else []
+            if add and tag_name not in categories:
+                categories.append(tag_name)
+            elif not add and tag_name in categories:
+                categories.remove(tag_name)
+            else:
+                continue
+            batch_requests.append(
+                {
+                    "id": str(len(batch_requests)),
+                    "method": "PATCH",
+                    "url": f"/me/messages/{mid}",
+                    "body": {"categories": categories},
+                }
+            )
+            batch_ids.append(mid)
+        if batch_requests:
+            self._batch_graph_requests(batch_requests, batch_ids)
 
     def batch_add_tag(self, message_ids: list[str], tag_name: str) -> None:
-        """Add a category to multiple messages via a single Graph $batch call."""
-        batch_requests: list[dict[str, Any]] = []
-        for i, mid in enumerate(message_ids):
-            msg = self._mb.get_message(object_id=mid)
-            if msg is None:
-                logger.warning("batch_add_tag: message not found, skipping: %r", mid)
-                continue
-            categories: list[str] = list(msg.categories) if msg.categories else []
-            if tag_name not in categories:
-                categories.append(tag_name)
-                batch_requests.append(
-                    {
-                        "id": str(i),
-                        "method": "PATCH",
-                        "url": f"/me/messages/{mid}",
-                        "body": {"categories": categories},
-                        "headers": {"Content-Type": "application/json"},
-                    }
-                )
-        if batch_requests:
-            self._batch_graph_requests(batch_requests)
+        """Add a category to multiple messages via Graph ``$batch``."""
+        self._batch_set_categories(message_ids, tag_name, add=True, op="batch_add_tag")
 
     def batch_remove_tag(self, message_ids: list[str], tag_name: str) -> None:
-        """Remove a category from multiple messages via a single Graph $batch call."""
-        batch_requests: list[dict[str, Any]] = []
-        for i, mid in enumerate(message_ids):
-            msg = self._mb.get_message(object_id=mid)
-            if msg is None:
-                logger.warning("batch_remove_tag: message not found, skipping: %r", mid)
-                continue
-            categories: list[str] = list(msg.categories) if msg.categories else []
-            if tag_name in categories:
-                categories.remove(tag_name)
-                batch_requests.append(
-                    {
-                        "id": str(i),
-                        "method": "PATCH",
-                        "url": f"/me/messages/{mid}",
-                        "body": {"categories": categories},
-                        "headers": {"Content-Type": "application/json"},
-                    }
-                )
-        if batch_requests:
-            self._batch_graph_requests(batch_requests)
+        """Remove a category from multiple messages via Graph ``$batch``."""
+        self._batch_set_categories(message_ids, tag_name, add=False, op="batch_remove_tag")
 
     # ------------------------------------------------------------------
     # 6. Sync — delta query for incremental sync
@@ -927,55 +858,28 @@ class OutlookProvider(EmailProvider):
 
     def _get_inbox_delta_url(self) -> str:
         """Return the initial delta URL for the inbox folder."""
-        con = self._acct.con
-        return f"{con.protocol.service_url}/me/mailFolders/inbox/messages/delta"
+        return str(self._mb.build_url(f"/mailFolders/{self._DELTA_FOLDER}/messages/delta"))
 
     def get_sync_state(self) -> str:
-        """Return an opaque sync-state token for the Outlook inbox.
+        """Return an opaque sync-state token (the ``@odata.deltaLink``) for the inbox.
 
-        Performs an initial delta query that walks all pages until the
-        ``@odata.deltaLink`` is returned, then returns that link as the
-        sync token.  Callers should persist this and pass it to
-        :meth:`get_new_messages` for subsequent incremental syncs.
-
-        Returns:
-            The ``@odata.deltaLink`` URL (an opaque token string).
+        Walks the initial delta snapshot (selecting only ``id``) until Graph
+        returns the delta link.
         """
         con = self._acct.con
-        url = self._get_inbox_delta_url()
-        # Walk all pages to exhaust the initial snapshot.
-        delta_link = self._exhaust_delta_pages(con, url)
-        return delta_link
+        return self._exhaust_delta_pages(con, self._get_inbox_delta_url(), params={"$select": "id"})
 
     def get_new_messages(self, sync_token: str) -> list[str] | None:
         """Return message IDs added/changed since *sync_token*.
 
-        *sync_token* is a ``@odata.deltaLink`` URL previously returned by
-        :meth:`get_sync_state` or a prior call to this method.
-
-        Returns:
-            A list of message IDs (may be empty), or ``None`` when the
-            delta token has expired (HTTP 410 Gone) and a full re-sync is
-            needed.  The caller should discard the old token and call
-            :meth:`get_sync_state` again to obtain a fresh baseline.
+        Returns ``None`` when the delta token has expired (HTTP 410 Gone) and
+        a full re-sync is needed.
         """
-        con = self._acct.con
-
-        try:
-            message_ids, _new_delta = self._fetch_delta(con, sync_token)
-            return message_ids
-        except _DeltaGoneError:
-            # 410 Gone — delta token expired; signal full re-sync.
-            logger.warning("Outlook delta token expired (410 Gone). A full re-sync is required.")
-            return None
+        result = self.get_new_messages_with_token(sync_token)
+        return None if result is None else result[0]
 
     def get_new_messages_with_token(self, sync_token: str) -> tuple[list[str], str] | None:
-        """Like :meth:`get_new_messages` but also returns the refreshed delta link.
-
-        Returns:
-            A ``(message_ids, new_delta_link)`` tuple, or ``None`` when the
-            delta token has expired and a full re-sync is needed.
-        """
+        """Like :meth:`get_new_messages` but also returns the refreshed delta link."""
         con = self._acct.con
         try:
             return self._fetch_delta(con, sync_token)
@@ -986,40 +890,62 @@ class OutlookProvider(EmailProvider):
     # ---- internal delta helpers ----------------------------------------
 
     def _fetch_delta(self, con: Any, url: str) -> tuple[list[str], str]:
-        """Follow delta pages starting at *url*, collecting message IDs."""
+        """Follow delta pages starting at *url*, collecting changed message IDs."""
         message_ids: list[str] = []
-        delta_link = self._exhaust_delta_pages(con, url, message_ids)
+        delta_link = self._exhaust_delta_pages(con, url, message_ids=message_ids)
         return message_ids, delta_link
 
-    def _exhaust_delta_pages(self, con: Any, url: str, message_ids: list[str] | None = None) -> str:
-        """Walk all delta response pages and return the final deltaLink."""
-        current_url = url
-        while True:
-            resp = con.get(current_url, headers=_IMMUTABLE_ID_HEADER)
+    def _exhaust_delta_pages(
+        self,
+        con: Any,
+        url: str,
+        message_ids: list[str] | None = None,
+        params: dict[str, str] | None = None,
+    ) -> str:
+        """Walk all delta pages and return the final deltaLink.
 
-            # Handle 410 Gone — delta token expired.
-            if hasattr(resp, "status_code") and resp.status_code == 410:
-                raise _DeltaGoneError("Delta token expired (HTTP 410 Gone)")
+        python-o365 raises ``requests.HTTPError`` for 4xx/5xx; a 410 (or a
+        sync-state error code) is translated to :class:`_DeltaGoneError`.
+        Items carrying ``@removed`` (deleted / moved out of the folder) are
+        not reported as new.
+        """
+        current_url = url
+        current_params = params
+        seen: set[str] = set()
+        while True:
+            try:
+                resp = con.get(current_url, params=current_params)
+            except Exception as exc:
+                status = _http_status(exc)
+                if status == 410 or (
+                    status is not None
+                    and 400 <= status < 500
+                    and _graph_error_code(exc).lower() in _DELTA_RESYNC_CODES
+                ):
+                    raise _DeltaGoneError("Delta token expired") from exc
+                raise
+            current_params = None  # next/delta links already carry the query
 
             if resp is None or not hasattr(resp, "json"):
                 raise RuntimeError("Delta request returned no valid response")
 
             data = resp.json()
 
-            # Collect message IDs from this page.
             if message_ids is not None:
                 for item in data.get("value", []):
+                    if "@removed" in item:
+                        continue
                     mid = item.get("id")
-                    if mid:
+                    if mid and mid not in seen:
+                        seen.add(mid)
                         message_ids.append(mid)
 
-            # Check for next page or final delta link.
             next_link: str | None = data.get("@odata.nextLink")
             delta_link: str | None = data.get("@odata.deltaLink")
 
             if delta_link:
                 return delta_link
-            elif next_link:
+            if next_link:
                 current_url = next_link
             else:
                 raise RuntimeError(
@@ -1028,4 +954,4 @@ class OutlookProvider(EmailProvider):
 
 
 class _DeltaGoneError(Exception):
-    """Internal exception raised when Graph returns 410 for an expired delta token."""
+    """Internal exception raised when Graph reports an expired delta token."""

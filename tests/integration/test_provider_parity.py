@@ -14,7 +14,7 @@ from iobox.processing.markdown_converter import convert_email_to_markdown, conve
 from iobox.providers.base import EmailData, EmailQuery
 from iobox.providers.o365.email import OutlookProvider
 from tests.fixtures.mock_outlook_responses import (
-    make_full_mock_account,
+    make_outlook_provider,
 )
 
 # ---------------------------------------------------------------------------
@@ -36,12 +36,8 @@ REQUIRED_FULL_KEYS = REQUIRED_METADATA_KEYS | {"body", "content_type", "attachme
 
 @pytest.fixture
 def outlook_provider() -> OutlookProvider:
-    """OutlookProvider with full mock account."""
-    p = OutlookProvider()
-    account = make_full_mock_account()
-    p._account = account
-    p._mailbox = account.mailbox()
-    return p
+    """OutlookProvider on real python-o365 objects over a fake Graph tenant."""
+    return make_outlook_provider()
 
 
 def _make_gmail_email_data(

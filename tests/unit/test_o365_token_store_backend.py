@@ -126,3 +126,21 @@ def test_load_handles_corrupt_blob() -> None:
     store.save("alice", "default", {"_o365": "not json {{{"})
     backend = TokenStoreTokenBackend(store, "alice")
     assert backend.load_token() is False
+
+
+def test_fallback_tier_is_read_but_never_written() -> None:
+    """Tokens stored before tiers existed ("default") still load for standard."""
+    store = _InMemoryStore()
+    store.save("alice", "default", {"_o365": json.dumps({"legacy": True})})
+    backend = TokenStoreTokenBackend(
+        store, "alice", tier="microsoft_standard", fallback_tiers=("default",)
+    )
+    assert backend.check_token() is True
+    assert backend.load_token() is True
+    assert backend._cache == {"legacy": True}
+
+    backend._cache = {"fresh": True}
+    backend._has_state_changed = True
+    backend.save_token()
+    assert json.loads(store.data[("alice", "microsoft_standard")]["_o365"]) == {"fresh": True}
+    assert json.loads(store.data[("alice", "default")]["_o365"]) == {"legacy": True}

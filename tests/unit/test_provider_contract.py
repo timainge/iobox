@@ -28,11 +28,7 @@ from iobox.providers.google.files import GoogleDriveProvider
 from iobox.providers.o365.email import OutlookProvider
 from tests.fixtures.mock_calendar_responses import MOCK_LIST_RESPONSE, MOCK_SYNC_RESPONSE
 from tests.fixtures.mock_drive_responses import MOCK_LIST_RESPONSE as MOCK_DRIVE_LIST_RESPONSE
-from tests.fixtures.mock_outlook_responses import (
-    MockHttpResponse,
-    make_full_mock_account,
-    make_mock_message,
-)
+from tests.fixtures.mock_outlook_responses import graph_message, make_outlook_provider
 
 # ---------------------------------------------------------------------------
 # Required keys that must be present in every EmailData dict
@@ -66,12 +62,17 @@ def gmail_provider():
 
 @pytest.fixture
 def outlook_provider():
-    """Return an OutlookProvider with a full mock account."""
-    p = OutlookProvider()
-    account = make_full_mock_account()
-    p._account = account
-    p._mailbox = account.mailbox()
-    return p
+    """OutlookProvider on real python-o365 objects over a fake Graph tenant.
+
+    Skips when the ``outlook`` extra is not installed.
+    """
+    return make_outlook_provider()
+
+
+def _o365_message(provider, **kwargs):
+    """Build a real python-o365 ``Message`` from Graph JSON."""
+    mb = provider._mb
+    return mb.message_constructor(parent=mb, **{mb._cloud_data_key: graph_message(**kwargs)})
 
 
 # ---------------------------------------------------------------------------
@@ -263,22 +264,18 @@ class TestOutlookReturnTypes:
         assert isinstance(result, list)
 
     def test_list_tags_returns_dict(self, outlook_provider):
-        # Mock the protocol attribute and register a response
-        con = outlook_provider._account.con
-        con.protocol = MagicMock()
-        con.protocol.service_url = "https://graph.microsoft.com/v1.0"
-        url = "https://graph.microsoft.com/v1.0/me/outlook/masterCategories"
-        con._delta_responses[url] = {"value": [{"displayName": "Work"}]}
         result = outlook_provider.list_tags()
         assert isinstance(result, dict)
+        assert result["Work"] == "Work"
 
     def test_get_new_messages_with_token_returns_tuple(self, outlook_provider):
         delta_link = "https://graph.microsoft.com/v1.0/delta?token=abc"
         new_delta = "https://graph.microsoft.com/v1.0/delta?token=def"
-        outlook_provider._account.con._delta_responses[delta_link] = {
-            "value": [{"id": "msg-a"}, {"id": "msg-b"}],
-            "@odata.deltaLink": new_delta,
-        }
+        outlook_provider.tenant.graph.route(
+            "GET",
+            r"/delta",
+            {"value": [{"id": "msg-a"}, {"id": "msg-b"}], "@odata.deltaLink": new_delta},
+        )
         result = outlook_provider.get_new_messages_with_token(delta_link)
         assert result is not None
         message_ids, new_token = result
@@ -288,9 +285,8 @@ class TestOutlookReturnTypes:
         assert new_token == new_delta
 
     def test_get_new_messages_with_token_returns_none_on_expiry(self, outlook_provider):
-        gone_resp = MockHttpResponse({})
-        gone_resp.status_code = 410
-        outlook_provider._account.con.get = MagicMock(return_value=gone_resp)
+        # Real python-o365 raises requests.HTTPError for a 410 response.
+        outlook_provider.tenant.graph.route("GET", r"/delta", {"error": {}}, status=410)
         result = outlook_provider.get_new_messages_with_token(
             "https://graph.microsoft.com/v1.0/delta?token=expired"
         )
@@ -370,19 +366,19 @@ class TestOutlookEmailDataKeys:
     """Verify OutlookProvider produces EmailData with all required keys."""
 
     def test_message_to_email_data_has_required_keys(self, outlook_provider):
-        msg = make_mock_message()
+        msg = _o365_message(outlook_provider)
         data = outlook_provider._message_to_email_data(msg, include_body=False)
         for key in REQUIRED_EMAILDATA_KEYS:
             assert key in data, f"Missing required key: {key}"
 
     def test_message_to_email_data_full_has_all_keys(self, outlook_provider):
-        msg = make_mock_message()
+        msg = _o365_message(outlook_provider)
         data = outlook_provider._message_to_email_data(msg, include_body=True)
         for key in REQUIRED_EMAILDATA_KEYS | FULL_RETRIEVAL_KEYS:
             assert key in data, f"Missing key: {key}"
 
     def test_message_to_email_data_labels_is_list(self, outlook_provider):
-        msg = make_mock_message(categories=["Work", "Important"])
+        msg = _o365_message(outlook_provider, categories=["Work", "Important"])
         data = outlook_provider._message_to_email_data(msg, include_body=False)
         assert isinstance(data["labels"], list)
         assert data["labels"] == ["Work", "Important"]
@@ -441,7 +437,7 @@ class TestEmailDataValueTypes:
         assert isinstance(data["attachments"], list)
 
     def test_outlook_field_types(self, outlook_provider):
-        msg = make_mock_message(has_attachments=False)
+        msg = _o365_message(outlook_provider, has_attachments=False)
         data = outlook_provider._message_to_email_data(msg, include_body=True)
         assert isinstance(data["message_id"], str)
         assert isinstance(data["subject"], str)
@@ -704,23 +700,10 @@ class TestGoogleDriveReturnTypes:
 
 
 def _make_outlook_calendar_provider():
-    from iobox.providers.o365.calendar import OutlookCalendarProvider
+    """Real python-o365 Schedule/Calendar over a fake Graph session (needs O365)."""
+    from tests.fixtures.mock_outlook_responses import make_calendar_provider
 
-    p = OutlookCalendarProvider.__new__(OutlookCalendarProvider)
-    p.account_email = "user@company.com"
-    p.credentials_dir = None
-    p.mode = "readonly"
-
-    from unittest.mock import MagicMock
-
-    account = MagicMock()
-    calendar = MagicMock()
-    calendar.get_events.return_value = iter([])
-    schedule = MagicMock()
-    schedule.get_default_calendar.return_value = calendar
-    account.schedule.return_value = schedule
-    p._account = account
-    return p
+    return make_calendar_provider([], mode="readonly")
 
 
 class TestOutlookCalendarABCCompleteness:
@@ -781,24 +764,10 @@ class TestOutlookCalendarReturnTypes:
 
 
 def _make_onedrive_provider():
-    from iobox.providers.o365.files import OneDriveProvider
+    """Real python-o365 Drive over a fake Graph session (needs O365)."""
+    from tests.fixtures.mock_outlook_responses import make_onedrive_provider
 
-    p = OneDriveProvider.__new__(OneDriveProvider)
-    p.account_email = "user@company.com"
-    p.credentials_dir = None
-    p.mode = "readonly"
-
-    account = MagicMock()
-    drive = MagicMock()
-    drive.search.return_value = []
-    root = MagicMock()
-    root.get_items.return_value = []
-    drive.get_root_folder.return_value = root
-    storage = MagicMock()
-    storage.get_default_drive.return_value = drive
-    account.storage.return_value = storage
-    p._account = account
-    return p
+    return make_onedrive_provider([], mode="readonly")
 
 
 class TestOneDriveABCCompleteness:
@@ -841,7 +810,5 @@ class TestOneDriveReturnTypes:
     def test_get_file_content_returns_str(self) -> None:
 
         p = _make_onedrive_provider()
-        # inject a None-returning get_item so we get "" back
-        p._account.storage().get_default_drive().get_item.return_value = None
-        result = p.get_file_content("missing")
+        result = p.get_file_content("missing")  # 404 from Graph → ""
         assert isinstance(result, str)
