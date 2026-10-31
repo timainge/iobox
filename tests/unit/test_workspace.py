@@ -8,8 +8,11 @@ from_config() for most tests.
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from iobox.providers.base import (
     EmailData,
@@ -25,6 +28,7 @@ from iobox.workspace import (
     Workspace,
     WorkspaceSession,
     _email_data_to_resource,
+    to_utc_datetime,
 )
 
 # ── Mock data helpers ─────────────────────────────────────────────────────────
@@ -226,6 +230,107 @@ class TestFanOut:
         )
         ws.search_emails(EmailQuery())
         assert ws.session.providers["slot_0"].error is None
+
+
+# ── Date parsing / sorting (DATA-02) ─────────────────────────────────────────
+
+
+class TestToUtcDatetime:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("Tue, 10 Mar 2026 10:00:00 +0000", datetime(2026, 3, 10, 10, tzinfo=timezone.utc)),
+            (
+                "Tue, 10 Mar 2026 10:00:00 +0000 (UTC)",
+                datetime(2026, 3, 10, 10, tzinfo=timezone.utc),
+            ),
+            ("10 Mar 2026 21:00:00 +1100", datetime(2026, 3, 10, 10, tzinfo=timezone.utc)),
+            ("2026-03-10T10:00:00Z", datetime(2026, 3, 10, 10, tzinfo=timezone.utc)),
+            ("2026-03-10T21:00:00+11:00", datetime(2026, 3, 10, 10, tzinfo=timezone.utc)),
+            ("2026-03-10T05:00:00-0500", datetime(2026, 3, 10, 10, tzinfo=timezone.utc)),
+            (
+                "2026-03-10T10:00:00.1234567Z",
+                datetime(2026, 3, 10, 10, 0, 0, 123456, tzinfo=timezone.utc),
+            ),
+            (
+                datetime(2026, 3, 10, 10, tzinfo=timezone.utc),
+                datetime(2026, 3, 10, 10, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+    def test_aware_values(self, value: object, expected: datetime) -> None:
+        assert to_utc_datetime(value) == expected
+
+    def test_naive_and_date_only_are_local(self) -> None:
+        local_midnight = datetime(2026, 3, 10).astimezone()
+        assert to_utc_datetime("2026-03-10") == local_midnight
+        assert to_utc_datetime(date(2026, 3, 10)) == local_midnight
+        assert to_utc_datetime("2026-03-10T09:30:00") == datetime(2026, 3, 10, 9, 30).astimezone()
+
+    @pytest.mark.parametrize("value", [None, "", "  ", "Unknown Date", "garbage", 42])
+    def test_unparsable_returns_none(self, value: object) -> None:
+        assert to_utc_datetime(value) is None
+
+    def test_result_is_utc(self) -> None:
+        dt = to_utc_datetime("Tue, 10 Mar 2026 10:00:00 -0800")
+        assert dt is not None and dt.utcoffset() == timedelta(0)
+
+
+class TestDateSorting:
+    def test_emails_mixed_formats_sorted_chronologically(self) -> None:
+        # Raw string sort would put "Wed..." first and the ISO date last.
+        emails = [
+            _email("mid", date="Wed, 11 Mar 2026 09:00:00 +0000"),
+            _email("newest", date="2026-03-12T08:00:00Z"),
+            _email("oldest", date="Thu, 01 Jan 2026 09:00:00 +0000"),
+            # Later wall-clock but earlier instant because of the offset:
+            _email("mid_minus", date="Wed, 11 Mar 2026 18:00:00 +1100"),
+        ]
+        ws = _ws_with_messages(_mock_email_provider(emails))
+        ids = [r["message_id"] for r in ws.search_emails(EmailQuery())]
+        assert ids == ["newest", "mid", "mid_minus", "oldest"]
+
+    def test_unparsable_dates_sort_last(self) -> None:
+        emails = [
+            _email("bad", date="Unknown Date"),
+            _email("old", date="2026-01-01T00:00:00Z"),
+            _email("missing", date=""),
+            _email("new", date="2026-02-01T00:00:00Z"),
+        ]
+        ws = _ws_with_messages(_mock_email_provider(emails))
+        ids = [r["message_id"] for r in ws.search_emails(EmailQuery())]
+        assert ids == ["new", "old", "bad", "missing"]
+
+    def test_events_with_offsets_sorted_chronologically(self) -> None:
+        events = [
+            _event("utc_9am", start="2026-03-10T09:00:00Z"),
+            _event("sydney_7pm_prev", start="2026-03-10T07:00:00+11:00"),  # 20:00Z on the 9th
+            _event("no_start", start=""),
+        ]
+        ws = _ws_with_calendar(_mock_calendar_provider(events))
+        ids = [r["id"] for r in ws.list_events(EventQuery())]
+        assert ids == ["sydney_7pm_prev", "utc_9am", "no_start"]
+
+    def test_files_sorted_by_parsed_modified_at(self) -> None:
+        files = [
+            _file("a", modified_at="2026-03-10T10:00:00+05:00"),  # 05:00Z
+            _file("b", modified_at="2026-03-10T06:00:00Z"),
+        ]
+        ws = _ws_with_files(_mock_file_provider(files))
+        assert [r["id"] for r in ws.list_files(FileQuery())] == ["b", "a"]
+
+    def test_search_merges_rfc2822_and_iso(self) -> None:
+        email_p = _mock_email_provider([_email("e1", date="Tue, 10 Mar 2026 10:00:00 +0000")])
+        file_p = _mock_file_provider([])
+        f = _file("f1")
+        f["created_at"] = "2026-03-11T00:00:00Z"
+        file_p.list_files.return_value = [f]
+        ws = Workspace(
+            name="test",
+            email_providers=[ProviderSlot(name="msg", provider=email_p)],
+            file_providers=[ProviderSlot(name="drv", provider=file_p)],
+        )
+        assert [r["id"] for r in ws.search("x", types=["email", "file"])] == ["f1", "e1"]
 
 
 # ── TestSearchMessages ────────────────────────────────────────────────────────

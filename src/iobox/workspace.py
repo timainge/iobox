@@ -20,10 +20,14 @@ Usage::
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from iobox.providers.base import (
     Email,
@@ -40,6 +44,105 @@ if TYPE_CHECKING:
     from iobox.space_config import SpaceConfig
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+# ── Date normalisation ────────────────────────────────────────────────────────
+
+_ISO_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})"
+    r"(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?)?"
+    r"\s*(Z|[+-]\d{2}(?::?\d{2})?)?$",
+    re.IGNORECASE,
+)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Naive datetimes are taken as local time; result is aware UTC."""
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # interpret as local wall-clock time
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_iso(text: str) -> datetime | None:
+    m = _ISO_RE.match(text)
+    if not m:
+        return None
+    year, month, day, hh, mm, ss, frac, tz = m.groups()
+    micro = int((frac or "0")[:6].ljust(6, "0"))
+    tzinfo: timezone | None = None
+    if tz:
+        if tz.upper() == "Z":
+            tzinfo = timezone.utc
+        else:
+            sign = -1 if tz[0] == "-" else 1
+            digits = tz[1:].replace(":", "")
+            offset = timedelta(hours=int(digits[:2]), minutes=int(digits[2:4] or 0))
+            tzinfo = timezone(sign * offset)
+    try:
+        return datetime(
+            int(year),
+            int(month),
+            int(day),
+            int(hh or 0),
+            int(mm or 0),
+            int(ss or 0),
+            micro,
+            tzinfo=tzinfo,
+        )
+    except ValueError:
+        return None
+
+
+def to_utc_datetime(value: object) -> datetime | None:
+    """Parse any date value seen in provider results to an aware UTC datetime.
+
+    Accepts ``datetime``/``date`` objects, RFC 2822 strings (Gmail ``Date``
+    headers, e.g. ``"Tue, 10 Mar 2026 10:00:00 +1100"``) and ISO 8601 strings
+    including a ``Z`` suffix, numeric offsets, long fractional seconds and
+    date-only values (``"2026-03-10"``). Values without a timezone are taken
+    as local time. Returns ``None`` for missing or unparsable values.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return _as_utc(value)
+    if isinstance(value, date):
+        return _as_utc(datetime(value.year, value.month, value.day))
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    dt = _parse_iso(text)
+    if dt is None:
+        try:
+            dt = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if dt is None:  # older Pythons return None instead of raising
+            return None
+    return _as_utc(dt)
+
+
+def sort_by_date(
+    items: list[_T], key: Callable[[_T], object], *, newest_first: bool = True
+) -> list[_T]:
+    """Sort *items* by the date returned by *key* (see :func:`to_utc_datetime`).
+
+    Items whose date is missing or unparsable sort last, in their original order.
+    """
+    dated: list[tuple[datetime, _T]] = []
+    undated: list[_T] = []
+    for item in items:
+        dt = to_utc_datetime(key(item))
+        if dt is None:
+            undated.append(item)
+        else:
+            dated.append((dt, item))
+    dated.sort(key=lambda pair: pair[0], reverse=newest_first)
+    return [item for _, item in dated] + undated
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -150,7 +253,7 @@ class Workspace:
         results: list[EmailData] = self._fan_out(
             self.email_providers, "search_emails", query, providers, tags
         )
-        return sorted(results, key=lambda m: m.get("date", ""), reverse=True)
+        return sort_by_date(results, lambda m: m.get("date"))
 
     def list_events(
         self,
@@ -163,7 +266,7 @@ class Workspace:
             self.calendar_providers, "list_events", query, providers, tags
         )
         # Events sorted ascending by start time (chronological order)
-        return sorted(results, key=lambda e: e.get("start", ""), reverse=False)
+        return sort_by_date(results, lambda e: e.get("start"), newest_first=False)
 
     def list_files(
         self,
@@ -175,7 +278,7 @@ class Workspace:
         results: list[File] = self._fan_out(
             self.file_providers, "list_files", query, providers, tags
         )
-        return sorted(results, key=lambda f: f.get("modified_at", ""), reverse=True)
+        return sort_by_date(results, lambda f: f.get("modified_at"))
 
     def search(
         self,
@@ -218,7 +321,7 @@ class Workspace:
                 except Exception as exc:
                     logger.error("search() %s fan-out failed: %s", type_name, exc)
 
-        return sorted(all_results, key=lambda r: r.get("created_at", ""), reverse=True)
+        return sort_by_date(all_results, lambda r: r.get("created_at"))
 
     def auth_status(self) -> dict[str, ProviderSession]:
         """Return current per-slot session state."""
