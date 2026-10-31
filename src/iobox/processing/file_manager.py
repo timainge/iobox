@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+import tempfile
+from datetime import datetime, timezone
 from typing import Any
 
 import yaml
@@ -357,29 +358,65 @@ class SyncState:
         self.synced_message_ids: list[str] = []
 
     def load(self) -> bool:
-        """Load sync state from file. Returns True if state exists."""
-        if os.path.exists(self.filepath):
-            with open(self.filepath) as f:
+        """Load sync state from file. Returns True if usable state exists.
+
+        A missing file returns False. An unreadable or corrupt file (invalid
+        JSON, or JSON that is not an object) is logged as a warning and
+        treated as no state — the next sync falls back to a full query and
+        :meth:`save` overwrites the bad file.
+        """
+        if not os.path.exists(self.filepath):
+            return False
+        try:
+            with open(self.filepath, encoding="utf-8") as f:
                 data = json.load(f)
-            self.provider = data.get("provider")
-            self.last_history_id = data.get("last_history_id")
-            self.delta_links = data.get("delta_links", {})
-            self.last_sync_time = data.get("last_sync_time")
-            self.synced_message_ids = data.get("synced_message_ids", [])
-            return True
-        return False
+            if not isinstance(data, dict):
+                raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+        except (OSError, ValueError) as e:  # JSONDecodeError/UnicodeDecodeError are ValueErrors
+            logger.warning(
+                f"Ignoring corrupt sync state file {self.filepath}: {e}. "
+                "A full sync will be performed."
+            )
+            return False
+
+        self.provider = data.get("provider")
+        self.last_history_id = data.get("last_history_id")
+        delta_links = data.get("delta_links")
+        self.delta_links = delta_links if isinstance(delta_links, dict) else {}
+        self.last_sync_time = data.get("last_sync_time")
+        synced = data.get("synced_message_ids")
+        self.synced_message_ids = synced if isinstance(synced, list) else []
+        return True
 
     def save(self) -> None:
-        """Save current sync state to file."""
+        """Save current sync state to file atomically.
+
+        The JSON is written to a temporary file in the same directory and then
+        moved into place with :func:`os.replace`, so an interrupted write never
+        leaves a truncated state file behind.
+        """
+        self.last_sync_time = datetime.now(timezone.utc).isoformat()
         data = {
             "provider": self.provider,
             "last_history_id": self.last_history_id,
             "delta_links": self.delta_links,
-            "last_sync_time": datetime.utcnow().isoformat(),
+            "last_sync_time": self.last_sync_time,
             "synced_message_ids": self.synced_message_ids,
         }
-        with open(self.filepath, "w") as f:
-            json.dump(data, f, indent=2)
+        directory = os.path.dirname(self.filepath) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=f"{self.FILENAME}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.filepath)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def update(self, history_id: str, new_message_ids: list[str]) -> None:
         """Update state with new sync results (Gmail convenience method)."""

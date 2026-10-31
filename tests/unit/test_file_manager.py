@@ -454,6 +454,60 @@ class TestSyncState:
         assert set(state2.synced_message_ids) == {"msg-1", "msg-2", "msg-3", "msg-4"}
         assert state2.last_history_id == "hist-500"
 
+    @pytest.mark.parametrize("content", ["", "{not json", "[1, 2]", "null", "\xff\xfe"])
+    def test_load_corrupt_file_is_treated_as_no_state(self, tmp_path, content, caplog):
+        """SYNC-03: a corrupt state file logs a warning and returns False."""
+        path = tmp_path / SyncState.FILENAME
+        path.write_bytes(content.encode("latin-1"))
+        state = SyncState(str(tmp_path))
+        with caplog.at_level("WARNING", logger="iobox.processing.file_manager"):
+            assert state.load() is False
+        assert state.last_history_id is None
+        assert state.synced_message_ids == []
+        assert "corrupt sync state" in caplog.text
+
+    def test_save_after_corrupt_load_recovers(self, tmp_path):
+        (tmp_path / SyncState.FILENAME).write_text("{trunc")
+        state = SyncState(str(tmp_path))
+        state.load()
+        state.update("hist-1", ["m1"])
+        state2 = SyncState(str(tmp_path))
+        assert state2.load() is True
+        assert state2.last_history_id == "hist-1"
+
+    def test_save_is_atomic_on_write_failure(self, tmp_path):
+        """SYNC-03: a failed write leaves the previous state intact and no temp files."""
+        state = SyncState(str(tmp_path))
+        state.update("hist-1", ["m1"])
+        original = (tmp_path / SyncState.FILENAME).read_text()
+
+        state.last_history_id = "hist-2"
+        with (
+            patch("iobox.processing.file_manager.json.dump", side_effect=OSError("disk full")),
+            pytest.raises(OSError),
+        ):
+            state.save()
+
+        assert (tmp_path / SyncState.FILENAME).read_text() == original
+        assert os.listdir(tmp_path) == [SyncState.FILENAME]
+
+    def test_save_uses_os_replace(self, tmp_path):
+        state = SyncState(str(tmp_path))
+        with patch("iobox.processing.file_manager.os.replace", wraps=os.replace) as rep:
+            state.save()
+        rep.assert_called_once()
+        src, dst = rep.call_args[0]
+        assert dst == state.filepath
+        assert os.path.dirname(src) == str(tmp_path)
+
+    def test_save_sets_timezone_aware_sync_time(self, tmp_path):
+        state = SyncState(str(tmp_path))
+        state.save()
+        state2 = SyncState(str(tmp_path))
+        state2.load()
+        assert state2.last_sync_time is not None
+        assert state2.last_sync_time.endswith("+00:00")
+
     def test_sync_state_update_without_prior_load(self, tmp_path):
         """update() can be called on a fresh SyncState without prior load()."""
         state = SyncState(str(tmp_path))
