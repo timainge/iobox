@@ -565,7 +565,8 @@ class TestSpaceNameValidation:
 
 class TestAccountValidation:
     @pytest.mark.parametrize(
-        "account", ["../evil", "a/b@x.com", "a\\b@x.com", ".hidden@x.com", "a\x00b", "", "  "]
+        "account",
+        ["../evil", "..", ".", "a/b@x.com", "a\\b@x.com", ".hidden@x.com", "a\x00b", "", "  "],
     )
     def test_invalid_accounts_rejected(self, account: str) -> None:
         with pytest.raises(ValueError, match="Invalid account"):
@@ -573,7 +574,9 @@ class TestAccountValidation:
         with pytest.raises(ValueError):
             ServiceEntry(number=1, service="google", account=account, scopes=["email"])
 
-    @pytest.mark.parametrize("account", ["tim@gmail.com", "Tim.Ainge@Example.COM", "default"])
+    @pytest.mark.parametrize(
+        "account", ["tim@gmail.com", "Tim.Ainge@Example.COM", "default", "a..b@x.com"]
+    )
     def test_valid_accounts_preserved(self, account: str) -> None:
         # Case is preserved so existing token directories keep working.
         assert sc.validate_account(account) == account

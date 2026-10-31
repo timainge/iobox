@@ -65,8 +65,10 @@ def validate_account(account: str) -> str:
     """Return *account* unchanged if it is safe to use as a directory name.
 
     Account strings (usually email addresses) name per-account token and index
-    directories. Rejects empty strings, path separators, ``..``, NUL and a
-    leading ``.``. Case is preserved — existing directories are not renamed.
+    directories. Rejects empty strings, path separators, NUL and a leading
+    ``.`` (which also covers ``.`` and ``..``). Without separators the value is
+    a single path component, so ``a..b@x.com`` is safe. Case is preserved —
+    existing directories are not renamed.
     """
     if not isinstance(account, str) or not account.strip():
         raise ValueError("Invalid account: must be a non-empty string.")
@@ -74,11 +76,10 @@ def validate_account(account: str) -> str:
         "/" in account
         or "\\" in account
         or "\x00" in account
-        or ".." in account
         or account.startswith(".")
     ):
         raise ValueError(
-            f"Invalid account {account!r}: must not contain '/', '\\', '..', NUL or start with '.'."
+            f"Invalid account {account!r}: must not contain '/', '\\' or NUL, or start with '.'."
         )
     return account
 
