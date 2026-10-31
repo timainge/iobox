@@ -1796,6 +1796,29 @@ class TestBatchPartialFailure:
 
 
 class TestNoInteractiveAuth:
+    def test_workspace_auth_status_matches_deduplicated_slot_names(self):
+        """Legacy configs with duplicate slugs get renamed slots (x, x-2)."""
+        from iobox.workspace import Workspace
+
+        first = _entry("tim@gmail.com", scopes=("email",))
+        second = _entry("tim@gmail.co.uk", scopes=("email",), number=2)
+        second.slug = first.slug  # as written by an older iobox
+        _give_token(first)
+        _save_space("personal", [first, second])
+
+        from iobox.space_config import load_space
+
+        with patch("iobox.providers.google.email.GmailProvider.get_profile") as profile:
+            profile.return_value = {"emailAddress": "tim@gmail.com"}
+            ws = Workspace.from_config(load_space("personal"))
+            with patch(f"{MODULE}._get_workspace", return_value=ws):
+                result = workspace_auth_status()
+
+        assert [s.name for s in ws.email_providers] == ["tim-gmail", "tim-gmail-2"]
+        assert result["slots"]["tim-gmail"]["authenticated"] is True
+        assert result["slots"]["tim-gmail-2"]["authenticated"] is False
+        assert profile.call_count == 1
+
     def test_workspace_auth_status_skips_slots_without_token(self):
         authed = _entry("me@gmail.com", scopes=("email", "drive"))
         missing = _entry("other@gmail.com", scopes=("email",), number=2)
@@ -1805,9 +1828,14 @@ class TestNoInteractiveAuth:
         ws = MagicMock()
         ws.name = "personal"
         slots = {}
-        for name in (authed.slug, f"{authed.slug}-drive", missing.slug):
+        for name, entry in (
+            (authed.slug, authed),
+            (f"{authed.slug}-drive", authed),
+            (missing.slug, missing),
+        ):
             s = MagicMock()
             s.name = name
+            s.service_id = entry.id
             s.provider.get_profile.return_value = {"emailAddress": "x@y.com"}
             slots[name] = s
         ws.email_providers = [slots[authed.slug], slots[missing.slug]]

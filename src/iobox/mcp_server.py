@@ -2278,11 +2278,12 @@ def list_provider_slots(workspace: str | None = None) -> dict:
     }
 
 
-def _cached_auth_by_slot(ws_name: str) -> dict[str, bool] | None:
-    """Map each slot name in *ws_name* to whether a cached token exists.
+def _cached_auth_by_service(ws_name: str) -> dict[str, bool] | None:
+    """Map each service entry id in *ws_name* to whether a cached token exists.
 
-    Slot names mirror ``Workspace.from_config``: ``slug`` (email),
-    ``slug-cal``, ``slug-drive``. Returns None if the config can't be read.
+    Slots record the entry they were built from (``ProviderSlot.service_id``),
+    so this stays correct when slot names are de-duplicated. Returns None if
+    the config can't be read.
     """
     try:
         from iobox.space_config import is_authenticated, load_space
@@ -2290,12 +2291,7 @@ def _cached_auth_by_slot(ws_name: str) -> dict[str, bool] | None:
         config = load_space(ws_name)
     except Exception:
         return None
-    out: dict[str, bool] = {}
-    for entry in config.services:
-        authed = is_authenticated(entry)
-        for name in (entry.slug, f"{entry.slug}-cal", f"{entry.slug}-drive"):
-            out[name] = authed
-    return out
+    return {entry.id: is_authenticated(entry) for entry in config.services}
 
 
 @_tool
@@ -2317,10 +2313,11 @@ def workspace_auth_status(workspace: str | None = None) -> dict:
     if not ws:
         return {"error": "No active workspace configured."}
 
-    cached = _cached_auth_by_slot(ws.name)
+    cached = _cached_auth_by_service(ws.name)
 
     def _check(slot: Any) -> dict:
-        if cached is not None and cached.get(slot.name) is False:
+        service_id = getattr(slot, "service_id", None)
+        if cached is not None and service_id is not None and cached.get(service_id) is False:
             # No cached token: calling the provider would start an interactive
             # sign-in inside the server process. Report instead.
             return {

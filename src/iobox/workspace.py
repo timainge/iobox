@@ -155,6 +155,8 @@ class ProviderSlot:
     name: str
     provider: Any  # EmailProvider | CalendarProvider | FileProvider
     tags: list[str] = field(default_factory=list)
+    #: ``ServiceEntry.id`` this slot was built from (set by ``from_config``).
+    service_id: str | None = None
 
 
 #: Default look-back window for event text search when no ``after`` is given.
@@ -486,19 +488,27 @@ class Workspace:
                     from iobox.providers.google.email import GmailProvider
 
                     g_msg: Any = GmailProvider(auth=auth)
-                    email_slots.append(ProviderSlot(name=entry.slug, provider=g_msg))
+                    email_slots.append(
+                        ProviderSlot(name=entry.slug, provider=g_msg, service_id=entry.id)
+                    )
 
                 if "calendar" in entry.scopes:
                     from iobox.providers.google.calendar import GoogleCalendarProvider
 
                     g_cal: Any = GoogleCalendarProvider(auth=auth, mode=entry.mode)
-                    calendar_slots.append(ProviderSlot(name=f"{entry.slug}-cal", provider=g_cal))
+                    calendar_slots.append(
+                        ProviderSlot(name=f"{entry.slug}-cal", provider=g_cal, service_id=entry.id)
+                    )
 
                 if "drive" in entry.scopes:
                     from iobox.providers.google.files import GoogleDriveProvider
 
                     g_drv: Any = GoogleDriveProvider(auth=auth, mode=entry.mode)
-                    file_slots.append(ProviderSlot(name=f"{entry.slug}-drive", provider=g_drv))
+                    file_slots.append(
+                        ProviderSlot(
+                            name=f"{entry.slug}-drive", provider=g_drv, service_id=entry.id
+                        )
+                    )
 
             elif entry.service == "o365":
                 from iobox.providers.o365.auth import MicrosoftAuth, get_microsoft_scopes
@@ -518,7 +528,9 @@ class Workspace:
                     from iobox.providers.o365.email import OutlookProvider
 
                     o_msg: Any = OutlookProvider(auth=ms_auth)
-                    email_slots.append(ProviderSlot(name=entry.slug, provider=o_msg))
+                    email_slots.append(
+                        ProviderSlot(name=entry.slug, provider=o_msg, service_id=entry.id)
+                    )
 
                 if "calendar" in entry.scopes:
                     from iobox.providers.o365.calendar import OutlookCalendarProvider
@@ -529,7 +541,9 @@ class Workspace:
                         mode=entry.mode,
                         auth=ms_auth,
                     )
-                    calendar_slots.append(ProviderSlot(name=f"{entry.slug}-cal", provider=o_cal))
+                    calendar_slots.append(
+                        ProviderSlot(name=f"{entry.slug}-cal", provider=o_cal, service_id=entry.id)
+                    )
 
                 if "drive" in entry.scopes:
                     from iobox.providers.o365.files import OneDriveProvider
@@ -540,7 +554,11 @@ class Workspace:
                         mode=entry.mode,
                         auth=ms_auth,
                     )
-                    file_slots.append(ProviderSlot(name=f"{entry.slug}-drive", provider=o_drv))
+                    file_slots.append(
+                        ProviderSlot(
+                            name=f"{entry.slug}-drive", provider=o_drv, service_id=entry.id
+                        )
+                    )
 
         for slots in (email_slots, calendar_slots, file_slots):
             _dedupe_slot_names(slots)
