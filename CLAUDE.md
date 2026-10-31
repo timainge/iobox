@@ -220,7 +220,7 @@ iobox events get EVENT_ID
 iobox events save EVENT_ID -o ./output
 iobox events create --title "Standup" --start "2026-04-01T09:00" --end "2026-04-01T09:30"
 iobox events delete EVENT_ID
-iobox events rsvp EVENT_ID --response accept
+iobox events rsvp EVENT_ID --response accepted
 
 # Files
 iobox files list --query "Q4 report" --provider my-drive
