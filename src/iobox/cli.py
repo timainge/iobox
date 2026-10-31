@@ -6,6 +6,7 @@ This module provides a user-friendly CLI for interacting with iobox functionalit
 
 import logging
 import os
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,11 @@ def _gate_group_subcommand(ctx: typer.Context, group: str) -> None:
     obj = ctx.find_root().obj or {}
     mode = obj.get("mode") or get_mode_from_env()
     _enforce_mode(f"{group} {sub}", mode)
+
+
+# Matches a Gmail ``in:`` / ``-in:`` operator (``in:trash``, ``in:anywhere`` ...)
+# but not words that merely end in "in", such as ``domain:``.
+_GMAIL_IN_OPERATOR = re.compile(r"(?:^|[\s(])-?in:", re.IGNORECASE)
 
 
 def _get_provider(ctx: typer.Context) -> EmailProvider:
@@ -997,10 +1003,18 @@ def trash(
             typer.echo(f"{past_tense} message {message_id}")
         else:
             after, _before = _parse_dates(days, None, None)
+            search_query = query
+            if untrash:
+                # Restoring needs to search the trash itself.  Gmail excludes
+                # TRASH unless asked, and only searches it with ``in:trash``.
+                provider_name = ctx.obj.get("provider_name", "gmail") if ctx.obj else "gmail"
+                if provider_name == "gmail" and not _GMAIL_IN_OPERATOR.search(query):
+                    search_query = f"in:trash {query}".strip()
             eq = EmailQuery(
-                raw_query=query,
+                raw_query=search_query,
                 max_results=max_results,
                 after=after,
+                include_spam_trash=untrash,
             )
             results = provider.search_emails(eq)
             if not results:

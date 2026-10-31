@@ -1346,3 +1346,49 @@ class TestLabelValidation:
         assert result.exit_code == 0
         provider.mark_read.assert_called_once_with("m1", read=True)
         provider.set_star.assert_called_once_with("m1", starred=True)
+
+
+class TestUntrashBatch:
+    """trash --untrash in query mode searches the trash (CLI-02)."""
+
+    def _run(self, args: list[str], global_args: list[str] | None = None):
+        provider = _mock_provider(search_emails=[{"message_id": "m1"}])
+        with patch("iobox.cli.get_provider", return_value=provider):
+            result = runner.invoke(
+                app,
+                [*(global_args or []), "--mode", "dangerous", "trash", *args],
+                input="y\n",
+            )
+        return result, provider
+
+    def test_untrash_includes_trash_and_scopes_gmail_query(self):
+        result, provider = self._run(["-q", "from:x@y.com", "--untrash"])
+        assert result.exit_code == 0, result.output
+        eq = provider.search_emails.call_args[0][0]
+        assert eq.include_spam_trash is True
+        assert eq.raw_query == "in:trash from:x@y.com"
+        provider.untrash.assert_called_once_with("m1")
+
+    def test_untrash_keeps_explicit_in_operator(self):
+        _, provider = self._run(["-q", "in:anywhere from:x@y.com", "--untrash"])
+        eq = provider.search_emails.call_args[0][0]
+        assert eq.raw_query == "in:anywhere from:x@y.com"
+        assert eq.include_spam_trash is True
+
+    def test_untrash_domain_operator_is_not_in_operator(self):
+        _, provider = self._run(["-q", "from:(domain:example.com)", "--untrash"])
+        eq = provider.search_emails.call_args[0][0]
+        assert eq.raw_query.startswith("in:trash ")
+
+    def test_untrash_outlook_does_not_rewrite_query(self):
+        _, provider = self._run(["-q", "invoice", "--untrash"], ["--provider", "outlook"])
+        eq = provider.search_emails.call_args[0][0]
+        assert eq.raw_query == "invoice"
+        assert eq.include_spam_trash is True
+
+    def test_trash_does_not_include_trash(self):
+        _, provider = self._run(["-q", "from:x@y.com"])
+        eq = provider.search_emails.call_args[0][0]
+        assert eq.include_spam_trash is False
+        assert eq.raw_query == "from:x@y.com"
+        provider.trash.assert_called_once_with("m1")

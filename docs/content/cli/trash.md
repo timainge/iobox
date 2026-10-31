@@ -28,7 +28,10 @@ One of `--message-id` or `--query` is required; `--message-id` wins if both are 
 !!! warning "Batch mode asks for confirmation"
     With `--query`, iobox shows how many emails matched and asks before trashing or restoring them. Single mode does not prompt. Outlook moves messages to Deleted Items.
 
-To restore with `--query`, the search must reach trashed mail (e.g. Gmail `in:trash`).
+With `--untrash --query`, iobox searches trashed mail: on Gmail the query is prefixed with `in:trash` (unless it already contains an `in:` operator) and spam/trash are included in the search.
+
+!!! warning "Outlook: restore by `--message-id`"
+    Outlook searches only the Inbox, so `--untrash --query` won't find messages in Deleted Items. Restore Outlook messages one at a time with `--message-id`.
 
 ## Examples
 
@@ -42,6 +45,12 @@ Restore it:
 
 ```bash
 iobox --mode dangerous trash --message-id 18e4a2b3c1d5f6a7 --untrash
+```
+
+Restore everything from a sender trashed in the last 30 days (Gmail):
+
+```bash
+iobox --mode dangerous trash -q "from:spam@example.com" -d 30 --untrash
 ```
 
 Trash everything from a sender in the last 30 days:
