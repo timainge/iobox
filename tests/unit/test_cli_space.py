@@ -302,6 +302,34 @@ class TestSpaceAdd:
         config = load_space("personal")
         assert len(config.services) == 0
 
+    def test_add_duplicate_account_rejected(self, mock_google_auth: Any) -> None:
+        """WS-04: the same (service, account) pair can't be added twice."""
+        _invoke("space", "create", "personal")
+        _invoke("space", "add", "google", "tim@gmail.com", "--email")
+        mock_google_auth.reset_mock()
+
+        result = _invoke("space", "add", "google", "Tim@Gmail.com", "--calendar")
+
+        assert result.exit_code == 1
+        assert "already exists" in result.output
+        assert "iobox space login 1" in result.output
+        assert "iobox space remove 1" in result.output
+        mock_google_auth.assert_not_called()
+
+        from iobox.space_config import load_space
+
+        assert len(load_space("personal").services) == 1
+
+    def test_add_same_account_different_service_allowed(self, mock_google_auth: Any) -> None:
+        _invoke("space", "create", "personal")
+        _invoke("space", "add", "google", "tim@company.com", "--email")
+        result = _invoke("space", "add", "o365", "tim@company.com", "--email")
+        assert result.exit_code == 0
+
+        from iobox.space_config import load_space
+
+        assert len(load_space("personal").services) == 2
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TestSpaceLogin

@@ -106,6 +106,8 @@ iobox space add SERVICE ACCOUNT [OPTIONS]
 
 At least one of `--email`, `--calendar`, `--drive` is required. After sign-in, iobox checks that the signed-in account matches `ACCOUNT` (case-insensitive); on a mismatch the token is discarded and the session is not added.
 
+Each `SERVICE` + `ACCOUNT` pair can be added to a space only once (account compared case-insensitively). To re-authenticate an existing session use [`space login`](#login); to change its scopes or mode, [`space remove`](#remove) it and add it again.
+
 The session's slug is derived from the account (`you@gmail.com` → `you-gmail`) and names its workspace slots: the email slot is `you-gmail`, the calendar slot `you-gmail-cal`, and the drive slot `you-gmail-drive`. Use these with `--provider` on [`events`](events.md) and [`files`](files.md).
 
 ```bash

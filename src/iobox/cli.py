@@ -1433,6 +1433,28 @@ def space_add(
         raise typer.Exit(1)
 
     config = load_space(active)
+
+    # One session per (service, account): a second entry would share the same
+    # token files and slug, and only one of them could ever be used.
+    wanted = account.strip().lower()
+    existing = next(
+        (
+            s
+            for s in config.services
+            if s.service == service and (s.account or "").strip().lower() == wanted
+        ),
+        None,
+    )
+    if existing is not None:
+        typer.echo(
+            f"Service session #{existing.number} ({existing.service}/{existing.account}) "
+            f"already exists in space '{active}'. Run `iobox space login {existing.number}` "
+            f"to re-authenticate it, or `iobox space remove {existing.number}` first to "
+            "re-add it with different scopes or mode.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     mode = "readonly" if read else "standard"
     number = max((s.number for s in config.services), default=0) + 1
     entry = ServiceEntry(
