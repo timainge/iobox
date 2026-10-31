@@ -9,6 +9,8 @@ Every tool below is registered only in the [access mode](configuration.md#access
 
 `search_workspace` takes `workspace` but not `provider`; `semantic_search_workspace` takes neither.
 
+**File paths.** `output_dir`, `output_path`, `attachments`, and `local_path` are confined to the [file access root](configuration.md#file-access-root) (`IOBOX_MCP_ROOT`, default `~/iobox`). Relative paths resolve under it, and `output_dir="."` means the root itself. Downloads never overwrite an existing file.
+
 ## Cross-type
 
 | Tool | Mode | Description | Key arguments |

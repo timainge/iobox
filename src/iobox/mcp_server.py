@@ -12,6 +12,7 @@ import functools
 import os
 import typing
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -218,6 +219,113 @@ def _resolve_email_provider(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+class PathNotAllowedError(ToolInputError):
+    """A filesystem path supplied to a tool falls outside the MCP root."""
+
+
+_DEFAULT_MCP_ROOT = "~/iobox"
+
+
+def _mcp_root() -> Path:
+    """Return the resolved directory every MCP filesystem path is confined to.
+
+    Set with ``IOBOX_MCP_ROOT`` (default ``~/iobox``). Created on demand.
+    """
+    raw = os.environ.get("IOBOX_MCP_ROOT", "").strip() or _DEFAULT_MCP_ROOT
+    root = Path(os.path.realpath(os.path.expanduser(raw)))
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _denied_paths() -> tuple[list[Path], list[Path]]:
+    """Return (denied directories, denied files) holding credentials or tokens.
+
+    ``~/.iobox`` (workspace tokens) is always denied, even when the MCP root is
+    configured to contain it. The legacy single-account credential/token files
+    under ``CREDENTIALS_DIR`` are denied too.
+    """
+
+    def _real(p: str) -> Path:
+        return Path(os.path.realpath(os.path.expanduser(p)))
+
+    creds_dir = os.environ.get("CREDENTIALS_DIR") or os.getcwd()
+    dirs = [_real("~/.iobox"), _real(os.path.join(creds_dir, "tokens"))]
+    files = [
+        _real(
+            os.path.join(
+                creds_dir, os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
+            )
+        ),
+        _real(os.path.join(creds_dir, os.environ.get("GMAIL_TOKEN_FILE", "token.json"))),
+        _real(os.path.join(creds_dir, "o365_token.txt")),
+    ]
+    return dirs, files
+
+
+def _confine_path(path: str | None, *, purpose: str = "path") -> Path:
+    """Resolve *path* inside the MCP root, or raise ``PathNotAllowedError``.
+
+    Relative paths resolve under the root; absolute (and ``~``) paths must
+    resolve inside it. Symlinks are resolved first (``os.path.realpath``) so a
+    link inside the root can't point outside it. Paths inside ``~/.iobox`` or
+    at legacy credential/token files are always refused.
+    """
+    root = _mcp_root()
+    raw = (path or "").strip() or "."
+    expanded = os.path.expanduser(raw)
+    candidate = expanded if os.path.isabs(expanded) else os.path.join(root, expanded)
+    resolved = Path(os.path.realpath(candidate))
+
+    if resolved != root and not resolved.is_relative_to(root):
+        raise PathNotAllowedError(
+            f"{purpose} {raw!r} is outside the iobox MCP root {str(root)!r}. "
+            "Use a path inside it (relative paths resolve under it), or set "
+            "IOBOX_MCP_ROOT to change it."
+        )
+    denied_dirs, denied_files = _denied_paths()
+    if any(resolved == d or resolved.is_relative_to(d) for d in denied_dirs) or (
+        resolved in denied_files
+    ):
+        raise PathNotAllowedError(f"{purpose} {raw!r} points at iobox credentials or tokens.")
+    return resolved
+
+
+def _confine_existing_file(path: str, *, purpose: str) -> Path:
+    """Confine *path* and require it to be an existing regular file."""
+    resolved = _confine_path(path, purpose=purpose)
+    if not resolved.is_file():
+        raise PathNotAllowedError(f"{purpose} not found or not a regular file: {path!r}")
+    return resolved
+
+
+def _confine_output_dir(output_dir: str | None) -> str:
+    """Confine and create an output directory; return it as a string."""
+    resolved = _confine_path(output_dir, purpose="output_dir")
+    return create_output_directory(str(resolved))
+
+
+def _confine_attachments(attachments: list[str] | None) -> list[str] | None:
+    """Confine each outgoing attachment path; return the resolved paths."""
+    if not attachments:
+        return attachments
+    return [str(_confine_existing_file(fp, purpose="Attachment")) for fp in attachments]
+
+
+def _write_new_file(path: Path, data: bytes) -> None:
+    """Write *data* to *path*, refusing to overwrite anything already there.
+
+    ``O_EXCL`` also refuses a pre-planted symlink at *path*.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "xb") as fh:
+            fh.write(data)
+    except FileExistsError:
+        raise PathNotAllowedError(
+            f"Refusing to overwrite existing file {str(path)!r}; choose a new output_path."
+        ) from None
 
 
 def _email_data_to_dict(data: Any) -> dict[str, Any]:
@@ -481,7 +589,9 @@ def save_email(
 
     Args:
         message_id: Email message ID.
-        output_dir: Directory to save the file (default: current dir).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         prefer_html: Use HTML content if available (default: True).
         download_attachments: Also save every attachment on this email into
             ``output_dir`` (default: False — Markdown only). Gmail slots only.
@@ -501,7 +611,7 @@ def save_email(
     p = _resolve_email_provider(provider=provider, workspace=workspace)
     email_data = _email_data_to_dict(p.get_email_content(message_id, content_type))
     md = convert_email_to_markdown(email_data)
-    out = create_output_directory(output_dir)
+    out = _confine_output_dir(output_dir)
     filepath = save_email_to_markdown(email_data, md, out)
 
     saved: list[dict] = []
@@ -529,19 +639,22 @@ def save_thread(
     include_spam_trash: bool = False,
     provider: str | None = None,
     workspace: str | None = None,
-) -> str:
+) -> str | dict:
     """Save an entire email thread/conversation as a single Markdown file.
 
     Args:
         thread_id: Thread/conversation ID.
-        output_dir: Directory to save the file (default: current dir).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         prefer_html: Use HTML content if available (default: True).
         include_spam_trash: Include messages from SPAM and TRASH (default False).
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
-        Absolute path to the saved file.
+        Absolute path to the saved file, or ``{"error": ...}`` when the
+        output location is refused.
     """
     p = _resolve_email_provider(provider=provider, workspace=workspace)
     messages_raw = p.get_thread(thread_id)
@@ -550,8 +663,8 @@ def save_thread(
     subject = messages[0].get("subject", "thread") if messages else "thread"
     subject_slug = slugify_text(subject)
     filename = f"{subject_slug}_{thread_id}.md"
-    out = create_output_directory(output_dir)
-    filepath = os.path.join(out, filename)
+    out = _confine_output_dir(output_dir)
+    filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md)
     return filepath
@@ -582,7 +695,9 @@ def save_emails_by_query(
 
     Args:
         query: Email search syntax.
-        output_dir: Directory to save files (default: current dir).
+        output_dir: Directory to save files, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         max_results: Maximum emails to save (default 10).
         days: Days back to search (default 7).
         start_date: Start date YYYY/MM/DD (overrides days).
@@ -606,7 +721,7 @@ def save_emails_by_query(
     from iobox.providers.base import EmailQuery
 
     content_type = "text/html" if prefer_html else "text/plain"
-    out = create_output_directory(output_dir)
+    out = _confine_output_dir(output_dir)
     att_filters = (
         [ext.strip().lower() for ext in attachment_types.split(",")] if attachment_types else []
     )
@@ -738,8 +853,11 @@ def download_email_attachment(
     Args:
         message_id: Email message ID containing the attachment.
         attachment_id: Attachment ID from the email's ``attachments`` list.
-        output_path: Local path to write the file. Required when
-            ``return_base64`` is False. Parent directories are created.
+        output_path: File path to write, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it. Required when ``return_base64`` is False. Parent
+            directories are created. An existing file is never overwritten —
+            the call returns an error instead.
         return_base64: If True, skip the disk write and return the bytes
             inline as a base64-encoded ASCII string in the ``data`` field
             (default False).
@@ -751,15 +869,20 @@ def download_email_attachment(
         On base64: ``{"data": str, "bytes_written": int, "encoding": "base64"}``.
         On failure: ``{"error": str}``.
     """
-    if not return_base64 and not output_path:
-        return {"error": "output_path is required when return_base64=False."}
+    path: Path | None = None
+    if not return_base64:
+        if not output_path:
+            return {"error": "output_path is required when return_base64=False."}
+        path = _confine_path(output_path, purpose="output_path")
+        if path.exists() or path.is_symlink():
+            return {"error": f"Refusing to overwrite existing file {str(path)!r}."}
     try:
         p = _resolve_email_provider(provider=provider, workspace=workspace)
         data = p.download_attachment(message_id, attachment_id)
     except Exception as exc:
         return {"error": str(exc)}
 
-    if return_base64:
+    if path is None:
         import base64
 
         return {
@@ -768,11 +891,7 @@ def download_email_attachment(
             "encoding": "base64",
         }
 
-    from pathlib import Path
-
-    path = Path(output_path)  # type: ignore[arg-type]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+    _write_new_file(path, data)
     return {"filepath": str(path), "bytes_written": len(data)}
 
 
@@ -802,16 +921,13 @@ def send_email(
         cc: CC recipients (comma-separated).
         bcc: BCC recipients (comma-separated).
         html: Send body as HTML content (default False).
-        attachments: List of file paths to attach.
+        attachments: List of file paths to attach. Each must be an existing
+            file inside the MCP root (``IOBOX_MCP_ROOT``, default
+            ``~/iobox``); relative paths resolve under it.
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
     """
-    from pathlib import Path
-
-    if attachments:
-        for fp in attachments:
-            if not Path(fp).exists():
-                raise FileNotFoundError(f"Attachment not found: {fp}")
+    attachments = _confine_attachments(attachments)
 
     content_type = "html" if html else "plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
@@ -929,16 +1045,13 @@ def create_gmail_draft(
         cc: CC recipients (comma-separated).
         bcc: BCC recipients (comma-separated).
         html: Use HTML content type (default False).
-        attachments: List of file paths to attach.
+        attachments: List of file paths to attach. Each must be an existing
+            file inside the MCP root (``IOBOX_MCP_ROOT``, default
+            ``~/iobox``); relative paths resolve under it.
         provider: Optional email slot name.
         workspace: Optional workspace name (default: active workspace).
     """
-    from pathlib import Path
-
-    if attachments:
-        for fp in attachments:
-            if not Path(fp).exists():
-                raise FileNotFoundError(f"Attachment not found: {fp}")
+    attachments = _confine_attachments(attachments)
 
     content_type = "html" if html else "plain"
     p = _resolve_email_provider(provider=provider, workspace=workspace)
@@ -1442,7 +1555,9 @@ def save_event(
 
     Args:
         event_id: Event ID.
-        output_dir: Directory to save the file (default: current dir).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         provider: Calendar slot name (default: first calendar slot).
         workspace: Optional workspace name (default: active workspace).
 
@@ -1462,10 +1577,10 @@ def save_event(
     try:
         event = slot.provider.get_event(event_id)
         md = convert_event_to_markdown(event)
-        out = create_output_directory(output_dir)
+        out = _confine_output_dir(output_dir)
         title_slug = slugify_text(event.get("title", "event"))
         filename = f"{title_slug}_{event_id}.md"
-        filepath = os.path.join(out, filename)
+        filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(md)
         return {"filepath": filepath, "title": event.get("title", "")}
@@ -1725,7 +1840,9 @@ def save_file(
 
     Args:
         file_id: File ID.
-        output_dir: Directory to save the file (default: current dir).
+        output_dir: Directory to save the file, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it (default: the root itself).
         provider: File slot name (default: first file slot).
         workspace: Optional workspace name (default: active workspace).
 
@@ -1745,10 +1862,10 @@ def save_file(
     try:
         file_meta = slot.provider.get_file(file_id)
         md = convert_file_to_markdown(file_meta)
-        out = create_output_directory(output_dir)
+        out = _confine_output_dir(output_dir)
         name_slug = slugify_text(file_meta.get("title") or file_meta.get("name", "file"))
         filename = f"{name_slug}_{file_id}.md"
-        filepath = os.path.join(out, filename)
+        filepath = str(_confine_path(os.path.join(out, filename), purpose="output file"))
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(md)
         return {"filepath": filepath, "name": file_meta.get("title", "")}
@@ -1767,13 +1884,19 @@ def download_file(
 
     Args:
         file_id: File ID.
-        output_path: Local file path to write the bytes to.
+        output_path: File path to write the bytes to, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it. An existing file is never overwritten — the call
+            returns an error instead.
         provider: File slot name (default: first file slot).
         workspace: Optional workspace name (default: active workspace).
 
     Returns:
         Dict with ``filepath`` and ``bytes_written``, or ``error``.
     """
+    path = _confine_path(output_path, purpose="output_path")
+    if path.exists() or path.is_symlink():
+        return {"error": f"Refusing to overwrite existing file {str(path)!r}."}
     ws = _get_workspace(workspace)
     if not ws:
         return {"error": "No active workspace configured."}
@@ -1784,11 +1907,7 @@ def download_file(
         return {"error": f"File provider '{provider}' not found."}
     try:
         data = slot.provider.download_file(file_id)
-        from pathlib import Path
-
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        _write_new_file(path, data)
         return {"filepath": str(path), "bytes_written": len(data)}
     except Exception as exc:
         return {"error": str(exc)}
@@ -1805,7 +1924,9 @@ def upload_file(
     """Upload a local file to the file provider.
 
     Args:
-        local_path: Path to the file on disk.
+        local_path: Path to the file on disk, inside the MCP root
+            (``IOBOX_MCP_ROOT``, default ``~/iobox``); relative paths resolve
+            under it.
         name: Optional remote filename (defaults to ``Path(local_path).name``).
         parent_id: Optional parent folder ID.
         provider: File slot name (default: first file slot).
@@ -1814,10 +1935,9 @@ def upload_file(
     Returns:
         Dict with ``id`` and ``name``, or ``error``.
     """
-    from pathlib import Path
-
-    if not Path(local_path).exists():
-        return {"error": f"File not found: {local_path}"}
+    resolved = _confine_existing_file(local_path, purpose="local_path")
+    name = name or Path(local_path).name
+    local_path = str(resolved)
     ws = _get_workspace(workspace)
     if not ws:
         return {"error": "No active workspace configured."}

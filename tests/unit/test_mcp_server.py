@@ -1,7 +1,11 @@
 """Tests for MCP server tools."""
 
+import os
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Mock FastMCP so tests work without mcp package installed
 mock_fastmcp_module = MagicMock()
@@ -58,6 +62,16 @@ from iobox.mcp_server import (  # noqa: E402
 )
 
 MODULE = "iobox.mcp_server"
+
+
+@pytest.fixture(autouse=True)
+def mcp_root(tmp_path, monkeypatch):
+    """Confine every MCP filesystem path to a per-test root (never ~/iobox)."""
+    root = tmp_path / "mcp-root"
+    root.mkdir()
+    monkeypatch.setenv("IOBOX_MCP_ROOT", str(root))
+    monkeypatch.setenv("CREDENTIALS_DIR", str(tmp_path / "creds"))
+    return Path(os.path.realpath(root))
 
 
 def _make_provider():
@@ -256,10 +270,9 @@ class TestSaveEmail:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
         ):
-            result = save_email("m1", output_dir="/tmp/out")
+            result = save_email("m1", output_dir="out")
         assert result["markdown_path"] == "/tmp/out/email.md"
         assert result["attachments"] == []
 
@@ -269,10 +282,9 @@ class TestSaveEmail:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
         ):
-            save_email("m2", output_dir="/tmp/out", prefer_html=False)
+            save_email("m2", output_dir="out", prefer_html=False)
         provider.get_email_content.assert_called_once_with("m2", "text/plain")
 
     def test_save_with_attachments(self):
@@ -282,7 +294,6 @@ class TestSaveEmail:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
             patch(f"{MODULE}.download_email_attachments") as mock_dl,
         ):
@@ -309,10 +320,9 @@ class TestSaveThread:
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
             patch(f"{MODULE}.convert_thread_to_markdown", return_value="# Thread"),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch("builtins.open", MagicMock()),
         ):
-            result = save_thread("t1", output_dir="/tmp/out")
+            result = save_thread("t1", output_dir="out")
         assert "t1" in result
         assert result.endswith(".md")
 
@@ -323,7 +333,6 @@ class TestSaveEmailsByQuery:
         provider.search_emails.return_value = []
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
         ):
             result = save_emails_by_query("from:nobody@example.com")
         assert result["saved_count"] == 0
@@ -339,7 +348,6 @@ class TestSaveEmailsByQuery:
         provider.batch_get_emails.return_value = email_batch
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.check_for_duplicates", return_value=[]),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
@@ -356,7 +364,6 @@ class TestSaveEmailsByQuery:
         provider.batch_get_emails.return_value = email_batch
         with (
             patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch(f"{MODULE}.create_output_directory", return_value="/tmp/out"),
             patch(f"{MODULE}.check_for_duplicates", return_value=["m1"]),
             patch(f"{MODULE}.convert_email_to_markdown", return_value="# Email"),
             patch(f"{MODULE}.save_email_to_markdown", return_value="/tmp/out/email.md"),
@@ -408,15 +415,13 @@ class TestSendEmail:
             attachments=None,
         )
 
-    def test_send_with_attachments(self):
+    def test_send_with_attachments(self, mcp_root):
+        (mcp_root / "f.txt").write_text("x")
         provider = _make_provider()
-        with (
-            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
-            patch("pathlib.Path.exists", return_value=True),
-        ):
-            send_email("bob@example.com", "Hi", "See attached", attachments=["/tmp/f.txt"])
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            send_email("bob@example.com", "Hi", "See attached", attachments=["f.txt"])
         _, kwargs = provider.send_message.call_args
-        assert kwargs["attachments"] == ["/tmp/f.txt"]
+        assert kwargs["attachments"] == [str(mcp_root / "f.txt")]
 
 
 class TestForwardGmail:
@@ -872,9 +877,8 @@ class TestSaveEvent:
                 "iobox.processing.markdown.convert_event_to_markdown",
                 return_value="# Event",
             ),
-            patch(f"{MODULE}.create_output_directory", return_value=str(tmp_path)),
         ):
-            result = save_event("e1", output_dir=str(tmp_path))
+            result = save_event("e1", output_dir="saved")
         assert result["title"] == "Standup"
         assert result["filepath"].endswith(".md")
 
@@ -989,9 +993,8 @@ class TestSaveFile:
                 "iobox.processing.markdown.convert_file_to_markdown",
                 return_value="# File",
             ),
-            patch(f"{MODULE}.create_output_directory", return_value=str(tmp_path)),
         ):
-            result = save_file("f1", output_dir=str(tmp_path))
+            result = save_file("f1", output_dir="saved")
         assert result["filepath"].endswith(".md")
         assert "name" in result
 
@@ -1002,10 +1005,10 @@ class TestSaveFile:
 
 
 class TestDownloadFile:
-    def test_download_file_success(self, tmp_path):
+    def test_download_file_success(self, mcp_root):
         ws = _make_workspace(files=[{"id": "f1"}])
         ws.file_providers[0].provider.download_file.return_value = b"hello world"
-        target = tmp_path / "out" / "file.bin"
+        target = mcp_root / "out" / "file.bin"
         with patch(f"{MODULE}._get_workspace", return_value=ws):
             result = download_file("f1", str(target))
         assert result["bytes_written"] == len(b"hello world")
@@ -1019,8 +1022,8 @@ class TestDownloadFile:
 
 
 class TestUploadFile:
-    def test_upload_file_success(self, tmp_path):
-        local = tmp_path / "report.pdf"
+    def test_upload_file_success(self, mcp_root):
+        local = mcp_root / "report.pdf"
         local.write_bytes(b"data")
         ws = _make_workspace(files=[{"id": "f1"}])
         ws.file_providers[0].provider.upload_file.return_value = {
@@ -1375,3 +1378,216 @@ class TestWorkspaceLoading:
         assert "error" in found[0]
         provider.send_message.assert_not_called()
         provider.search_emails.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Filesystem confinement (SEC-01, SEC-03, SEC-04)
+# ---------------------------------------------------------------------------
+
+
+class TestConfinePath:
+    def test_relative_resolves_under_root(self, mcp_root):
+        from iobox.mcp_server import _confine_path
+
+        assert _confine_path("a/b.txt") == mcp_root / "a" / "b.txt"
+        assert _confine_path(None) == mcp_root
+        assert _confine_path(".") == mcp_root
+
+    def test_absolute_inside_root_allowed(self, mcp_root):
+        from iobox.mcp_server import _confine_path
+
+        assert _confine_path(str(mcp_root / "x.bin")) == mcp_root / "x.bin"
+
+    def test_traversal_rejected(self):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("../escape.txt")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("sub/../../escape.txt")
+
+    def test_absolute_outside_rejected(self, tmp_path):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        with pytest.raises(PathNotAllowedError):
+            _confine_path(str(tmp_path / "elsewhere.txt"))
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("/etc/passwd")
+
+    def test_symlink_escape_rejected(self, mcp_root, tmp_path):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("s")
+        (mcp_root / "linkdir").symlink_to(outside)
+        (mcp_root / "linkfile").symlink_to(outside / "secret.txt")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("linkdir/secret.txt")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("linkfile")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("linkdir/new.bin")
+
+    def test_iobox_home_denied_even_when_root_contains_it(self, tmp_path, monkeypatch):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        home = tmp_path / "home"
+        (home / ".iobox" / "tokens" / "me").mkdir(parents=True)
+        (home / ".iobox" / "tokens" / "me" / "token_standard.json").write_text("{}")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("IOBOX_MCP_ROOT", str(home))
+        with pytest.raises(PathNotAllowedError):
+            _confine_path("~/.iobox/tokens/me/token_standard.json")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path(".iobox/tokens/me/token_standard.json")
+        with pytest.raises(PathNotAllowedError):
+            _confine_path(".iobox")
+        assert _confine_path("notes/a.md") == Path(os.path.realpath(home)) / "notes" / "a.md"
+
+    def test_legacy_credentials_denied(self, mcp_root, monkeypatch):
+        from iobox.mcp_server import PathNotAllowedError, _confine_path
+
+        monkeypatch.setenv("CREDENTIALS_DIR", str(mcp_root))
+        for name in ("credentials.json", "token.json", "o365_token.txt", "tokens/a/t.json"):
+            with pytest.raises(PathNotAllowedError):
+                _confine_path(name)
+
+    def test_root_created_on_demand(self, tmp_path, monkeypatch):
+        from iobox.mcp_server import _mcp_root
+
+        target = tmp_path / "fresh" / "root"
+        monkeypatch.setenv("IOBOX_MCP_ROOT", str(target))
+        assert _mcp_root() == Path(os.path.realpath(target))
+        assert target.is_dir()
+
+    def test_default_root_is_home_iobox(self, tmp_path, monkeypatch):
+        from iobox.mcp_server import _mcp_root
+
+        monkeypatch.delenv("IOBOX_MCP_ROOT", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert _mcp_root() == Path(os.path.realpath(tmp_path)) / "iobox"
+
+
+class TestDownloadConfinement:
+    def test_attachment_outside_root_refused(self, tmp_path):
+        from iobox.mcp_server import download_email_attachment
+
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", output_path=str(tmp_path / "x.bin"))
+        assert "error" in result
+        provider.download_attachment.assert_not_called()
+
+    def test_attachment_written_inside_root(self, mcp_root):
+        from iobox.mcp_server import download_email_attachment
+
+        provider = _make_provider()
+        provider.download_attachment.return_value = b"data"
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", output_path="att/x.bin")
+        assert result == {"filepath": str(mcp_root / "att" / "x.bin"), "bytes_written": 4}
+        assert (mcp_root / "att" / "x.bin").read_bytes() == b"data"
+
+    def test_attachment_does_not_overwrite(self, mcp_root):
+        from iobox.mcp_server import download_email_attachment
+
+        existing = mcp_root / "keep.txt"
+        existing.write_bytes(b"original")
+        provider = _make_provider()
+        provider.download_attachment.return_value = b"new"
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", output_path="keep.txt")
+        assert "error" in result
+        assert existing.read_bytes() == b"original"
+
+    def test_attachment_base64_needs_no_path(self):
+        from iobox.mcp_server import download_email_attachment
+
+        provider = _make_provider()
+        provider.download_attachment.return_value = b"hi"
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = download_email_attachment("m1", "a1", return_base64=True)
+        assert result["data"] == "aGk="
+
+    def test_download_file_outside_root_refused(self, tmp_path):
+        ws = _make_workspace(files=[{"id": "f1"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = download_file("f1", str(tmp_path / "evil.bin"))
+        assert "error" in result
+        ws.file_providers[0].provider.download_file.assert_not_called()
+
+    def test_download_file_does_not_overwrite(self, mcp_root):
+        (mcp_root / "f.bin").write_bytes(b"original")
+        ws = _make_workspace(files=[{"id": "f1"}])
+        ws.file_providers[0].provider.download_file.return_value = b"new"
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = download_file("f1", "f.bin")
+        assert "error" in result
+        assert (mcp_root / "f.bin").read_bytes() == b"original"
+
+    def test_save_email_output_dir_outside_root_refused(self, tmp_path):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = save_email("m1", output_dir=str(tmp_path / "elsewhere"))
+        assert "error" in result
+        assert not (tmp_path / "elsewhere").exists()
+
+    def test_save_thread_id_traversal_refused(self, mcp_root):
+        provider = _make_provider()
+        provider.get_thread.return_value = [{"subject": "S", "message_id": "m1", "from_": "x"}]
+        with (
+            patch(f"{MODULE}._resolve_email_provider", return_value=provider),
+            patch(f"{MODULE}.convert_thread_to_markdown", return_value="# T"),
+        ):
+            result = save_thread("x/../../../escape", output_dir="out")
+        assert isinstance(result, dict) and "error" in result
+
+
+class TestOutgoingFileConfinement:
+    def test_draft_attachment_outside_root_refused(self, tmp_path):
+        secret = tmp_path / "secret.txt"
+        secret.write_text("s")
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = create_gmail_draft("a@b.com", "S", "B", attachments=[str(secret)])
+        assert "error" in result
+        provider.create_draft.assert_not_called()
+
+    def test_send_attachment_token_file_refused(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        token = home / ".iobox" / "tokens" / "me" / "token_standard.json"
+        token.parent.mkdir(parents=True)
+        token.write_text("{}")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("IOBOX_MCP_ROOT", str(home))
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = send_email("a@b.com", "S", "B", attachments=[str(token)])
+        assert "error" in result
+        provider.send_message.assert_not_called()
+
+    def test_missing_attachment_refused(self):
+        provider = _make_provider()
+        with patch(f"{MODULE}._resolve_email_provider", return_value=provider):
+            result = create_gmail_draft("a@b.com", "S", "B", attachments=["nope.pdf"])
+        assert "error" in result
+
+    def test_upload_outside_root_refused(self, tmp_path):
+        local = tmp_path / "report.pdf"
+        local.write_bytes(b"data")
+        ws = _make_workspace(files=[{"id": "f1"}])
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            result = upload_file(str(local))
+        assert "error" in result
+        ws.file_providers[0].provider.upload_file.assert_not_called()
+
+    def test_upload_inside_root_passes_resolved_path(self, mcp_root):
+        (mcp_root / "r.pdf").write_bytes(b"data")
+        ws = _make_workspace(files=[{"id": "f1"}])
+        ws.file_providers[0].provider.upload_file.return_value = {"id": "u1", "title": "r.pdf"}
+        with patch(f"{MODULE}._get_workspace", return_value=ws):
+            upload_file("r.pdf")
+        ws.file_providers[0].provider.upload_file.assert_called_once_with(
+            str(mcp_root / "r.pdf"), parent_id=None, name="r.pdf"
+        )

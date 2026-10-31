@@ -21,8 +21,20 @@ Always restart Claude Desktop fully after editing.
 | `GOOGLE_APPLICATION_CREDENTIALS` | `credentials.json` | Path to the Google OAuth client file |
 | `OUTLOOK_CLIENT_ID` | — | Required for Microsoft 365 slots |
 | `OUTLOOK_TENANT_ID` | `common` | Microsoft 365 tenant |
+| `IOBOX_MCP_ROOT` | `~/iobox` | The only directory MCP tools may read from or write to (see below) |
 
 Workspace configs and tokens are always read from `~/.iobox/`.
+
+## File access root
+
+Every filesystem path a tool accepts — `output_dir` on the save tools, `output_path` on `download_email_attachment` and `download_file`, `attachments` on `send_email` and `create_gmail_draft`, and `local_path` on `upload_file` — is confined to `IOBOX_MCP_ROOT` (default `~/iobox`, created on first use):
+
+- Relative paths resolve under the root; `output_dir` defaults to the root itself.
+- Absolute paths are accepted only if they resolve inside the root. Symlinks are resolved first, so a link inside the root can't point outside it.
+- Anything under `~/.iobox/` (workspace tokens) and the single-account credential and token files in `CREDENTIALS_DIR` are always refused, even if the root contains them.
+- `download_email_attachment` and `download_file` never overwrite an existing file; they return an error so the assistant can pick another name.
+
+A refused path comes back as `{"error": "..."}`. To let the assistant attach or upload a file, put it inside the root first.
 
 !!! warning "Set `IOBOX_MODE` explicitly"
     If `IOBOX_MODE` is unset, the server starts in `standard` mode, which includes drafts, label changes, calendar writes, and file uploads. For a read-only assistant, set `IOBOX_MODE=readonly`.
