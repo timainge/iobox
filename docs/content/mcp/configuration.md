@@ -107,4 +107,6 @@ Run a read-only server for everyday use and a `dangerous` one that you enable on
 
 ## Without a workspace
 
-If no workspace is configured, email tools fall back to a single Gmail account using `CREDENTIALS_DIR`, `IOBOX_ACCOUNT`, and `credentials.json` — the same setup as the [CLI email commands](../cli/index.md). Calendar, file, and cross-type tools require a workspace.
+If no workspace is configured — no `workspace` argument and no active workspace — email tools fall back to a single Gmail account using `CREDENTIALS_DIR`, `IOBOX_ACCOUNT`, and `credentials.json` — the same setup as the [CLI email commands](../cli/index.md). Calendar, file, and cross-type tools require a workspace.
+
+The fallback is used only in that case. If a `workspace` argument names a workspace that doesn't exist, or the active workspace fails to load, or the workspace has no email accounts, the tool returns `{"error": ...}` instead of quietly using a different account.

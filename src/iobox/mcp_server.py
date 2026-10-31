@@ -8,7 +8,9 @@ Install with: pip install iobox[mcp]
 Run with: python -m iobox.mcp_server
 """
 
+import functools
 import os
+import typing
 from collections.abc import Callable
 from typing import Any
 
@@ -44,10 +46,42 @@ mcp = FastMCP("iobox")
 _ALL_TOOLS: dict[str, Any] = {}
 
 
+class ToolInputError(Exception):
+    """A tool call that must be refused with ``{"error": ...}`` rather than raised.
+
+    Raised by helpers (workspace loading, path confinement) deep inside a tool;
+    the ``_tool`` wrapper converts it into the tool's error return shape.
+    """
+
+
+class WorkspaceLoadError(ToolInputError):
+    """A named or active workspace is configured but could not be loaded."""
+
+
+def _error_result(fn: Any, message: str) -> Any:
+    """Return ``{"error": message}`` in the shape *fn* normally returns."""
+    ret = getattr(fn, "__annotations__", {}).get("return")
+    if ret is list or typing.get_origin(ret) is list:
+        return [{"error": message}]
+    return {"error": message}
+
+
 def _tool(fn: Any) -> Any:
-    """Collect a tool function without registering it yet."""
-    _ALL_TOOLS[fn.__name__] = fn
-    return fn
+    """Collect a tool function without registering it yet.
+
+    The collected wrapper turns a ``ToolInputError`` into an ``{"error": ...}``
+    result so a refused call never surfaces as an unhandled exception.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except ToolInputError as exc:
+            return _error_result(fn, str(exc))
+
+    _ALL_TOOLS[fn.__name__] = wrapper
+    return wrapper
 
 
 def register_tools(mode: AccessMode) -> None:
@@ -71,18 +105,27 @@ def _get_gmail_provider() -> Any:
 
 
 def _default_workspace_fn(name: str | None = None) -> Any | None:
-    """Default factory: load named (or active) workspace from disk, or None."""
-    try:
-        from iobox.space_config import IOBOX_HOME, get_active_space, load_space
-        from iobox.workspace import Workspace
+    """Default factory: load the named (or active) workspace from disk.
 
+    Returns ``None`` only when no workspace is requested *and* none is active —
+    the one case where email tools may fall back to legacy single-account Gmail.
+    A requested or active workspace that fails to load raises
+    ``WorkspaceLoadError``; it never silently degrades to another account.
+    """
+    from iobox.space_config import IOBOX_HOME, get_active_space, load_space
+    from iobox.workspace import Workspace
+
+    try:
         target = name or get_active_space()
-        if not target:
-            return None
+    except Exception as exc:
+        raise WorkspaceLoadError(f"Could not read the active workspace: {exc}") from exc
+    if not target:
+        return None
+    try:
         config = load_space(target)
         return Workspace.from_config(config, credentials_dir=str(IOBOX_HOME))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise WorkspaceLoadError(f"Could not load workspace '{target}': {exc}") from exc
 
 
 def create_mcp_server(*, _workspace_fn: Callable[..., Any] | None = None) -> FastMCP:
@@ -96,12 +139,11 @@ _workspace_factory: Callable[..., Any | None] = _default_workspace_fn
 
 
 def _get_workspace(name: str | None = None) -> Any | None:
-    """Return the named (or active) Workspace, or None if not configured."""
-    try:
-        # Newer factories accept a name argument; tolerate older zero-arg fns.
-        return _workspace_factory(name)  # type: ignore[call-arg]
-    except TypeError:
-        return _workspace_factory()
+    """Return the named (or active) Workspace, or None if none is configured.
+
+    Raises ``WorkspaceLoadError`` when a requested/active workspace can't load.
+    """
+    return _workspace_factory(name)
 
 
 def _find_email_slot(ws: Any, name: str | None = None) -> Any | None:
@@ -147,14 +189,17 @@ def _resolve_email_provider(
     """Resolve an email provider via workspace slot, falling back to legacy Gmail.
 
     Resolution order:
-    1. If a workspace (named or active) is configured and has email slots, return
-       the matching slot's provider — this is the only path that supports
-       multiple Gmail/Outlook accounts.
-    2. Otherwise, fall back to the legacy module-level ``GmailProvider()``
-       (single-account, env-driven).
+    1. If a workspace (named or active) is configured, return the matching
+       email slot's provider — this is the only path that supports multiple
+       Gmail/Outlook accounts. A workspace that fails to load, or has no email
+       slots, is an error (never a silent fallback to another account).
+    2. Only when no workspace is requested or active, fall back to the legacy
+       module-level ``GmailProvider()`` (single-account, env-driven).
     """
-    ws = _get_workspace(workspace) if (workspace or provider) else _get_workspace()
-    if ws is not None and ws.email_providers:
+    ws = _get_workspace(workspace)
+    if ws is not None:
+        if not ws.email_providers:
+            raise WorkspaceLoadError(f"Workspace '{ws.name}' has no email accounts configured.")
         slot = _find_email_slot(ws, provider)
         if slot is None:
             available = ", ".join(s.name for s in ws.email_providers)
@@ -293,8 +338,10 @@ def search_gmail(
         include_spam_trash=include_spam_trash,
     )
 
-    ws = _get_workspace(workspace) if (workspace or provider) else _get_workspace()
-    if ws is not None and ws.email_providers:
+    ws = _get_workspace(workspace)
+    if ws is not None:
+        if not ws.email_providers:
+            return [{"error": f"Workspace '{ws.name}' has no email accounts configured."}]
         providers_arg = [provider] if provider else None
         try:
             results = ws.search_emails(eq, providers=providers_arg)
@@ -302,7 +349,9 @@ def search_gmail(
             return [{"error": str(exc)}]
         return [_email_data_to_dict(r) for r in results]
 
-    # Legacy fallback: single-account Gmail
+    # Legacy fallback: single-account Gmail (no workspace configured at all)
+    if provider is not None:
+        return [{"error": "No active workspace; cannot route by provider name."}]
     p = _get_gmail_provider()
     results = p.search_emails(eq)
     return [_email_data_to_dict(r) for r in results]

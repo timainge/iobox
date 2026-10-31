@@ -1270,3 +1270,108 @@ class TestEmailToolsWorkspaceRouting:
             result = send_email("bob@example.com", "Hi", "Body")
         assert result["id"] == "sent-1"
         provider.send_message.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Workspace loading: no silent fallback (SEC-05, MCP-05)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceLoading:
+    def test_default_fn_no_workspace_returns_none(self):
+        from iobox.mcp_server import _default_workspace_fn
+
+        with patch("iobox.space_config.get_active_space", return_value=None):
+            assert _default_workspace_fn(None) is None
+
+    def test_default_fn_named_missing_raises(self):
+        from iobox.mcp_server import WorkspaceLoadError, _default_workspace_fn
+
+        with (
+            patch("iobox.space_config.get_active_space", return_value=None),
+            patch("iobox.space_config.load_space", side_effect=FileNotFoundError("nope")),
+        ):
+            try:
+                _default_workspace_fn("typo")
+            except WorkspaceLoadError as exc:
+                assert "typo" in str(exc)
+            else:
+                raise AssertionError("expected WorkspaceLoadError")
+
+    def test_default_fn_active_unloadable_raises(self):
+        from iobox.mcp_server import WorkspaceLoadError, _default_workspace_fn
+
+        with (
+            patch("iobox.space_config.get_active_space", return_value="work"),
+            patch("iobox.space_config.load_space", side_effect=ValueError("bad toml")),
+        ):
+            try:
+                _default_workspace_fn(None)
+            except WorkspaceLoadError as exc:
+                assert "work" in str(exc)
+            else:
+                raise AssertionError("expected WorkspaceLoadError")
+
+    def test_get_workspace_passes_name_without_retry(self):
+        import iobox.mcp_server as srv
+
+        calls = []
+
+        def factory(name):
+            calls.append(name)
+            raise TypeError("boom")
+
+        with patch.object(srv, "_workspace_factory", factory):
+            try:
+                srv._get_workspace("work")
+            except TypeError:
+                pass
+            else:
+                raise AssertionError("TypeError should propagate, not retry")
+        assert calls == ["work"]
+
+    def test_send_email_misspelled_workspace_does_not_fall_back(self):
+        provider = _make_provider()
+        with (
+            patch("iobox.space_config.get_active_space", return_value=None),
+            patch("iobox.space_config.load_space", side_effect=FileNotFoundError("nope")),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            result = send_email("bob@example.com", "Hi", "Body", workspace="typo")
+        assert "error" in result
+        assert "typo" in result["error"]
+        provider.send_message.assert_not_called()
+
+    def test_search_gmail_misspelled_workspace_does_not_fall_back(self):
+        provider = _make_provider()
+        with (
+            patch("iobox.space_config.get_active_space", return_value=None),
+            patch("iobox.space_config.load_space", side_effect=FileNotFoundError("nope")),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            result = search_gmail("hello", workspace="typo")
+        assert len(result) == 1 and "error" in result[0]
+        provider.search_emails.assert_not_called()
+
+    def test_list_events_unloadable_workspace_returns_error(self):
+        with (
+            patch("iobox.space_config.get_active_space", return_value="work"),
+            patch("iobox.space_config.load_space", side_effect=ValueError("bad")),
+        ):
+            result = list_events()
+        assert len(result) == 1 and "work" in result[0]["error"]
+
+    def test_workspace_without_email_slots_errors(self):
+        ws = _make_full_workspace()
+        ws.email_providers = []
+        provider = _make_provider()
+        with (
+            patch(f"{MODULE}._get_workspace", return_value=ws),
+            patch(f"{MODULE}._get_gmail_provider", return_value=provider),
+        ):
+            sent = send_email("bob@example.com", "Hi", "Body")
+            found = search_gmail("hello")
+        assert "error" in sent
+        assert "error" in found[0]
+        provider.send_message.assert_not_called()
+        provider.search_emails.assert_not_called()
