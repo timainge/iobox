@@ -58,3 +58,6 @@ htmlcov/
 site/
 docs/site/
 
+
+# Local-only working notes (not published)
+.dev/archive/
