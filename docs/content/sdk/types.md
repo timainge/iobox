@@ -15,7 +15,10 @@ class Resource(TypedDict):
     created_at: str       # ISO 8601
     modified_at: str      # ISO 8601
     url: str | None       # browser link, if any
+    slot: str             # optional — Workspace slot the resource came from
 ```
+
+`slot` is only set on results from `Workspace` queries. Pass it to `Workspace.get_email_provider(slot)` / `get_calendar_provider(slot)` / `get_file_provider(slot)` to fetch or change the item on the account it came from.
 
 ### Event
 
@@ -54,7 +57,7 @@ The `Email` resource is used when emails are mixed with events and files (e.g. `
 ```python
 class Email(Resource):
     from_: str
-    to: list[str]
+    to: list[str]              # one "Name <addr>" string per recipient
     cc: list[str]
     thread_id: str | None
     snippet: str | None
@@ -76,6 +79,7 @@ class Email(Resource):
 | `body`, `content_type` | | Present on full fetches |
 | `attachments` | | `list[AttachmentInfo]` |
 | `error` | | Set when a message in a batch couldn't be fetched |
+| `slot`, `provider_id` | | Set by `Workspace.search_emails()`: the slot name, and `"gmail"` / `"outlook"` |
 
 `AttachmentInfo` has `id`, `filename`, `mime_type`, `size`, plus optional `inline` (signature logos, `cid:` images) and `content_id`.
 
